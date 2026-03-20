@@ -48,3 +48,4 @@ temp/
 # Audio test files
 *.wav
 *.mp3
+.worktrees/
