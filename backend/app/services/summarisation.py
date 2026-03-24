@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Tuple
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models import ActionItem, Summary
+from app.models import ActionItem, Meeting, MeetingStatus, Summary, Transcript
 
 logger = logging.getLogger(__name__)
 
@@ -164,3 +164,58 @@ def save_summary(
         db.refresh(action_item)
 
     return summary, action_items
+
+
+def process_summarisation(db: Session, meeting_id: int) -> Tuple[Summary, List[ActionItem]]:
+    """Orchestrate the full summarisation pipeline for a meeting.
+
+    Fetches transcript, calls Claude API, saves results, and updates meeting status.
+
+    Args:
+        db: SQLAlchemy session
+        meeting_id: The meeting ID to summarise
+
+    Returns:
+        Tuple of (Summary record, list of ActionItem records)
+
+    Raises:
+        ValueError: If transcript not found
+        Exception: On API or database errors (meeting status set to FAILED)
+    """
+    # Query transcript
+    transcript = db.query(Transcript).filter(Transcript.meeting_id == meeting_id).first()
+    if not transcript:
+        raise ValueError(f"Transcript not found for meeting {meeting_id}")
+
+    # Query meeting
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+
+    # Set status to SUMMARISING
+    meeting.status = MeetingStatus.SUMMARISING
+    db.commit()
+
+    try:
+        # Format transcript text for Claude
+        formatted_text = format_segments_for_claude(transcript.segments or [])
+
+        # Fallback to full_text if segments are empty
+        if not formatted_text and transcript.full_text:
+            formatted_text = transcript.full_text
+
+        # Call Claude API
+        result = call_claude_api(formatted_text)
+
+        # Save summary and action items
+        summary, action_items = save_summary(db, meeting_id, result)
+
+        # Update meeting status to COMPLETE
+        meeting.status = MeetingStatus.COMPLETE
+        db.commit()
+
+        return summary, action_items
+
+    except Exception:
+        # Set status to FAILED on any error
+        meeting.status = MeetingStatus.FAILED
+        db.commit()
+        raise
