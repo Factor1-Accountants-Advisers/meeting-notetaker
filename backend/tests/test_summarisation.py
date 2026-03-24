@@ -103,7 +103,8 @@ class TestClaudeSummarisation:
         call_args = mock_client.messages.create.call_args
 
         # Check that transcript is in the user message
-        assert transcript in str(call_args)
+        user_message = call_args.kwargs["messages"][0]["content"]
+        assert transcript in user_message
 
     def test_call_claude_api_handles_api_error(self):
         """Should raise on API errors."""
