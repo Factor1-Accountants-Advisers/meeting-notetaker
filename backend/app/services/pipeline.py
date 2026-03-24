@@ -78,8 +78,8 @@ def process_meeting(self, meeting_id: int) -> dict:
         # Step 5: Diarize speakers with Pyannote
         diarize_meeting(meeting_id)
 
-        # TODO: Step 6 - Summarize with Claude
-        # summarize_meeting(meeting_id)
+        # Step 6: Summarise with Claude
+        summarise_meeting(meeting_id)
 
         logger.info(f"Pipeline completed for meeting {meeting_id}")
 
@@ -165,6 +165,35 @@ def diarize_meeting(self, meeting_id: int) -> dict:
         except Exception as e:
             logger.error(f"Diarisation task failed for meeting {meeting_id}: {e}")
             # Status already set to FAILED by process_diarisation
+            raise
+
+
+@shared_task(bind=True, max_retries=3)
+def summarise_meeting(self, meeting_id: int) -> dict:
+    """Celery task to summarise a meeting transcript with Claude.
+
+    Args:
+        meeting_id: ID of the meeting to summarise
+
+    Returns:
+        Dictionary with summarisation results
+    """
+    from app.services.summarisation import process_summarisation
+
+    logger.info(f"Starting summarisation task for meeting {meeting_id}")
+
+    with SyncSessionLocal() as session:
+        try:
+            summary, action_items = process_summarisation(session, meeting_id)
+
+            return {
+                "meeting_id": meeting_id,
+                "status": "summarised",
+                "action_items_count": len(action_items),
+            }
+
+        except Exception as e:
+            logger.error(f"Summarisation task failed for meeting {meeting_id}: {e}")
             raise
 
 
