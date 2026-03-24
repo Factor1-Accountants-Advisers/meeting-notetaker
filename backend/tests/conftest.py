@@ -6,9 +6,10 @@ from typing import AsyncGenerator, Generator
 from unittest.mock import MagicMock, AsyncMock
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, JSON
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import StaticPool
+from sqlalchemy.dialects.postgresql import JSONB
 
 from app.core.database import Base
 from app.models import User, Meeting, MeetingStatus, Transcript
@@ -16,6 +17,17 @@ from app.models import User, Meeting, MeetingStatus, Transcript
 
 # Use in-memory SQLite for tests (sync engine for Celery tasks)
 TEST_DATABASE_URL = "sqlite:///:memory:"
+
+
+# Configure JSONB to use JSON on SQLite
+@pytest.fixture(scope="function", autouse=True)
+def _configure_jsonb_for_sqlite():
+    """Configure JSONB to compile as JSON on SQLite."""
+    from sqlalchemy.ext.compiler import compiles
+
+    @compiles(JSONB, 'sqlite')
+    def compile_jsonb_sqlite(type_, compiler, **kw):
+        return compiler.process(JSON(), **kw)
 
 
 @pytest.fixture(scope="function")

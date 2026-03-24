@@ -7,9 +7,13 @@ Handles:
 """
 import json
 import logging
-from typing import Any, Dict, List
+from datetime import date
+from typing import Any, Dict, List, Tuple
+
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.models import ActionItem, Summary
 
 logger = logging.getLogger(__name__)
 
@@ -109,3 +113,54 @@ def format_segments_for_claude(segments: List[Dict[str, Any]]) -> str:
             lines.append(f"{speaker}: {text}")
 
     return "\n".join(lines)
+
+
+def save_summary(
+    db: Session, meeting_id: int, summarisation_result: Dict[str, Any]
+) -> Tuple[Summary, List[ActionItem]]:
+    """Save summarisation results to the database.
+
+    Args:
+        db: SQLAlchemy session
+        meeting_id: The meeting ID to associate with the summary
+        summarisation_result: Dict with keys: summary, key_points, action_items, follow_ups
+
+    Returns:
+        Tuple of (Summary record, list of ActionItem records)
+    """
+    # Create Summary record
+    summary = Summary(
+        meeting_id=meeting_id,
+        summary_text=summarisation_result["summary"],
+        key_points=summarisation_result.get("key_points", []),
+        follow_ups=summarisation_result.get("follow_ups", []),
+    )
+    db.add(summary)
+
+    # Create ActionItem records
+    action_items = []
+    for item in summarisation_result.get("action_items", []):
+        # Parse due_date: if truthy string, use date.fromisoformat, else None
+        due = item.get("due_date")
+        due_date = None
+        if due:
+            due_date = date.fromisoformat(due)
+
+        action_item = ActionItem(
+            meeting_id=meeting_id,
+            description=item["description"],
+            owner_name=item.get("owner"),
+            due_date=due_date,
+        )
+        db.add(action_item)
+        action_items.append(action_item)
+
+    # Commit all changes
+    db.commit()
+
+    # Refresh objects from database
+    db.refresh(summary)
+    for action_item in action_items:
+        db.refresh(action_item)
+
+    return summary, action_items
