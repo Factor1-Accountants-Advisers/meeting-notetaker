@@ -7,7 +7,7 @@ Handles:
 """
 import json
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from app.core.config import settings
 
@@ -86,3 +86,26 @@ def summarise_transcript(transcript_text: str) -> Dict[str, Any]:
         Parsed JSON response dict with summary, key_points, action_items, follow_ups
     """
     return call_claude_api(transcript_text)
+
+
+def format_segments_for_claude(segments: List[Dict[str, Any]]) -> str:
+    """Format transcript segments into readable text for Claude.
+
+    Args:
+        segments: List of segment dicts with keys: speaker, start, end, text
+
+    Returns:
+        Formatted string with "Speaker: text" lines joined by newlines.
+        Returns empty string if segments is empty.
+    """
+    if not segments:
+        return ""
+
+    lines = []
+    for segment in segments:
+        speaker = segment.get("speaker", "Unknown")
+        text = segment.get("text", "").strip()
+        if text:  # Only include segments with non-empty text
+            lines.append(f"{speaker}: {text}")
+
+    return "\n".join(lines)
