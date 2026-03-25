@@ -37,8 +37,11 @@ class Settings(BaseSettings):
     # Whisper
     whisper_model: str = "medium"
 
+    # Dev auth bypass
+    use_dev_auth_bypass: bool = False
+
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=(".env", ".env.local"),
         env_file_encoding="utf-8",
         case_sensitive=False
     )

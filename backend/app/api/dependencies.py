@@ -61,10 +61,10 @@ async def _get_or_create_dev_user(db: AsyncSession) -> User:
 
 
 def _auth_bypass_enabled() -> bool:
-    """True when running in dev mode without Azure AD configured."""
+    """True when explicitly enabled via USE_DEV_AUTH_BYPASS in dev mode."""
     return (
         settings.environment == "development"
-        and not settings.azure_ad_tenant_id
+        and settings.use_dev_auth_bypass
     )
 
 
