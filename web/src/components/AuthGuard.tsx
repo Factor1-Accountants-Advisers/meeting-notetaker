@@ -6,7 +6,7 @@ import { useAuth } from "@/lib/useAuth";
 import { setTokenProvider } from "@/lib/api";
 
 export default function AuthGuard({ children }: { children: ReactNode }) {
-  const { isAuthenticated, isLoading, login, getIdToken } = useAuth();
+  const { isAuthenticated, isLoading, getIdToken } = useAuth();
   const router = useRouter();
 
   // Register token provider for API client

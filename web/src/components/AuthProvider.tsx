@@ -1,12 +1,26 @@
 "use client";
 
-import { ReactNode } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { MsalProvider } from "@azure/msal-react";
 import { PublicClientApplication } from "@azure/msal-browser";
 import { msalConfig } from "@/lib/msal-config";
 
-const msalInstance = new PublicClientApplication(msalConfig);
+let msalInstance: PublicClientApplication | null = null;
+
+function getMsalInstance() {
+  if (!msalInstance) {
+    msalInstance = new PublicClientApplication(msalConfig);
+  }
+  return msalInstance;
+}
 
 export default function AuthProvider({ children }: { children: ReactNode }) {
-  return <MsalProvider instance={msalInstance}>{children}</MsalProvider>;
+  const [instance, setInstance] = useState<PublicClientApplication | null>(null);
+
+  useEffect(() => {
+    setInstance(getMsalInstance());
+  }, []);
+
+  if (!instance) return null;
+  return <MsalProvider instance={instance}>{children}</MsalProvider>;
 }
