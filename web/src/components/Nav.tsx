@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useAuth } from "@/lib/useAuth";
 
 const links = [
   { href: "/", label: "Meetings", icon: "📋" },
@@ -10,6 +11,7 @@ const links = [
 
 export default function Nav() {
   const pathname = usePathname();
+  const { user, logout } = useAuth();
 
   return (
     <nav className="w-56 bg-gray-900 text-gray-300 flex flex-col min-h-screen p-4">
@@ -39,6 +41,22 @@ export default function Nav() {
           );
         })}
       </ul>
+
+      {/* User info & sign out */}
+      {user && (
+        <div className="border-t border-gray-700 pt-4 mt-4">
+          <div className="px-2 mb-3">
+            <p className="text-sm text-white truncate">{user.name}</p>
+            <p className="text-xs text-gray-400 truncate">{user.email}</p>
+          </div>
+          <button
+            onClick={() => logout()}
+            className="w-full text-left px-3 py-2 text-sm rounded-md hover:bg-gray-800 hover:text-white transition-colors"
+          >
+            Sign out
+          </button>
+        </div>
+      )}
     </nav>
   );
 }
