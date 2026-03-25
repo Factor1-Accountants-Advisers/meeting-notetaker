@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import Nav from "@/components/Nav";
+import AuthProvider from "@/components/AuthProvider";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -18,10 +18,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${inter.className} flex bg-gray-50`}>
-        <Nav />
-        <main className="flex-1 p-8 overflow-auto min-h-screen">
-          {children}
-        </main>
+        <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
   );
