@@ -37,7 +37,6 @@ const fetcher = async (url: string) => {
   const r = await fetch(url, { headers });
   if (!r.ok) {
     if (r.status === 401) {
-      window.location.href = "/login";
       throw new Error("Unauthorized");
     }
     throw new Error(`API error: ${r.status}`);

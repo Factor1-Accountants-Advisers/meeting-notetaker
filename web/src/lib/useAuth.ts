@@ -15,6 +15,7 @@ export function useAuth() {
   const isAuthenticated = useIsAuthenticated();
   const isLoading = inProgress !== "none";
 
+
   const user: AuthUser | null = useMemo(() => {
     if (accounts.length === 0) return null;
     const account = accounts[0];

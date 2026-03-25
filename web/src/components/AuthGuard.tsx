@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useEffect } from "react";
+import { ReactNode, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/useAuth";
 import { setTokenProvider } from "@/lib/api";
@@ -8,8 +8,16 @@ import { setTokenProvider } from "@/lib/api";
 export default function AuthGuard({ children }: { children: ReactNode }) {
   const { isAuthenticated, isLoading, getIdToken } = useAuth();
   const router = useRouter();
+  const tokenRegistered = useRef(false);
 
-  // Register token provider for API client
+  // Register token provider during render (not in useEffect)
+  // so it's available before children's effects fire SWR fetches
+  if (isAuthenticated && !tokenRegistered.current) {
+    setTokenProvider(getIdToken);
+    tokenRegistered.current = true;
+  }
+
+  // Update token provider when getIdToken reference changes
   useEffect(() => {
     if (isAuthenticated) {
       setTokenProvider(getIdToken);
