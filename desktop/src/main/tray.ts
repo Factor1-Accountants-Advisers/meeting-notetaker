@@ -1,4 +1,4 @@
-import { Tray, Menu, app, nativeImage, BrowserWindow, shell } from 'electron';
+import { Tray, Menu, app, nativeImage, BrowserWindow } from 'electron';
 import * as path from 'path';
 import { startRecording, stopRecording, isRecording } from './recorder';
 import { acquireToken } from './auth';
@@ -11,7 +11,7 @@ let tray: Tray | null = null;
 let meetingSelectorWindow: BrowserWindow | null = null;
 
 let _backendUrl = 'http://localhost:8000';
-let _webAppUrl = 'http://localhost:3000';
+let _onOpenApp: () => void = () => {};
 let _recordingOutputDir = '';
 let _micName = '';
 let _loopbackName = '';
@@ -23,10 +23,10 @@ let _pendingScheduledTime: string | undefined;
 
 export interface TrayConfig {
   backendUrl: string;
-  webAppUrl: string;
   recordingOutputDir: string;
   micName: string;
   loopbackName: string;
+  onOpenApp: () => void;
 }
 
 export function setPendingMeeting(title: string, attendees: AttendeeMetadata[], scheduledTime?: string): void {
@@ -37,7 +37,7 @@ export function setPendingMeeting(title: string, attendees: AttendeeMetadata[], 
 
 export function createTray(config: TrayConfig): Tray {
   _backendUrl = config.backendUrl;
-  _webAppUrl = config.webAppUrl;
+  _onOpenApp = config.onOpenApp;
   _recordingOutputDir = config.recordingOutputDir;
   _micName = config.micName;
   _loopbackName = config.loopbackName;
@@ -58,7 +58,7 @@ function rebuildMenu(): void {
     { type: 'separator' },
     { label: 'Select Meeting...', click: openMeetingSelector },
     { type: 'separator' },
-    { label: 'Open Web App', click: () => shell.openExternal(_webAppUrl) },
+    { label: 'Open App', click: () => _onOpenApp() },
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
   ]));
