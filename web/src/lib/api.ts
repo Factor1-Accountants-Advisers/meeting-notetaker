@@ -59,8 +59,8 @@ export function useMeetings(
   return useSWR(`/api/meetings?${params}`, fetcher);
 }
 
-export function useMeeting(id: number): SWRResponse<MeetingDetail> {
-  return useSWR(`/api/meetings/${id}`, fetcher);
+export function useMeeting(id: number | undefined): SWRResponse<MeetingDetail> {
+  return useSWR(id != null ? `/api/meetings/${id}` : null, fetcher);
 }
 
 export function useTranscript(id: number): SWRResponse<TranscriptResponse> {
