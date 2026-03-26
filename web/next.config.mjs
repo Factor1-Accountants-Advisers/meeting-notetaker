@@ -1,5 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  output: 'export',
+  // rewrites() is silently ignored by `next build` with output: 'export',
+  // but still works in `next dev` for local API proxying.
   async rewrites() {
     return [
       {
