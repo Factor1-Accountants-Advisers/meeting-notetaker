@@ -1,0 +1,21 @@
+appId: com.yourfirm.meetingnotetaker
+productName: Meeting Note-Taker
+directories:
+  output: release
+files:
+  - dist/**/*
+  - web-out/**/*
+  - assets/**/*
+  - node_modules/**/*
+  - package.json
+win:
+  target:
+    - target: msi
+      arch: [x64]
+  icon: assets/icon-idle.png
+msi:
+  oneClick: false
+  perMachine: true
+publish:
+  provider: generic
+  url: https://YOUR_UPDATE_SERVER/releases/
