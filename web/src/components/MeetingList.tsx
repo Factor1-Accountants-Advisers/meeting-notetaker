@@ -26,7 +26,7 @@ export default function MeetingList() {
   const { data, error, isLoading } = useMeetings();
 
   if (isLoading) return <div className="text-gray-500">Loading meetings...</div>;
-  if (error) return <div className="text-red-600">Failed to load meetings.</div>;
+  if (error) return <div className="text-red-600">{error.message || "Failed to load meetings."}</div>;
   if (!data || data.items.length === 0)
     return <div className="text-gray-500">No meetings yet.</div>;
 

@@ -15,9 +15,11 @@
     li:hover { background: #f0f9ff; }
     .evt-title { font-weight: 600; margin-bottom: 3px; }
     .evt-meta { font-size: 11px; color: #6b7280; }
-    #btn-skip { display: block; padding: 8px 16px; font-size: 12px; color: #6b7280;
+    .bottom-action { display: block; padding: 8px 16px; font-size: 12px; color: #6b7280;
                 cursor: pointer; text-align: center; border-top: 1px solid #e5e7eb; }
-    #btn-skip:hover { background: #f9fafb; }
+    .bottom-action:hover { background: #f9fafb; }
+    #btn-refresh { font-weight: 500; color: #2563eb; }
+    #btn-refresh:hover { background: #eff6ff; }
   </style>
 </head>
 <body>
@@ -25,7 +27,8 @@
   <div id="loading">Loading your calendar...</div>
   <ul id="meeting-list" hidden></ul>
   <div id="error" hidden></div>
-  <div id="btn-skip">Skip — record without meeting info</div>
+  <div id="btn-refresh" class="bottom-action">Refresh Calendar</div>
+  <div id="btn-skip" class="bottom-action">Skip — record without meeting info</div>
   <script src="app.js"></script>
 </body>
 </html>

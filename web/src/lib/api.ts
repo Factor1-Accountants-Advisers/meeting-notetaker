@@ -32,16 +32,30 @@ async function authHeaders(): Promise<Record<string, string>> {
 
 // --- Fetcher ---
 
+const FETCH_TIMEOUT_MS = 10_000;
+
 const fetcher = async (url: string) => {
   const headers = await authHeaders();
-  const r = await fetch(url, { headers });
-  if (!r.ok) {
-    if (r.status === 401) {
-      throw new Error("Unauthorized");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+  try {
+    const r = await fetch(url, { headers, signal: controller.signal });
+    if (!r.ok) {
+      if (r.status === 401) {
+        throw new Error("Unauthorized");
+      }
+      throw new Error(`API error: ${r.status}`);
     }
-    throw new Error(`API error: ${r.status}`);
+    return r.json();
+  } catch (err: unknown) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error("Backend unreachable — is the API server running on localhost:8000?");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  return r.json();
 };
 
 // --- SWR Hooks ---
@@ -82,6 +96,48 @@ export function useActionItems(
   });
   if (status) params.set("status", status);
   return useSWR(`/api/action-items?${params}`, fetcher);
+}
+
+// --- Upload ---
+
+export interface UploadMeetingParams {
+  file: File;
+  title: string;
+  attendees: { name: string; email: string }[];
+  scheduledTime?: string;
+}
+
+export interface UploadMeetingResult {
+  meeting_id: number;
+  status: string;
+}
+
+export async function uploadMeeting(
+  params: UploadMeetingParams
+): Promise<UploadMeetingResult> {
+  const headers = await authHeaders();
+  const formData = new FormData();
+  formData.append("audio_file", params.file);
+  formData.append(
+    "metadata",
+    JSON.stringify({
+      meeting_title: params.title,
+      attendees: params.attendees,
+      scheduled_time: params.scheduledTime || null,
+    })
+  );
+
+  const res = await fetch("/api/meetings/upload", {
+    method: "POST",
+    headers,
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail || `Upload failed: ${res.status}`);
+  }
+  return res.json();
 }
 
 // --- Mutations ---

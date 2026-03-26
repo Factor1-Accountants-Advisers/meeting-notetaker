@@ -31,8 +31,8 @@ export async function getUpcomingMeetings(accessToken: string): Promise<Calendar
   return (response.data.value as any[]).map((evt) => ({
     id: evt.id as string,
     subject: evt.subject as string,
-    start: evt.start.dateTime as string,
-    end: evt.end.dateTime as string,
+    start: (evt.start.dateTime as string) + 'Z',
+    end: (evt.end.dateTime as string) + 'Z',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     attendees: (evt.attendees ?? []).map((a: any) => ({
       name: (a.emailAddress?.name as string) ?? '',

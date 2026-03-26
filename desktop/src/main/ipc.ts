@@ -10,8 +10,12 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('auth:sign-out', (): Promise<void> => clearTokenCache());
 
   ipcMain.handle('graph:get-calendar', async (): Promise<CalendarEvent[]> => {
+    console.log('[ipc] graph:get-calendar — acquiring token...');
     const token = await acquireToken();
-    return getUpcomingMeetings(token);
+    console.log('[ipc] graph:get-calendar — token acquired, fetching calendar...');
+    const events = await getUpcomingMeetings(token);
+    console.log(`[ipc] graph:get-calendar — got ${events.length} events`);
+    return events;
   });
 
   ipcMain.handle('recorder:start', (_e, opts: RecordingOptions): void => startRecording(opts));

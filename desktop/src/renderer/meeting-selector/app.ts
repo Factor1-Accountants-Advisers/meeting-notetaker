@@ -40,14 +40,18 @@ function buildEventItem(evt: CalendarEvent): HTMLLIElement {
   return li;
 }
 
-async function init(): Promise<void> {
+async function loadCalendar(): Promise<void> {
   const loadingEl = document.getElementById('loading')!;
   const listEl = document.getElementById('meeting-list')!;
   const errorEl = document.getElementById('error')!;
 
-  document.getElementById('btn-skip')!.addEventListener('click', () =>
-    window.meetingSelector.closeWindow()
-  );
+  // Reset UI safely
+  loadingEl.hidden = false;
+  listEl.hidden = true;
+  while (listEl.firstChild) {
+    listEl.removeChild(listEl.firstChild);
+  }
+  errorEl.hidden = true;
 
   try {
     const events = await window.meetingSelector.getCalendar();
@@ -68,6 +72,18 @@ async function init(): Promise<void> {
     errorEl.textContent = `Failed to load calendar: ${err instanceof Error ? err.message : String(err)}`;
     errorEl.hidden = false;
   }
+}
+
+function init(): void {
+  document.getElementById('btn-skip')!.addEventListener('click', () =>
+    window.meetingSelector.closeWindow()
+  );
+
+  document.getElementById('btn-refresh')!.addEventListener('click', () =>
+    loadCalendar()
+  );
+
+  loadCalendar();
 }
 
 init();

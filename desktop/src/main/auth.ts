@@ -63,9 +63,14 @@ export async function acquireToken(): Promise<string> {
     }
   }
 
+  console.log('[auth] Silent acquisition failed — starting device code flow for Graph API scopes...');
   const result = await pca.acquireTokenByDeviceCode({
     scopes: SCOPES,
-    deviceCodeCallback: (r) => console.log(r.message),
+    deviceCodeCallback: (r) => {
+      console.log('='.repeat(60));
+      console.log('[auth] DEVICE CODE:', r.message);
+      console.log('='.repeat(60));
+    },
   });
   if (!result?.accessToken) throw new Error('Token acquisition failed');
   saveCache(pca);

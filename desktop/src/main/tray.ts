@@ -44,7 +44,7 @@ export function createTray(config: TrayConfig): Tray {
 
   tray = new Tray(nativeImage.createFromPath(IDLE_ICON));
   tray.setToolTip('Meeting Note-Taker');
-  tray.on('click', openMeetingSelector);
+  tray.on('click', () => _onOpenApp());
   rebuildMenu();
   return tray;
 }

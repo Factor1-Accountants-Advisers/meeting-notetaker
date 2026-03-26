@@ -71,9 +71,9 @@ class MinIOStorage(StorageBackend):
         from botocore.client import Config
 
         self.bucket_name = settings.azure_storage_container_name
-        self.endpoint_url = os.getenv("MINIO_ENDPOINT", "http://minio:9000")
-        self.access_key = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-        self.secret_key = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+        self.endpoint_url = settings.minio_endpoint
+        self.access_key = settings.minio_access_key
+        self.secret_key = settings.minio_secret_key
 
         self.client = boto3.client(
             "s3",

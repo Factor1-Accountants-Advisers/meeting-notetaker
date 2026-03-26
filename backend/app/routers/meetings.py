@@ -3,6 +3,8 @@
 Handles meeting upload, listing, and detail retrieval.
 """
 import logging
+import os
+import tempfile
 from typing import Optional
 from datetime import datetime
 
@@ -25,6 +27,7 @@ from app.schemas import (
 )
 from app.services.storage import get_storage
 from app.services.pipeline import process_meeting
+from app.services.audio import extract_audio_from_video
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +35,12 @@ router = APIRouter(prefix="/api/meetings", tags=["meetings"])
 
 # File validation constants
 MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB
-ALLOWED_CONTENT_TYPES = ["audio/wav", "audio/wave", "audio/x-wav", "audio/mpeg", "audio/mp3"]
-ALLOWED_EXTENSIONS = [".wav", ".mp3"]
+ALLOWED_CONTENT_TYPES = [
+    "audio/wav", "audio/wave", "audio/x-wav", "audio/mpeg", "audio/mp3",
+    "video/mp4", "video/x-m4v", "video/quicktime",
+]
+ALLOWED_EXTENSIONS = [".wav", ".mp3", ".mp4", ".m4v", ".mov"]
+VIDEO_EXTENSIONS = {".mp4", ".m4v", ".mov"}
 
 
 def validate_audio_file(file: UploadFile) -> None:
@@ -120,13 +127,49 @@ async def upload_meeting(
         )
 
     try:
+        # If video file, extract audio first
+        file_ext = os.path.splitext(audio_file.filename or "")[1].lower()
+        upload_file = audio_file.file
+        upload_filename = audio_file.filename or "recording.wav"
+        upload_content_type = "audio/wav"
+        temp_files: list[str] = []
+
+        if file_ext in VIDEO_EXTENSIONS:
+            # Save uploaded video to temp file, then extract audio
+            temp_video = tempfile.NamedTemporaryFile(
+                suffix=file_ext, delete=False
+            )
+            temp_files.append(temp_video.name)
+            try:
+                temp_video.write(await audio_file.read())
+                temp_video.close()
+                extracted_path = extract_audio_from_video(temp_video.name)
+                temp_files.append(extracted_path)
+                upload_file = open(extracted_path, "rb")
+                upload_filename = os.path.splitext(upload_filename)[0] + ".wav"
+                logger.info(f"Extracted audio from video: {audio_file.filename}")
+            except RuntimeError as e:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=str(e),
+                )
+        else:
+            upload_content_type = audio_file.content_type or "audio/wav"
+
         # Upload file to blob storage
         storage = get_storage()
         blob_path = await storage.upload_file(
-            file=audio_file.file,
-            filename=audio_file.filename,
-            content_type=audio_file.content_type or "audio/wav"
+            file=upload_file,
+            filename=upload_filename,
+            content_type=upload_content_type,
         )
+
+        # Clean up temp files
+        for tf in temp_files:
+            try:
+                os.unlink(tf)
+            except OSError:
+                pass
 
         logger.info(f"Audio uploaded to: {blob_path}")
 
