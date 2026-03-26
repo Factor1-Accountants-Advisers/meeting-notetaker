@@ -18,11 +18,15 @@ const tabs: { key: Tab; label: string }[] = [
 ];
 
 export default function MeetingDetailPage() {
-  const { id } = useParams<{ id: string }>();
-  const { data: meeting, error, isLoading } = useMeeting(Number(id));
+  const params = useParams<{ id: string[] | string }>();
+  const rawId = params?.id;
+  const meetingId = Array.isArray(rawId) ? rawId[0] : rawId;
+
+  const { data: meeting, error, isLoading } = useMeeting(meetingId ? Number(meetingId) : undefined);
   const [activeTab, setActiveTab] = useState<Tab>("transcript");
   const audioRef = useRef<AudioPlayerHandle>(null);
 
+  if (!meetingId) return <div className="text-gray-500">No meeting selected.</div>;
   if (isLoading) return <div className="text-gray-500">Loading meeting...</div>;
   if (error || !meeting) return <div className="text-red-600">Meeting not found.</div>;
 
