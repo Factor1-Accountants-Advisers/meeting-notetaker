@@ -1,9 +1,7 @@
 "use client";
 
-import { useMsal, useIsAuthenticated } from "@azure/msal-react";
-import { InteractionRequiredAuthError } from "@azure/msal-browser";
-import { useCallback, useMemo } from "react";
-import { loginRequest } from "@/lib/msal-config";
+import { useState, useCallback, useEffect } from "react";
+import { isElectron, getElectronAPI } from "@/lib/electron-bridge";
 
 export interface AuthUser {
   name: string;
@@ -11,49 +9,60 @@ export interface AuthUser {
 }
 
 export function useAuth() {
-  const { instance, accounts, inProgress } = useMsal();
-  const isAuthenticated = useIsAuthenticated();
-  const isLoading = inProgress !== "none";
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [user, setUser] = useState<AuthUser | null>(null);
 
+  // On mount, try to acquire a token to check if we're signed in
+  useEffect(() => {
+    if (!isElectron()) {
+      setIsLoading(false);
+      return;
+    }
 
-  const user: AuthUser | null = useMemo(() => {
-    if (accounts.length === 0) return null;
-    const account = accounts[0];
-    return {
-      name: account.name || "",
-      email: account.username || "",
-    };
-  }, [accounts]);
+    const api = getElectronAPI();
+    api.getToken()
+      .then((token) => {
+        // Decode the JWT payload to get user info (name, email)
+        try {
+          const payload = JSON.parse(atob(token.split('.')[1]));
+          setUser({ name: payload.name ?? '', email: payload.preferred_username ?? payload.upn ?? '' });
+        } catch {
+          setUser({ name: 'User', email: '' });
+        }
+        setIsAuthenticated(true);
+      })
+      .catch(() => {
+        setIsAuthenticated(false);
+      })
+      .finally(() => setIsLoading(false));
+  }, []);
 
   const login = useCallback(async () => {
-    await instance.loginRedirect(loginRequest);
-  }, [instance]);
+    if (!isElectron()) return;
+    const api = getElectronAPI();
+    try {
+      const token = await api.getToken();
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      setUser({ name: payload.name ?? '', email: payload.preferred_username ?? payload.upn ?? '' });
+      setIsAuthenticated(true);
+    } catch {
+      setIsAuthenticated(false);
+    }
+  }, []);
 
   const logout = useCallback(async () => {
-    await instance.logoutRedirect({
-      postLogoutRedirectUri: "/login",
-    });
-  }, [instance]);
+    if (!isElectron()) return;
+    const api = getElectronAPI();
+    await api.signOut();
+    setUser(null);
+    setIsAuthenticated(false);
+  }, []);
 
   const getIdToken = useCallback(async (): Promise<string> => {
-    if (accounts.length === 0) {
-      throw new Error("No authenticated account");
-    }
-
-    try {
-      const response = await instance.acquireTokenSilent({
-        ...loginRequest,
-        account: accounts[0],
-      });
-      return response.idToken;
-    } catch (error) {
-      if (error instanceof InteractionRequiredAuthError) {
-        await instance.acquireTokenRedirect(loginRequest);
-        throw new Error("Redirecting for token acquisition");
-      }
-      throw error;
-    }
-  }, [instance, accounts]);
+    if (!isElectron()) throw new Error("Not in Electron");
+    return getElectronAPI().getToken();
+  }, []);
 
   return { user, isAuthenticated, isLoading, login, logout, getIdToken };
 }
