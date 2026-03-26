@@ -1,5 +1,5 @@
-import { ipcMain, BrowserWindow, shell } from 'electron';
-import { acquireToken, clearTokenCache } from './auth';
+import { ipcMain, BrowserWindow, shell, app } from 'electron';
+import { acquireToken, acquireIdToken, clearTokenCache } from './auth';
 import { getUpcomingMeetings, CalendarEvent } from './graph';
 import { startRecording, stopRecording, isRecording, RecordingOptions } from './recorder';
 import { uploadRecording, MeetingMetadata, UploadResult } from './uploader';
@@ -36,4 +36,8 @@ export function registerIpcHandlers(): void {
   ipcMain.on('meeting-selector:close', (e): void => {
     BrowserWindow.fromWebContents(e.sender)?.close();
   });
+
+  ipcMain.handle('auth:get-id-token', (): Promise<string> => acquireIdToken());
+  ipcMain.handle('app:get-backend-url', (): string => process.env.BACKEND_URL ?? 'http://localhost:8000');
+  ipcMain.on('app:get-version', (e): void => { e.returnValue = app.getVersion(); });
 }
