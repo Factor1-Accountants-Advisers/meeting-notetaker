@@ -54,6 +54,10 @@ export function showMainWindow(): void {
   }
 }
 
+export function getMainWindow(): BrowserWindow | null {
+  return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+}
+
 app.on('window-all-closed', (e: Event) => e.preventDefault());
 
 app.whenReady().then(() => {

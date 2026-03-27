@@ -3,6 +3,7 @@ import * as path from 'path';
 import { startRecording, stopRecording, isRecording } from './recorder';
 import { acquireToken } from './auth';
 import { uploadRecording, AttendeeMetadata, MeetingMetadata } from './uploader';
+import { getMainWindow } from './index';
 
 const IDLE_ICON = path.join(__dirname, '../../assets/icon-idle.png');
 const RECORDING_ICON = path.join(__dirname, '../../assets/icon-recording.png');
@@ -64,12 +65,24 @@ function rebuildMenu(): void {
   ]));
 }
 
+function broadcastRecordingStatus(recording: boolean, meetingTitle?: string): void {
+  const win = getMainWindow();
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('recorder:status-changed', {
+      recording,
+      meetingTitle: meetingTitle || _pendingTitle || undefined,
+      startedAt: recording ? Date.now() : undefined,
+    });
+  }
+}
+
 function handleStartRecording(): void {
   _currentOutputPath = path.join(_recordingOutputDir, `meeting-${Date.now()}.wav`);
   startRecording({ micName: _micName, loopbackName: _loopbackName, outputPath: _currentOutputPath });
   tray?.setImage(nativeImage.createFromPath(RECORDING_ICON));
   tray?.setToolTip('Meeting Note-Taker — Recording...');
   rebuildMenu();
+  broadcastRecordingStatus(true, _pendingTitle);
 }
 
 async function handleStopRecording(): Promise<void> {
@@ -77,6 +90,7 @@ async function handleStopRecording(): Promise<void> {
   tray?.setImage(nativeImage.createFromPath(IDLE_ICON));
   tray?.setToolTip('Meeting Note-Taker — Uploading...');
   rebuildMenu();
+  broadcastRecordingStatus(false);
 
   try {
     const token = await acquireToken();
