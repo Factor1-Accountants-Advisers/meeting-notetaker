@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/useAuth";
 const links = [
   { href: "/", label: "Meetings", icon: "📋" },
   { href: "/action-items", label: "Action Items", icon: "✅" },
+  { href: "/settings", label: "Settings", icon: "⚙️" },
 ];
 
 export default function Nav() {
