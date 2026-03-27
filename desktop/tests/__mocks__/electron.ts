@@ -38,4 +38,15 @@ export const Menu = { buildFromTemplate: jest.fn() };
 export const nativeImage = { createFromPath: jest.fn() };
 export const shell = { openExternal: jest.fn() };
 
-export default { app, safeStorage, ipcMain, BrowserWindow, Tray, Menu, nativeImage, shell };
+export const contextBridge = {
+  exposeInMainWorld: jest.fn(),
+};
+
+export const ipcRenderer = {
+  invoke: jest.fn(),
+  sendSync: jest.fn(),
+  on: jest.fn(),
+  removeListener: jest.fn(),
+};
+
+export default { app, safeStorage, ipcMain, BrowserWindow, Tray, Menu, nativeImage, shell, contextBridge, ipcRenderer };

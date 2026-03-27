@@ -1,9 +1,35 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  // Auth (existing)
   getToken: (): Promise<string> => ipcRenderer.invoke('auth:get-id-token'),
   signOut: (): Promise<void> => ipcRenderer.invoke('auth:sign-out'),
   getBackendUrl: (): Promise<string> => ipcRenderer.invoke('app:get-backend-url'),
   getAppVersion: (): string => ipcRenderer.sendSync('app:get-version'),
-  isElectron: true,
+  isElectron: true as const,
+
+  // Calendar
+  getCalendar: () => ipcRenderer.invoke('graph:get-calendar'),
+
+  // Recording
+  startRecording: (opts: { micName: string; loopbackName: string; outputPath: string }) =>
+    ipcRenderer.invoke('recorder:start', opts),
+  stopRecording: () => ipcRenderer.invoke('recorder:stop'),
+  isRecording: () => ipcRenderer.invoke('recorder:is-recording'),
+  onRecordingStatus: (cb: (status: { recording: boolean; meetingTitle?: string; startedAt?: number }) => void) => {
+    const handler = (_e: Electron.IpcRendererEvent, status: { recording: boolean; meetingTitle?: string; startedAt?: number }) => cb(status);
+    ipcRenderer.on('recorder:status-changed', handler);
+    return () => { ipcRenderer.removeListener('recorder:status-changed', handler); };
+  },
+
+  // Upload via main process
+  uploadRecording: (args: { recordingOptions: { micName: string; loopbackName: string; outputPath: string }; metadata: { meeting_title: string; attendees: { name: string; email?: string }[]; scheduled_time?: string }; backendUrl: string }) =>
+    ipcRenderer.invoke('uploader:upload', args),
+
+  // Meeting metadata
+  selectMeeting: (event: { id: string; subject: string; start: string; end: string; attendees: { name: string; email: string }[] }) =>
+    ipcRenderer.invoke('meeting-selector:select', event),
+
+  // Audio devices
+  getAudioDevices: () => ipcRenderer.invoke('audio:get-devices'),
 });
