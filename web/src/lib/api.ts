@@ -142,6 +142,18 @@ export async function uploadMeeting(
 
 // --- Mutations ---
 
+export async function deleteMeeting(id: number): Promise<void> {
+  const headers = await authHeaders();
+  const res = await fetch(`/api/meetings/${id}`, {
+    method: "DELETE",
+    headers,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail || `Delete failed: ${res.status}`);
+  }
+}
+
 export async function updateActionItem(
   id: number,
   update: ActionItemUpdate
