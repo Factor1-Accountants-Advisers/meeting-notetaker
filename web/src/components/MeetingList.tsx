@@ -30,12 +30,9 @@ export default function MeetingList() {
   const [statusFilter, setStatusFilter] = useState("");
   const { data, error, isLoading } = useMeetings(1, 20, statusFilter || undefined);
 
-  if (isLoading) return <div className="text-gray-500">Loading meetings...</div>;
-  if (error) return <div className="text-red-600">{error.message || "Failed to load meetings."}</div>;
-  if (!data || data.items.length === 0)
-    return <div className="text-gray-500">No meetings yet.</div>;
+  const hasFilters = search !== "" || statusFilter !== "";
 
-  const filtered = data.items.filter((m) => {
+  const filtered = (data?.items ?? []).filter((m) => {
     if (search && !m.title.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   });
@@ -48,40 +45,51 @@ export default function MeetingList() {
         statusFilter={statusFilter}
         onStatusChange={setStatusFilter}
       />
-      <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Title</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Participants</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {filtered.map((m) => (
-              <tr key={m.id} className="hover:bg-gray-50 transition-colors">
-                <td className="px-6 py-4 text-sm text-gray-600 whitespace-nowrap">
-                  {formatDate(m.scheduled_time)}
-                </td>
-                <td className="px-6 py-4 text-sm">
-                  <Link href={`/meetings/${m.id}`} className="text-blue-600 hover:underline font-medium">
-                    {m.title}
-                  </Link>
-                </td>
-                <td className="px-6 py-4 text-sm text-gray-600">{m.participant_count}</td>
-                <td className="px-6 py-4 text-sm text-gray-600">{formatDuration(m.duration_seconds)}</td>
-                <td className="px-6 py-4"><StatusBadge status={m.status} /></td>
-                <td className="px-6 py-4">
-                  <DeleteMeetingButton meetingId={m.id} meetingTitle={m.title} />
-                </td>
+
+      {isLoading && <div className="text-gray-500">Loading meetings...</div>}
+      {error && <div className="text-red-600">{error.message || "Failed to load meetings."}</div>}
+      {!isLoading && !error && filtered.length === 0 && (
+        <div className="text-gray-500">
+          {hasFilters ? "No meetings match your filters." : "No meetings yet."}
+        </div>
+      )}
+
+      {filtered.length > 0 && (
+        <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Title</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Participants</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {filtered.map((m) => (
+                <tr key={m.id} className="hover:bg-gray-50 transition-colors">
+                  <td className="px-6 py-4 text-sm text-gray-600 whitespace-nowrap">
+                    {formatDate(m.scheduled_time)}
+                  </td>
+                  <td className="px-6 py-4 text-sm">
+                    <Link href={`/meetings/${m.id}`} className="text-blue-600 hover:underline font-medium">
+                      {m.title}
+                    </Link>
+                  </td>
+                  <td className="px-6 py-4 text-sm text-gray-600">{m.participant_count}</td>
+                  <td className="px-6 py-4 text-sm text-gray-600">{formatDuration(m.duration_seconds)}</td>
+                  <td className="px-6 py-4"><StatusBadge status={m.status} /></td>
+                  <td className="px-6 py-4">
+                    <DeleteMeetingButton meetingId={m.id} meetingTitle={m.title} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

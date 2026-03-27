@@ -8,6 +8,7 @@ import AudioPlayer, { type AudioPlayerHandle } from "@/components/AudioPlayer";
 import TranscriptView from "@/components/TranscriptView";
 import SummaryView from "@/components/SummaryView";
 import ActionItemsTable from "@/components/ActionItemsTable";
+import ExportMenu from "@/components/ExportMenu";
 
 type Tab = "transcript" | "summary" | "actions";
 
@@ -32,7 +33,14 @@ export default function MeetingDetailContent() {
 
   return (
     <div>
-      <MeetingHeader meeting={meeting} />
+      <div className="flex items-start justify-between gap-4">
+        <MeetingHeader meeting={meeting} />
+        <ExportMenu
+          meetingTitle={meeting.title}
+          segments={meeting.transcript?.segments ?? null}
+          summary={meeting.summary}
+        />
+      </div>
       <AudioPlayer ref={audioRef} src={meeting.audio_url} />
 
       {/* Tabs */}
