@@ -82,3 +82,16 @@ export interface MeetingDetail {
   summary: SummaryResponse | null;
   action_items: ActionItem[];
 }
+
+export interface CalendarAttendee {
+  name: string;
+  email: string;
+}
+
+export interface CalendarEvent {
+  id: string;
+  subject: string;
+  start: string;
+  end: string;
+  attendees: CalendarAttendee[];
+}
