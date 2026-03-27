@@ -57,8 +57,6 @@ function rebuildMenu(): void {
     { label: 'Start Recording', enabled: !recording, click: handleStartRecording },
     { label: 'Stop Recording', enabled: recording, click: handleStopRecording },
     { type: 'separator' },
-    { label: 'Select Meeting...', click: openMeetingSelector },
-    { type: 'separator' },
     { label: 'Open App', click: () => _onOpenApp() },
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
