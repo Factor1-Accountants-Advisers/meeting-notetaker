@@ -1,5 +1,6 @@
 import AuthGuard from "@/components/AuthGuard";
 import Nav from "@/components/Nav";
+import RecordingStatusBar from "@/components/RecordingStatusBar";
 
 export default function ProtectedLayout({
   children,
@@ -10,6 +11,7 @@ export default function ProtectedLayout({
     <AuthGuard>
       <Nav />
       <main className="flex-1 p-8 overflow-auto min-h-screen">{children}</main>
+      <RecordingStatusBar />
     </AuthGuard>
   );
 }
