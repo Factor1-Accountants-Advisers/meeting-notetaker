@@ -47,12 +47,20 @@ function SkeletonBlock({ lines = 3 }: { lines?: number }) {
   );
 }
 
-export default function MeetingDetailContent() {
+interface MeetingDetailContentProps {
+  meetingId?: number;
+  onClose?: () => void;
+}
+
+export default function MeetingDetailContent({
+  meetingId: meetingIdProp,
+  onClose,
+}: MeetingDetailContentProps) {
   const params = useParams<{ id: string[] | string }>();
   const router = useRouter();
   const rawId = params?.id;
-  const meetingId = Array.isArray(rawId) ? rawId[0] : rawId;
-  const numericId = meetingId ? Number(meetingId) : undefined;
+  const paramId = Array.isArray(rawId) ? rawId[0] : rawId;
+  const numericId = meetingIdProp ?? (paramId ? Number(paramId) : undefined);
 
   const [pollInterval, setPollInterval] = useState(3000);
   const { data: m, error, isLoading } = useMeeting(numericId, {
@@ -69,7 +77,7 @@ export default function MeetingDetailContent() {
   const audioRef = useRef<AudioPlayerHandle>(null);
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
 
-  if (!meetingId) return <div className="text-gray-500">No meeting selected.</div>;
+  if (!numericId) return <div className="text-gray-500">No meeting selected.</div>;
   if (isLoading) return <div className="text-gray-500">Loading meeting...</div>;
   if (error || !m) return <div className="text-red-400">Meeting not found.</div>;
 
@@ -90,11 +98,11 @@ export default function MeetingDetailContent() {
     <div className="max-w-3xl">
       {/* Back link */}
       <button
-        onClick={() => router.push("/")}
+        onClick={() => (onClose ? onClose() : router.push("/"))}
         className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-300 mb-6 transition-colors"
       >
         <ArrowLeft className="w-4 h-4" />
-        Back to Meetings
+        {onClose ? "Close" : "Back to Meetings"}
       </button>
 
       {/* Header */}
