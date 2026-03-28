@@ -8,32 +8,41 @@ import SearchFilter from "./SearchFilter";
 import DeleteMeetingButton from "./DeleteMeetingButton";
 
 function formatDuration(seconds: number | null): string {
-  if (!seconds) return "—";
+  if (!seconds) return "";
   const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}m ${s > 0 ? `${s}s` : ""}`.trim();
+  return `${m} min`;
 }
 
 function formatDate(dateStr: string | null): string {
-  if (!dateStr) return "—";
-  return new Date(dateStr).toLocaleDateString("en-AU", {
-    day: "numeric",
+  if (!dateStr) return "";
+  return new Date(dateStr).toLocaleDateString("en-US", {
     month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
+    day: "numeric",
   });
 }
 
-export default function MeetingList() {
+interface MeetingListProps {
+  onSelectMeeting?: (id: number) => void;
+  selectedMeetingId?: number | null;
+}
+
+export default function MeetingList({
+  onSelectMeeting,
+  selectedMeetingId,
+}: MeetingListProps) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
-  const { data, error, isLoading } = useMeetings(1, 20, statusFilter || undefined);
+  const { data, error, isLoading } = useMeetings(
+    1,
+    20,
+    statusFilter || undefined
+  );
 
   const hasFilters = search !== "" || statusFilter !== "";
 
   const filtered = (data?.items ?? []).filter((m) => {
-    if (search && !m.title.toLowerCase().includes(search.toLowerCase())) return false;
+    if (search && !m.title.toLowerCase().includes(search.toLowerCase()))
+      return false;
     return true;
   });
 
@@ -46,48 +55,79 @@ export default function MeetingList() {
         onStatusChange={setStatusFilter}
       />
 
-      {isLoading && <div className="text-gray-500">Loading meetings...</div>}
-      {error && <div className="text-red-600">{error.message || "Failed to load meetings."}</div>}
+      {isLoading && (
+        <div className="text-gray-500 text-sm py-4">Loading meetings...</div>
+      )}
+      {error && (
+        <div className="text-red-400 text-sm py-4">
+          {error.message || "Failed to load meetings."}
+        </div>
+      )}
       {!isLoading && !error && filtered.length === 0 && (
-        <div className="text-gray-500">
-          {hasFilters ? "No meetings match your filters." : "No meetings yet."}
+        <div className="text-gray-500 text-sm py-4">
+          {hasFilters
+            ? "No meetings match your filters."
+            : "No meetings yet."}
         </div>
       )}
 
       {filtered.length > 0 && (
-        <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Title</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Participants</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {filtered.map((m) => (
-                <tr key={m.id} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-6 py-4 text-sm text-gray-600 whitespace-nowrap">
-                    {formatDate(m.scheduled_time)}
-                  </td>
-                  <td className="px-6 py-4 text-sm">
-                    <Link href={`/meetings/${m.id}`} className="text-blue-600 hover:underline font-medium">
-                      {m.title}
-                    </Link>
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-600">{m.participant_count}</td>
-                  <td className="px-6 py-4 text-sm text-gray-600">{formatDuration(m.duration_seconds)}</td>
-                  <td className="px-6 py-4"><StatusBadge status={m.status} /></td>
-                  <td className="px-6 py-4">
-                    <DeleteMeetingButton meetingId={m.id} meetingTitle={m.title} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="space-y-2 mt-3">
+          {filtered.map((m) => {
+            const isSelected = selectedMeetingId === m.id;
+            const CardWrapper = onSelectMeeting ? "button" : "div";
+
+            return (
+              <CardWrapper
+                key={m.id}
+                onClick={
+                  onSelectMeeting
+                    ? () => onSelectMeeting(m.id)
+                    : undefined
+                }
+                className={`w-full text-left relative p-3 rounded-lg border transition-colors ${
+                  isSelected
+                    ? "border-blue-500/50 bg-blue-950/30 border-l-2 border-l-blue-500"
+                    : "border-gray-800 bg-gray-900/50 hover:bg-gray-800/50"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    {onSelectMeeting ? (
+                      <span className="text-sm font-medium text-gray-200 block truncate">
+                        {m.title}
+                      </span>
+                    ) : (
+                      <Link
+                        href={`/meetings/${m.id}`}
+                        className="text-sm font-medium text-blue-400 hover:text-blue-300 block truncate"
+                      >
+                        {m.title}
+                      </Link>
+                    )}
+                    <div className="flex items-center gap-2 mt-1 text-xs text-gray-500">
+                      {formatDate(m.scheduled_time) && (
+                        <span>{formatDate(m.scheduled_time)}</span>
+                      )}
+                      {formatDuration(m.duration_seconds) && (
+                        <>
+                          <span>·</span>
+                          <span>{formatDuration(m.duration_seconds)}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <StatusBadge status={m.status} />
+                    <DeleteMeetingButton
+                      meetingId={m.id}
+                      meetingTitle={m.title}
+                    />
+                  </div>
+                </div>
+              </CardWrapper>
+            );
+          })}
         </div>
       )}
     </div>
