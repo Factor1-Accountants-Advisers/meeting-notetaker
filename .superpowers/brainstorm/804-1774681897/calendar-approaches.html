@@ -1,0 +1,188 @@
+<h2>Upcoming Meetings — Calendar Strip Design</h2>
+<p class="subtitle">Inspired by Vinyl's horizontal day picker. Which approach fits best in your sidebar?</p>
+
+<div class="cards">
+  <!-- Option A: Vinyl-style horizontal day strip -->
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding: 0; overflow: hidden;">
+      <div style="background: #1a1a2e; border-radius: 8px; padding: 20px; font-family: system-ui, sans-serif; color: #e0e0e0;">
+        <!-- Header -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <span style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #888;">Upcoming</span>
+          <span style="font-size: 11px; color: #6b8afd; cursor: pointer;">Refresh</span>
+        </div>
+
+        <!-- Day strip -->
+        <div style="display: flex; gap: 4px; margin-bottom: 16px; overflow-x: auto;">
+          <div style="min-width: 52px; text-align: center; padding: 8px 6px; border-radius: 8px; background: rgba(255,255,255,0.05); cursor: pointer;">
+            <div style="font-size: 10px; color: #888; margin-bottom: 2px;">Fri</div>
+            <div style="font-size: 16px; font-weight: 600;">28</div>
+          </div>
+          <div style="min-width: 52px; text-align: center; padding: 8px 6px; border-radius: 8px; background: #3b5bdb; color: white; cursor: pointer; box-shadow: 0 2px 8px rgba(59,91,219,0.3);">
+            <div style="font-size: 10px; opacity: 0.8; margin-bottom: 2px;">Mon</div>
+            <div style="font-size: 16px; font-weight: 600;">30</div>
+            <div style="width: 5px; height: 5px; background: white; border-radius: 50%; margin: 4px auto 0;"></div>
+          </div>
+          <div style="min-width: 52px; text-align: center; padding: 8px 6px; border-radius: 8px; background: rgba(255,255,255,0.05); cursor: pointer;">
+            <div style="font-size: 10px; color: #888; margin-bottom: 2px;">Tue</div>
+            <div style="font-size: 16px; font-weight: 600;">31</div>
+          </div>
+          <div style="min-width: 52px; text-align: center; padding: 8px 6px; border-radius: 8px; background: rgba(255,255,255,0.05); cursor: pointer;">
+            <div style="font-size: 10px; color: #888; margin-bottom: 2px;">Wed</div>
+            <div style="font-size: 16px; font-weight: 600;">1</div>
+          </div>
+          <div style="min-width: 52px; text-align: center; padding: 8px 6px; border-radius: 8px; background: rgba(255,255,255,0.05); cursor: pointer;">
+            <div style="font-size: 10px; color: #888; margin-bottom: 2px;">Thu</div>
+            <div style="font-size: 16px; font-weight: 600;">2</div>
+          </div>
+        </div>
+
+        <!-- Selected day's meetings -->
+        <div style="font-size: 11px; color: #888; margin-bottom: 8px; font-weight: 500;">Mon, Mar 30</div>
+
+        <div style="border-left: 3px solid #3b5bdb; padding: 8px 12px; background: rgba(59,91,219,0.08); border-radius: 0 6px 6px 0; margin-bottom: 8px; cursor: pointer;">
+          <div style="font-size: 13px; font-weight: 500;">AI Mission Catch Up</div>
+          <div style="font-size: 11px; color: #888; margin-top: 2px;">11:00 AM – 12:30 PM · 1.5 hrs</div>
+        </div>
+
+        <div style="border-left: 3px solid #6b8afd; padding: 8px 12px; background: rgba(107,138,253,0.06); border-radius: 0 6px 6px 0; cursor: pointer;">
+          <div style="font-size: 13px; font-weight: 500;">AI Check in</div>
+          <div style="font-size: 11px; color: #888; margin-top: 2px;">12:00 PM – 12:30 PM · 30 min</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A — Horizontal Day Strip</h3>
+      <p>Vinyl-style scrollable day pills. Dot indicators show which days have meetings. Click a day to see its meetings below. Compact, fits well in a sidebar. Days without meetings are skippable or dimmed.</p>
+    </div>
+  </div>
+
+  <!-- Option B: Week view with inline meetings -->
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding: 0; overflow: hidden;">
+      <div style="background: #1a1a2e; border-radius: 8px; padding: 20px; font-family: system-ui, sans-serif; color: #e0e0e0;">
+        <!-- Header -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <span style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #888;">Upcoming</span>
+          <span style="font-size: 11px; color: #6b8afd; cursor: pointer;">Refresh</span>
+        </div>
+
+        <!-- Vertical day list with inline meetings -->
+        <div style="margin-bottom: 4px;">
+          <div style="font-size: 11px; color: #666; padding: 4px 0; font-weight: 500;">FRI 28 — Today</div>
+          <div style="padding: 4px 0 8px 12px;">
+            <div style="font-size: 12px; color: #666; font-style: italic;">No meetings</div>
+          </div>
+        </div>
+
+        <div style="border-top: 1px solid rgba(255,255,255,0.06);">
+          <div style="font-size: 11px; color: #aaa; padding: 8px 0 4px; font-weight: 600;">MON 30</div>
+          <div style="padding: 4px 0 4px 0;">
+            <div style="border-left: 3px solid #3b5bdb; padding: 6px 10px; background: rgba(59,91,219,0.08); border-radius: 0 6px 6px 0; margin-bottom: 6px; cursor: pointer;">
+              <div style="font-size: 13px; font-weight: 500;">AI Mission Catch Up</div>
+              <div style="font-size: 11px; color: #888;">11:00 AM · 1.5 hrs</div>
+            </div>
+            <div style="border-left: 3px solid #6b8afd; padding: 6px 10px; background: rgba(107,138,253,0.06); border-radius: 0 6px 6px 0; cursor: pointer;">
+              <div style="font-size: 13px; font-weight: 500;">AI Check in</div>
+              <div style="font-size: 11px; color: #888;">12:00 PM · 30 min</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="border-top: 1px solid rgba(255,255,255,0.06); margin-top: 8px;">
+          <div style="font-size: 11px; color: #666; padding: 8px 0 4px; font-weight: 500;">TUE 31</div>
+          <div style="padding: 4px 0 4px 12px;">
+            <div style="font-size: 12px; color: #666; font-style: italic;">No meetings</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B — Vertical Day List</h3>
+      <p>All days listed vertically with meetings shown inline under each day. No clicking needed — everything visible at a glance. Days without meetings shown dimmed. Scrolls naturally in the sidebar. Shows the full week ahead.</p>
+    </div>
+  </div>
+
+  <!-- Option C: Hybrid — day strip + agenda -->
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding: 0; overflow: hidden;">
+      <div style="background: #1a1a2e; border-radius: 8px; padding: 20px; font-family: system-ui, sans-serif; color: #e0e0e0;">
+        <!-- Header -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <span style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #888;">Upcoming</span>
+          <span style="font-size: 11px; color: #6b8afd; cursor: pointer;">Refresh</span>
+        </div>
+
+        <!-- Day strip — only days WITH meetings -->
+        <div style="display: flex; gap: 4px; margin-bottom: 16px;">
+          <div style="min-width: 52px; text-align: center; padding: 8px 6px; border-radius: 8px; background: rgba(255,255,255,0.05); cursor: pointer; border: 1px solid rgba(255,255,255,0.08);">
+            <div style="font-size: 10px; color: #888; margin-bottom: 2px;">Today</div>
+            <div style="font-size: 16px; font-weight: 600; color: #6b8afd;">28</div>
+          </div>
+          <div style="min-width: 52px; text-align: center; padding: 8px 6px; border-radius: 8px; background: #3b5bdb; color: white; cursor: pointer; box-shadow: 0 2px 8px rgba(59,91,219,0.3);">
+            <div style="font-size: 10px; opacity: 0.8; margin-bottom: 2px;">Mon</div>
+            <div style="font-size: 16px; font-weight: 600;">30</div>
+            <div style="display: flex; gap: 3px; justify-content: center; margin-top: 4px;">
+              <div style="width: 4px; height: 4px; background: white; border-radius: 50%;"></div>
+              <div style="width: 4px; height: 4px; background: white; border-radius: 50%;"></div>
+            </div>
+          </div>
+          <div style="min-width: 52px; text-align: center; padding: 8px 6px; border-radius: 8px; background: rgba(255,255,255,0.05); cursor: pointer; border: 1px solid rgba(255,255,255,0.08);">
+            <div style="font-size: 10px; color: #888; margin-bottom: 2px;">Fri</div>
+            <div style="font-size: 16px; font-weight: 600;">4</div>
+            <div style="width: 4px; height: 4px; background: #6b8afd; border-radius: 50%; margin: 4px auto 0;"></div>
+          </div>
+        </div>
+
+        <!-- Selected day label -->
+        <div style="font-size: 11px; color: #888; margin-bottom: 8px; font-weight: 500;">Monday, March 30</div>
+
+        <!-- Meeting cards -->
+        <div style="border-left: 3px solid #3b5bdb; padding: 8px 12px; background: rgba(59,91,219,0.08); border-radius: 0 6px 6px 0; margin-bottom: 8px; cursor: pointer;">
+          <div style="display: flex; justify-content: space-between; align-items: start;">
+            <div>
+              <div style="font-size: 13px; font-weight: 500;">AI Mission Catch Up</div>
+              <div style="font-size: 11px; color: #888; margin-top: 2px;">11:00 AM – 12:30 PM</div>
+            </div>
+            <div style="font-size: 10px; background: rgba(59,91,219,0.2); color: #8da4fc; padding: 2px 6px; border-radius: 4px;">Teams</div>
+          </div>
+        </div>
+
+        <div style="border-left: 3px solid #6b8afd; padding: 8px 12px; background: rgba(107,138,253,0.06); border-radius: 0 6px 6px 0; cursor: pointer;">
+          <div style="display: flex; justify-content: space-between; align-items: start;">
+            <div>
+              <div style="font-size: 13px; font-weight: 500;">AI Check in</div>
+              <div style="font-size: 11px; color: #888; margin-top: 2px;">12:00 PM – 12:30 PM</div>
+            </div>
+            <div style="font-size: 10px; background: rgba(59,91,219,0.2); color: #8da4fc; padding: 2px 6px; border-radius: 4px;">Teams</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C — Smart Strip (Only Days With Meetings)</h3>
+      <p>Like Option A, but the strip only shows days that have meetings — no empty days cluttering the view. Dot count indicates number of meetings. "Today" is always shown. Closest to Vinyl's pattern with a cleaner feel for sparse calendars.</p>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top: 24px; padding: 16px; background: rgba(255,255,255,0.03); border-radius: 8px; border: 1px solid rgba(255,255,255,0.06);">
+  <h3 style="margin-top: 0;">Key differences</h3>
+  <table style="width: 100%; font-size: 14px; border-collapse: collapse;">
+    <tr style="border-bottom: 1px solid rgba(255,255,255,0.08);">
+      <td style="padding: 8px 0; color: #888;">Click-to-reveal</td>
+      <td style="padding: 8px;">A ✓ — C ✓</td>
+      <td style="padding: 8px;">B — all visible</td>
+    </tr>
+    <tr style="border-bottom: 1px solid rgba(255,255,255,0.08);">
+      <td style="padding: 8px 0; color: #888;">Empty days</td>
+      <td style="padding: 8px;">A shows all — B shows all</td>
+      <td style="padding: 8px;">C hides them</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px 0; color: #888;">Space usage</td>
+      <td style="padding: 8px;">A compact — C compact</td>
+      <td style="padding: 8px;">B taller</td>
+    </tr>
+  </table>
+</div>
