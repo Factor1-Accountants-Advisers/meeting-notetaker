@@ -50,7 +50,7 @@ class ParticipantResponse(ParticipantBase):
 class MeetingUploadMetadata(BaseModel):
     """Metadata sent with audio upload."""
     meeting_title: str
-    attendees: List[ParticipantBase] = Field(default_factory=list)
+    attendees: List[ParticipantBase] = Field(..., min_length=1)
     scheduled_time: Optional[datetime] = None
 
 

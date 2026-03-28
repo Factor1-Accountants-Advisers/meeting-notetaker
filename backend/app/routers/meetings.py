@@ -8,6 +8,8 @@ import tempfile
 from typing import Optional
 from datetime import datetime
 
+from pydantic import ValidationError
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -119,6 +121,11 @@ async def upload_meeting(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid JSON in metadata"
+        )
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=e.errors()
         )
     except Exception as e:
         raise HTTPException(
@@ -460,6 +467,32 @@ async def get_meeting_action_items(
         )
         for ai in items
     ]
+
+
+@router.post("/{meeting_id}/retry", response_model=MeetingUploadResponse)
+async def retry_meeting(
+    meeting_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Re-enqueue a failed meeting for processing."""
+    meeting = await db.get(Meeting, meeting_id)
+    if not meeting or meeting.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    if meeting.status != MeetingStatus.FAILED:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot retry meeting in '{meeting.status.value}' state — only failed meetings can be retried",
+        )
+
+    meeting.status = MeetingStatus.PROCESSING
+    await db.commit()
+
+    task = process_meeting.delay(meeting.id)
+    logger.info(f"Retry task enqueued: {task.id} for meeting {meeting.id}")
+
+    return MeetingUploadResponse(meeting_id=meeting.id, status="processing")
 
 
 @router.delete("/{meeting_id}", status_code=status.HTTP_204_NO_CONTENT)
