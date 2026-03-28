@@ -175,7 +175,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Right Panel */}
-      <div className="flex-1 overflow-y-auto border-l border-gray-800 pl-6">
+      <div className="flex-1 overflow-y-auto border-l border-gray-800 pl-6 bg-gray-950">
         {detailMeetingId ? (
           <MeetingDetailContent
             meetingId={detailMeetingId}

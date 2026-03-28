@@ -14,7 +14,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="flex bg-gray-50 font-sans">
+      <body className="flex bg-gray-950 font-sans">
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
