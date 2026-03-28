@@ -19,7 +19,7 @@ export async function getUpcomingMeetings(accessToken: string): Promise<Calendar
   const now = new Date();
   const params = new URLSearchParams({
     startDateTime: now.toISOString(),
-    endDateTime: new Date(now.getTime() + 8 * 3600000).toISOString(),
+    endDateTime: new Date(now.getTime() + 7 * 24 * 3600000).toISOString(),
     $select: 'id,subject,start,end,attendees',
     $top: '20',
     $orderby: 'start/dateTime asc',
