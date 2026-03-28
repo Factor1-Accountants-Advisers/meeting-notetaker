@@ -29,12 +29,12 @@ export default function SearchFilter({
         value={search}
         onChange={(e) => onSearchChange(e.target.value)}
         placeholder="Search meetings..."
-        className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+        className="flex-1 px-3 py-2 border border-gray-700 bg-gray-800 text-gray-200 placeholder-gray-500 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
       />
       <select
         value={statusFilter}
         onChange={(e) => onStatusChange(e.target.value)}
-        className="px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+        className="px-3 py-2 border border-gray-700 bg-gray-800 text-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
       >
         {STATUS_OPTIONS.map((opt) => (
           <option key={opt.value} value={opt.value}>

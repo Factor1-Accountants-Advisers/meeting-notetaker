@@ -10,7 +10,7 @@ export default function ProtectedLayout({
     <AuthGuard>
       <div className="flex min-h-screen bg-gray-950">
         <IconSidebar />
-        <main className="flex-1 p-8 overflow-auto">{children}</main>
+        <main className="flex-1 p-8 overflow-hidden">{children}</main>
       </div>
     </AuthGuard>
   );
