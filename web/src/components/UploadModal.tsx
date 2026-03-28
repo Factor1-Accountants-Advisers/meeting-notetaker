@@ -18,6 +18,7 @@ export default function UploadModal({ onClose }: { onClose: () => void }) {
   const [attendees, setAttendees] = useState<Attendee[]>([]);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [scheduledTime, setScheduledTime] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { mutate } = useSWRConfig();
 
@@ -48,6 +49,10 @@ export default function UploadModal({ onClose }: { onClose: () => void }) {
       setError("Meeting title is required");
       return;
     }
+    if (attendees.length === 0) {
+      setError("At least one attendee is required for speaker identification");
+      return;
+    }
 
     setUploading(true);
     setError(null);
@@ -57,6 +62,7 @@ export default function UploadModal({ onClose }: { onClose: () => void }) {
         file,
         title: title.trim(),
         attendees,
+        scheduledTime: scheduledTime || undefined,
       });
       // Revalidate meetings list
       await mutate((key: unknown) => typeof key === "string" && key.startsWith("/api/meetings"));
@@ -95,7 +101,13 @@ export default function UploadModal({ onClose }: { onClose: () => void }) {
               ref={fileInputRef}
               type="file"
               accept={ACCEPTED_TYPES}
-              onChange={(e) => setFile(e.target.files?.[0] || null)}
+              onChange={(e) => {
+                const f = e.target.files?.[0] || null;
+                setFile(f);
+                if (f && !scheduledTime) {
+                  setScheduledTime(new Date(f.lastModified).toISOString().slice(0, 16));
+                }
+              }}
               className="hidden"
             />
             <button
@@ -137,7 +149,7 @@ export default function UploadModal({ onClose }: { onClose: () => void }) {
           {/* Attendees */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Attendees <span className="text-gray-400 font-normal">(optional)</span>
+              Attendees <span className="text-red-500">*</span>
             </label>
             <div className="flex gap-2">
               <input
@@ -195,7 +207,7 @@ export default function UploadModal({ onClose }: { onClose: () => void }) {
           </button>
           <button
             onClick={handleSubmit}
-            disabled={!file || !title.trim() || uploading}
+            disabled={!file || !title.trim() || attendees.length === 0 || uploading}
             className="px-4 py-2 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {uploading ? "Uploading..." : "Upload"}
