@@ -1,6 +1,5 @@
 import AuthGuard from "@/components/AuthGuard";
-import Nav from "@/components/Nav";
-import RecordingStatusBar from "@/components/RecordingStatusBar";
+import IconSidebar from "@/components/IconSidebar";
 
 export default function ProtectedLayout({
   children,
@@ -9,9 +8,10 @@ export default function ProtectedLayout({
 }) {
   return (
     <AuthGuard>
-      <Nav />
-      <main className="flex-1 p-8 overflow-auto min-h-screen">{children}</main>
-      <RecordingStatusBar />
+      <div className="flex min-h-screen bg-gray-950">
+        <IconSidebar />
+        <main className="flex-1 p-8 overflow-auto">{children}</main>
+      </div>
     </AuthGuard>
   );
 }
