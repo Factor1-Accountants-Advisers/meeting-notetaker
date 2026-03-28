@@ -1,4 +1,4 @@
-import useSWR, { SWRResponse } from "swr";
+import useSWR, { SWRResponse, SWRConfiguration } from "swr";
 import type {
   MeetingListResponse,
   MeetingDetail,
@@ -73,8 +73,11 @@ export function useMeetings(
   return useSWR(`/api/meetings?${params}`, fetcher);
 }
 
-export function useMeeting(id: number | undefined): SWRResponse<MeetingDetail> {
-  return useSWR(id != null ? `/api/meetings/${id}` : null, fetcher);
+export function useMeeting(
+  id: number | undefined,
+  options?: SWRConfiguration
+): SWRResponse<MeetingDetail> {
+  return useSWR(id != null ? `/api/meetings/${id}` : null, fetcher, options);
 }
 
 export function useTranscript(id: number): SWRResponse<TranscriptResponse> {
@@ -141,6 +144,19 @@ export async function uploadMeeting(
 }
 
 // --- Mutations ---
+
+export async function retryMeeting(id: number): Promise<{ meeting_id: number; status: string }> {
+  const headers = await authHeaders();
+  const res = await fetch(`/api/meetings/${id}/retry`, {
+    method: "POST",
+    headers,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail || `Retry failed: ${res.status}`);
+  }
+  return res.json();
+}
 
 export async function deleteMeeting(id: number): Promise<void> {
   const headers = await authHeaders();
