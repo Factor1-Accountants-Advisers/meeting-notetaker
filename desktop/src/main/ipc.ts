@@ -1,13 +1,30 @@
 import { ipcMain, BrowserWindow, shell, app } from 'electron';
+import * as path from 'path';
 import { acquireToken, acquireIdToken, clearTokenCache } from './auth';
 import { getUpcomingMeetings, CalendarEvent } from './graph';
 import { startRecording, stopRecording, isRecording, RecordingOptions } from './recorder';
 import { uploadRecording, MeetingMetadata, UploadResult } from './uploader';
 import { setPendingMeeting } from './tray';
+import { getMainWindow } from './index';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
 const execAsync = promisify(exec);
+
+// In-app recording state (mirrors what tray.ts does for tray-initiated recordings)
+let _ipcOutputPath = '';
+let _ipcMetadata: MeetingMetadata | null = null;
+
+function broadcastRecordingStatus(recording: boolean, meetingTitle?: string): void {
+  const win = getMainWindow();
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('recorder:status-changed', {
+      recording,
+      meetingTitle: meetingTitle || undefined,
+      startedAt: recording ? Date.now() : undefined,
+    });
+  }
+}
 
 export function registerIpcHandlers(): void {
   ipcMain.handle('auth:get-token', (): Promise<string> => acquireToken());
@@ -22,15 +39,33 @@ export function registerIpcHandlers(): void {
     return events;
   });
 
-  ipcMain.handle('recorder:start', (_e, opts: RecordingOptions): void => startRecording(opts));
-  ipcMain.handle('recorder:stop', (): void => stopRecording());
+  ipcMain.handle('recorder:start', (_e, opts: RecordingOptions & { metadata?: MeetingMetadata }): void => {
+    // Generate output path (same approach as tray.ts)
+    const outputPath = opts.outputPath || path.join(app.getPath('temp'), `meeting-${Date.now()}.wav`);
+    _ipcOutputPath = outputPath;
+    _ipcMetadata = opts.metadata || null;
+
+    startRecording({ micName: opts.micName, loopbackName: opts.loopbackName, outputPath });
+    broadcastRecordingStatus(true, _ipcMetadata?.meeting_title);
+    console.log(`[ipc] recorder:start — recording to ${outputPath}`);
+  });
+
+  ipcMain.handle('recorder:stop', (): string => {
+    stopRecording();
+    broadcastRecordingStatus(false);
+    const outputPath = _ipcOutputPath;
+    console.log(`[ipc] recorder:stop — file at ${outputPath}`);
+    return outputPath;
+  });
+
   ipcMain.handle('recorder:is-recording', (): boolean => isRecording());
 
   ipcMain.handle(
     'uploader:upload',
-    async (_e, args: { recordingOptions: RecordingOptions; metadata: MeetingMetadata; backendUrl: string }): Promise<UploadResult> => {
+    async (_e, args: { filePath: string; metadata: MeetingMetadata }): Promise<UploadResult> => {
       const token = await acquireToken();
-      return uploadRecording({ filePath: args.recordingOptions.outputPath, accessToken: token, backendUrl: args.backendUrl, metadata: args.metadata });
+      const backendUrl = process.env.BACKEND_URL ?? 'http://localhost:8000';
+      return uploadRecording({ filePath: args.filePath, accessToken: token, backendUrl, metadata: args.metadata });
     }
   );
 

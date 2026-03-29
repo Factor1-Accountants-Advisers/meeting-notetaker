@@ -1,17 +1,17 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { useRouter } from "next/navigation";
-import { Mic, Volume2, X, CircleDot, Square, AlertCircle } from "lucide-react";
+import { Mic, Volume2, X, CircleDot, Square, AlertCircle, Loader2 } from "lucide-react";
 import { getElectronAPIOrNull } from "@/lib/electron-bridge";
 import { useRecordingStatus } from "@/lib/useRecordingStatus";
 import type { CalendarEvent } from "@/types";
 
-type PanelMode = "prefilled" | "adhoc" | "recording";
+type PanelMode = "prefilled" | "adhoc" | "recording" | "uploading";
 
 interface RecordingPanelProps {
   selectedMeeting: CalendarEvent | null;
   onDismiss: () => void;
+  onMeetingCreated?: (meetingId: number) => void;
 }
 
 function formatElapsed(ms: number): string {
@@ -24,8 +24,8 @@ function formatElapsed(ms: number): string {
 export default function RecordingPanel({
   selectedMeeting,
   onDismiss,
+  onMeetingCreated,
 }: RecordingPanelProps) {
-  const router = useRouter();
   const electron = getElectronAPIOrNull();
   const { recording, elapsed } = useRecordingStatus();
 
@@ -34,14 +34,28 @@ export default function RecordingPanel({
   const [attendeeInput, setAttendeeInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [lastFilePath, setLastFilePath] = useState<string | null>(null);
 
-  const mode: PanelMode = recording
-    ? "recording"
-    : selectedMeeting
-      ? "prefilled"
-      : "adhoc";
+  const isRecording = recording;
+
+  const mode: PanelMode = uploading
+    ? "uploading"
+    : isRecording
+      ? "recording"
+      : selectedMeeting
+        ? "prefilled"
+        : "adhoc";
 
   const meetingTitle = selectedMeeting?.subject ?? title;
+
+  const buildMetadata = () => ({
+    meeting_title: meetingTitle || `Recording ${new Date().toLocaleString()}`,
+    attendees: selectedMeeting
+      ? selectedMeeting.attendees.map((a) => ({ name: a.name, email: a.email }))
+      : attendees.map((name) => ({ name })),
+    scheduled_time: selectedMeeting?.start,
+  });
 
   const canStart =
     mode === "prefilled" || (title.trim() !== "" && attendees.length > 0);
@@ -63,10 +77,14 @@ export default function RecordingPanel({
     setError(null);
     try {
       const devices = await electron.getAudioDevices();
+      const micName = localStorage.getItem("settings:micName") || devices?.[0]?.name || "default";
+      const loopbackName = localStorage.getItem("settings:loopbackName") || devices?.[1]?.name || "default";
+
       await electron.startRecording({
-        micName: devices?.[0]?.name ?? "default",
-        loopbackName: devices?.[1]?.name ?? "default",
-        outputPath: "",
+        micName,
+        loopbackName,
+        outputPath: "", // main process generates the path
+        metadata: buildMetadata(),
       });
     } catch (err: unknown) {
       setError(
@@ -77,13 +95,22 @@ export default function RecordingPanel({
     }
   };
 
-  const handleStop = async () => {
+  const doUpload = async (filePath: string) => {
     if (!electron) return;
+    setUploading(true);
     setUploadError(null);
     try {
-      await electron.stopRecording();
-      router.push("/");
+      const result = await electron.uploadRecording({
+        filePath,
+        metadata: buildMetadata(),
+      });
+      setUploading(false);
+      if (onMeetingCreated) {
+        onMeetingCreated(result.meeting_id);
+      }
     } catch (err: unknown) {
+      setUploading(false);
+      setLastFilePath(filePath);
       setUploadError(
         err instanceof Error
           ? err.message
@@ -91,6 +118,41 @@ export default function RecordingPanel({
       );
     }
   };
+
+  const handleStop = async () => {
+    if (!electron) return;
+    setUploadError(null);
+    try {
+      const filePath = await electron.stopRecording();
+      await doUpload(filePath);
+    } catch (err: unknown) {
+      setUploadError(
+        err instanceof Error
+          ? err.message
+          : "Failed to stop recording."
+      );
+    }
+  };
+
+  const handleRetryUpload = async () => {
+    if (lastFilePath) {
+      await doUpload(lastFilePath);
+    }
+  };
+
+  if (mode === "uploading") {
+    return (
+      <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-5">
+        <div className="flex flex-col items-center py-6">
+          <Loader2 className="w-8 h-8 text-blue-400 animate-spin mb-3" />
+          <p className="text-sm font-medium text-gray-200">Uploading recording...</p>
+          <p className="text-xs text-gray-500 mt-1">
+            This may take a moment depending on the file size.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (mode === "recording") {
     return (
@@ -143,7 +205,7 @@ export default function RecordingPanel({
             <div>
               <p className="text-xs text-red-300">{uploadError}</p>
               <button
-                onClick={handleStop}
+                onClick={handleRetryUpload}
                 className="text-xs text-blue-400 hover:text-blue-300 mt-1"
               >
                 Retry Upload
@@ -173,6 +235,21 @@ export default function RecordingPanel({
           <X className="w-4 h-4" />
         </button>
       </div>
+
+      {uploadError && (
+        <div className="flex items-start gap-2 p-3 mb-3 rounded-lg bg-red-500/10 border border-red-500/20">
+          <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 flex-shrink-0" />
+          <div>
+            <p className="text-xs text-red-300">{uploadError}</p>
+            <button
+              onClick={handleRetryUpload}
+              className="text-xs text-blue-400 hover:text-blue-300 mt-1"
+            >
+              Retry Upload
+            </button>
+          </div>
+        </div>
+      )}
 
       {mode === "prefilled" && selectedMeeting ? (
         <div className="mb-4">

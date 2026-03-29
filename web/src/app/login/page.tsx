@@ -30,10 +30,10 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-50">
+    <div className="flex items-center justify-center min-h-screen bg-gray-950">
       <div className="text-center max-w-md mx-auto p-8">
-        <h1 className="text-3xl font-bold text-gray-900 mb-4">Meeting Note-Taker</h1>
-        <p className="text-gray-600 mb-8">Sign in with your organisation account to continue.</p>
+        <h1 className="text-3xl font-bold text-gray-100 mb-4">Meeting Note-Taker</h1>
+        <p className="text-gray-400 mb-8">Sign in with your organisation account to continue.</p>
         <button
           onClick={handleLogin}
           disabled={signingIn}

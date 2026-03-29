@@ -26,7 +26,7 @@ const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
     if (!src) return null;
 
     return (
-      <div className="bg-gray-100 rounded-lg p-3">
+      <div className="bg-gray-800 rounded-lg p-3">
         <audio ref={audioRef} controls src={src} className="w-full" />
       </div>
     );

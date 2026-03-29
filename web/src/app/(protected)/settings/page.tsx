@@ -41,21 +41,21 @@ export default function SettingsPage() {
 
   return (
     <div className="max-w-lg">
-      <h1 className="text-2xl font-bold text-gray-900 mb-6">Settings</h1>
+      <h1 className="text-2xl font-bold text-gray-100 mb-6">Settings</h1>
 
       {/* Audio Devices — Electron only */}
       {api && (
         <section className="mb-8">
-          <h2 className="text-lg font-semibold text-gray-800 mb-3">Audio Devices</h2>
+          <h2 className="text-lg font-semibold text-gray-200 mb-3">Audio Devices</h2>
           <div className="space-y-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-gray-300 mb-1">
                 Microphone
               </label>
               <select
                 value={micName}
                 onChange={(e) => setMicName(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white"
+                className="w-full px-3 py-2 border border-gray-700 rounded-md text-sm bg-gray-800 text-gray-200"
               >
                 <option value="">System default</option>
                 {devices.map((d) => (
@@ -64,13 +64,13 @@ export default function SettingsPage() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-gray-300 mb-1">
                 System Audio (Loopback)
               </label>
               <select
                 value={loopbackName}
                 onChange={(e) => setLoopbackName(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white"
+                className="w-full px-3 py-2 border border-gray-700 rounded-md text-sm bg-gray-800 text-gray-200"
               >
                 <option value="">System default</option>
                 {devices.map((d) => (
@@ -90,18 +90,18 @@ export default function SettingsPage() {
 
       {/* App Info */}
       <section className="mb-8">
-        <h2 className="text-lg font-semibold text-gray-800 mb-3">About</h2>
+        <h2 className="text-lg font-semibold text-gray-200 mb-3">About</h2>
         <dl className="space-y-2 text-sm">
           {appVersion && (
             <div className="flex justify-between">
-              <dt className="text-gray-500">App Version</dt>
-              <dd className="text-gray-900">{appVersion}</dd>
+              <dt className="text-gray-400">App Version</dt>
+              <dd className="text-gray-200">{appVersion}</dd>
             </div>
           )}
           {backendUrl && (
             <div className="flex justify-between">
-              <dt className="text-gray-500">Backend URL</dt>
-              <dd className="text-gray-900 font-mono text-xs">{backendUrl}</dd>
+              <dt className="text-gray-400">Backend URL</dt>
+              <dd className="text-gray-200 font-mono text-xs">{backendUrl}</dd>
             </div>
           )}
         </dl>
@@ -111,7 +111,7 @@ export default function SettingsPage() {
       <section>
         <button
           onClick={handleSignOut}
-          className="px-4 py-2 border border-red-300 text-red-600 text-sm font-medium rounded-md hover:bg-red-50 transition-colors"
+          className="px-4 py-2 border border-red-800 text-red-400 text-sm font-medium rounded-md hover:bg-red-950 transition-colors"
         >
           Sign Out
         </button>

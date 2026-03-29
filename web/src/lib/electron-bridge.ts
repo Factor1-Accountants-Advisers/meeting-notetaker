@@ -6,6 +6,7 @@ export interface RecordingOptions {
   micName: string;
   loopbackName: string;
   outputPath: string;
+  metadata?: MeetingMetadata;
 }
 
 export interface RecordingStatus {
@@ -26,9 +27,8 @@ export interface MeetingMetadata {
 }
 
 export interface UploadArgs {
-  recordingOptions: RecordingOptions;
+  filePath: string;
   metadata: MeetingMetadata;
-  backendUrl: string;
 }
 
 export interface UploadResult {
@@ -51,7 +51,7 @@ export interface ElectronAPI {
 
   // Recording
   startRecording: (opts: RecordingOptions) => Promise<void>;
-  stopRecording: () => Promise<void>;
+  stopRecording: () => Promise<string>;
   isRecording: () => Promise<boolean>;
   onRecordingStatus: (cb: (status: RecordingStatus) => void) => () => void;
 

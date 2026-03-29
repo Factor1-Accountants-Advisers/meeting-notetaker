@@ -12,9 +12,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getCalendar: () => ipcRenderer.invoke('graph:get-calendar'),
 
   // Recording
-  startRecording: (opts: { micName: string; loopbackName: string; outputPath: string }) =>
-    ipcRenderer.invoke('recorder:start', opts),
-  stopRecording: () => ipcRenderer.invoke('recorder:stop'),
+  startRecording: (opts: {
+    micName: string;
+    loopbackName: string;
+    outputPath: string;
+    metadata?: { meeting_title: string; attendees: { name: string; email?: string }[]; scheduled_time?: string };
+  }) => ipcRenderer.invoke('recorder:start', opts),
+  stopRecording: (): Promise<string> => ipcRenderer.invoke('recorder:stop'),
   isRecording: () => ipcRenderer.invoke('recorder:is-recording'),
   onRecordingStatus: (cb: (status: { recording: boolean; meetingTitle?: string; startedAt?: number }) => void) => {
     const handler = (_e: Electron.IpcRendererEvent, status: { recording: boolean; meetingTitle?: string; startedAt?: number }) => cb(status);
@@ -23,8 +27,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // Upload via main process
-  uploadRecording: (args: { recordingOptions: { micName: string; loopbackName: string; outputPath: string }; metadata: { meeting_title: string; attendees: { name: string; email?: string }[]; scheduled_time?: string }; backendUrl: string }) =>
-    ipcRenderer.invoke('uploader:upload', args),
+  uploadRecording: (args: {
+    filePath: string;
+    metadata: { meeting_title: string; attendees: { name: string; email?: string }[]; scheduled_time?: string };
+  }): Promise<{ meeting_id: number; status: string }> => ipcRenderer.invoke('uploader:upload', args),
 
   // Meeting metadata
   selectMeeting: (event: { id: string; subject: string; start: string; end: string; attendees: { name: string; email: string }[] }) =>

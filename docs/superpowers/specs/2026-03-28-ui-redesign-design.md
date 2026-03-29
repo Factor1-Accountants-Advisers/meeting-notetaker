@@ -1,4 +1,4 @@
-# UI Redesign — Calendar Strip, Slim Sidebar, Meeting Detail Flow
+on# UI Redesign — Calendar Strip, Slim Sidebar, Meeting Detail Flow
 
 **Date:** 2026-03-28
 **Status:** Approved

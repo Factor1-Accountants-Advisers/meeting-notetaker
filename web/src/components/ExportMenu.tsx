@@ -72,27 +72,27 @@ export default function ExportMenu({ meetingTitle, segments, summary }: ExportMe
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen(!open)}
-        className="px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+        className="px-3 py-1.5 border border-gray-700 rounded-md text-sm text-gray-300 hover:bg-gray-800 transition-colors"
       >
         Export
       </button>
       {open && (
-        <div className="absolute right-0 mt-1 w-48 bg-white border border-gray-200 rounded-md shadow-lg z-10">
+        <div className="absolute right-0 mt-1 w-48 bg-gray-800 border border-gray-700 rounded-md shadow-lg z-10">
           <button
             onClick={() => { navigator.clipboard.writeText(text); setOpen(false); }}
-            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+            className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700"
           >
             Copy to clipboard
           </button>
           <button
             onClick={() => { downloadFile(text, `${slug}.txt`); setOpen(false); }}
-            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+            className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700"
           >
             Download as .txt
           </button>
           <button
             onClick={() => { downloadFile(text, `${slug}.md`); setOpen(false); }}
-            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+            className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700"
           >
             Download as .md
           </button>

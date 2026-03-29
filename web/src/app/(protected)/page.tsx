@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { Upload, Mic, FileText } from "lucide-react";
+import { Upload, Mic, FileText, Calendar, UploadCloud, MousePointerClick } from "lucide-react";
 import { getElectronAPIOrNull } from "@/lib/electron-bridge";
 import { useRecordingStatus } from "@/lib/useRecordingStatus";
 import MeetingList from "@/components/MeetingList";
@@ -69,6 +69,11 @@ export default function DashboardPage() {
   }, [selectedDate]);
 
   const handleSelectMeeting = (meeting: CalendarEvent) => {
+    if (showRecordingPanel && selectedCalendarEvent?.id === meeting.id) {
+      setShowRecordingPanel(false);
+      setSelectedCalendarEvent(null);
+      return;
+    }
     setSelectedCalendarEvent(meeting);
     setShowRecordingPanel(true);
   };
@@ -91,9 +96,9 @@ export default function DashboardPage() {
   });
 
   return (
-    <div className="flex gap-6 h-[calc(100vh-4rem)]">
+    <div className="flex gap-6 h-full">
       {/* Left Panel */}
-      <div className="w-[400px] flex-shrink-0 overflow-y-auto pr-2">
+      <div className="w-[400px] flex-shrink-0 overflow-y-auto scrollbar-hidden pr-2">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
@@ -148,16 +153,37 @@ export default function DashboardPage() {
               selectedMeetingId={selectedCalendarEvent?.id ?? null}
               onSelectMeeting={handleSelectMeeting}
               dateLabel={selectedDateLabel}
+              expandedMeetingId={
+                showRecordingPanel && selectedCalendarEvent
+                  ? selectedCalendarEvent.id
+                  : null
+              }
+              renderExpandedContent={(meeting) => (
+                <RecordingPanel
+                  selectedMeeting={meeting}
+                  onDismiss={handleDismissPanel}
+                  onMeetingCreated={(meetingId) => {
+                    setShowRecordingPanel(false);
+                    setSelectedCalendarEvent(null);
+                    setDetailMeetingId(meetingId);
+                  }}
+                />
+              )}
             />
           </section>
         )}
 
-        {/* Recording Panel */}
-        {showRecordingPanel && isElectron && (
+        {/* Ad-hoc Recording Panel */}
+        {showRecordingPanel && isElectron && !selectedCalendarEvent && (
           <section className="mb-6">
             <RecordingPanel
-              selectedMeeting={selectedCalendarEvent}
+              selectedMeeting={null}
               onDismiss={handleDismissPanel}
+              onMeetingCreated={(meetingId) => {
+                setShowRecordingPanel(false);
+                setSelectedCalendarEvent(null);
+                setDetailMeetingId(meetingId);
+              }}
             />
           </section>
         )}
@@ -175,16 +201,62 @@ export default function DashboardPage() {
       </div>
 
       {/* Right Panel */}
-      <div className="flex-1 overflow-y-auto border-l border-gray-800 pl-6 bg-gray-950">
+      <div className="flex-1 overflow-y-auto scrollbar-hidden border-l border-gray-800 pl-6 bg-gray-950">
         {detailMeetingId ? (
           <MeetingDetailContent
             meetingId={detailMeetingId}
             onClose={() => setDetailMeetingId(null)}
           />
         ) : (
-          <div className="flex flex-col items-center justify-center h-full text-gray-600">
-            <FileText className="w-12 h-12 mb-3 opacity-30" />
-            <p className="text-sm">Select a meeting to view details</p>
+          <div className="flex flex-col items-center justify-center h-full px-8 max-w-lg mx-auto">
+            <div className="w-14 h-14 rounded-2xl bg-blue-600/10 flex items-center justify-center mb-5">
+              <FileText className="w-7 h-7 text-blue-400" />
+            </div>
+            <h2 className="text-lg font-semibold text-gray-100 mb-2">
+              Welcome to Note Taker
+            </h2>
+            <p className="text-sm text-gray-400 text-center mb-8">
+              AI-powered meeting transcription, speaker identification, and smart
+              summaries — all in one place.
+            </p>
+
+            <div className="w-full space-y-4">
+              <div className="flex items-start gap-3 p-3 rounded-lg bg-gray-900/50 border border-gray-800">
+                <div className="w-8 h-8 rounded-lg bg-blue-600/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <Calendar className="w-4 h-4 text-blue-400" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-200">Record a meeting</p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Select an upcoming meeting from the calendar on the left, then hit Start Recording.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-3 p-3 rounded-lg bg-gray-900/50 border border-gray-800">
+                <div className="w-8 h-8 rounded-lg bg-purple-600/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <UploadCloud className="w-4 h-4 text-purple-400" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-200">Upload an audio file</p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Already have a recording? Click Upload to transcribe and summarise any audio file.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-3 p-3 rounded-lg bg-gray-900/50 border border-gray-800">
+                <div className="w-8 h-8 rounded-lg bg-green-600/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <MousePointerClick className="w-4 h-4 text-green-400" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-200">View past meetings</p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Click any meeting in the list below to view its transcript, summary, and action items.
+                  </p>
+                </div>
+              </div>
+            </div>
           </div>
         )}
       </div>

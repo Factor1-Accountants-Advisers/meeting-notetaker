@@ -25,7 +25,7 @@ export default function IconSidebar() {
   const { user } = useAuth();
 
   return (
-    <nav className="w-14 bg-gray-900 flex flex-col items-center py-4 min-h-screen gap-1">
+    <nav className="w-14 bg-gray-900 flex flex-col items-center py-4 h-full gap-1">
       {/* Brand mark */}
       <div className="mb-6 text-gray-400">
         <PenTool className="w-6 h-6" />

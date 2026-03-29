@@ -20,21 +20,21 @@ export default function ActionItemsPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Action Items</h1>
+        <h1 className="text-2xl font-bold text-gray-100">Action Items</h1>
         <div className="flex gap-3">
           <input
             type="text"
             placeholder="Filter by owner..."
             value={ownerFilter}
             onChange={(e) => setOwnerFilter(e.target.value)}
-            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="rounded-md border border-gray-700 bg-gray-800 px-3 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
           <select
             value={statusFilter ?? "all"}
             onChange={(e) =>
               setStatusFilter(e.target.value === "all" ? undefined : e.target.value)
             }
-            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="rounded-md border border-gray-700 bg-gray-800 px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
             <option value="all">All</option>
             <option value="open">Open</option>
@@ -44,7 +44,7 @@ export default function ActionItemsPage() {
       </div>
 
       {isLoading && <div className="text-gray-500">Loading...</div>}
-      {error && <div className="text-red-600">Failed to load action items.</div>}
+      {error && <div className="text-red-400">Failed to load action items.</div>}
       {data && (
         <>
           <ActionItemsTable items={filtered} showMeetingLink />

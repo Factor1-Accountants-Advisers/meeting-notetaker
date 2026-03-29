@@ -77,14 +77,14 @@ export default function UploadModal({ onClose }: { onClose: () => void }) {
   const isVideo = file && /\.(mp4|m4v|mov)$/i.test(file.name);
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-lg mx-4">
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+      <div className="bg-gray-900 border border-gray-700 rounded-lg shadow-xl w-full max-w-lg mx-4">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b">
-          <h2 className="text-lg font-semibold text-gray-900">Upload Meeting Recording</h2>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700">
+          <h2 className="text-lg font-semibold text-gray-100">Upload Meeting Recording</h2>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 text-xl leading-none"
+            className="text-gray-500 hover:text-gray-300 text-xl leading-none"
           >
             &times;
           </button>
@@ -94,7 +94,7 @@ export default function UploadModal({ onClose }: { onClose: () => void }) {
         <div className="px-6 py-4 space-y-4">
           {/* File picker */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-gray-300 mb-1">
               Audio / Video File
             </label>
             <input
@@ -113,11 +113,11 @@ export default function UploadModal({ onClose }: { onClose: () => void }) {
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="w-full border-2 border-dashed border-gray-300 rounded-lg p-4 text-center hover:border-blue-400 transition-colors"
+              className="w-full border-2 border-dashed border-gray-600 rounded-lg p-4 text-center hover:border-blue-500 transition-colors"
             >
               {file ? (
                 <div>
-                  <p className="text-sm font-medium text-gray-900">{file.name}</p>
+                  <p className="text-sm font-medium text-gray-200">{file.name}</p>
                   <p className="text-xs text-gray-500 mt-1">
                     {(file.size / 1024 / 1024).toFixed(1)} MB
                     {isVideo && " — audio will be extracted automatically"}
@@ -125,8 +125,8 @@ export default function UploadModal({ onClose }: { onClose: () => void }) {
                 </div>
               ) : (
                 <div>
-                  <p className="text-sm text-gray-500">Click to select a file</p>
-                  <p className="text-xs text-gray-400 mt-1">WAV, MP3, or MP4 (video)</p>
+                  <p className="text-sm text-gray-400">Click to select a file</p>
+                  <p className="text-xs text-gray-500 mt-1">WAV, MP3, or MP4 (video)</p>
                 </div>
               )}
             </button>
@@ -134,7 +134,7 @@ export default function UploadModal({ onClose }: { onClose: () => void }) {
 
           {/* Title */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-gray-300 mb-1">
               Meeting Title
             </label>
             <input
@@ -142,14 +142,14 @@ export default function UploadModal({ onClose }: { onClose: () => void }) {
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="e.g. Sprint Planning - Week 12"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full px-3 py-2 border border-gray-700 rounded-md text-sm bg-gray-800 text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
           </div>
 
           {/* Attendees */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Attendees <span className="text-red-500">*</span>
+            <label className="block text-sm font-medium text-gray-300 mb-1">
+              Attendees <span className="text-red-400">*</span>
             </label>
             <div className="flex gap-2">
               <input
@@ -158,12 +158,12 @@ export default function UploadModal({ onClose }: { onClose: () => void }) {
                 onChange={(e) => setAttendeeInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addAttendee())}
                 placeholder="Name <email> or email"
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="flex-1 px-3 py-2 border border-gray-700 rounded-md text-sm bg-gray-800 text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
               <button
                 type="button"
                 onClick={addAttendee}
-                className="px-3 py-2 bg-gray-100 text-gray-700 rounded-md text-sm hover:bg-gray-200 transition-colors"
+                className="px-3 py-2 bg-gray-700 text-gray-300 rounded-md text-sm hover:bg-gray-600 transition-colors"
               >
                 Add
               </button>
@@ -173,12 +173,12 @@ export default function UploadModal({ onClose }: { onClose: () => void }) {
                 {attendees.map((a, i) => (
                   <span
                     key={i}
-                    className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-700 rounded text-xs"
+                    className="inline-flex items-center gap-1 px-2 py-1 bg-blue-900/40 text-blue-300 rounded text-xs"
                   >
                     {a.name}{a.email ? ` <${a.email}>` : ""}
                     <button
                       onClick={() => removeAttendee(i)}
-                      className="hover:text-blue-900 ml-0.5"
+                      className="hover:text-blue-100 ml-0.5"
                     >
                       &times;
                     </button>
@@ -190,18 +190,18 @@ export default function UploadModal({ onClose }: { onClose: () => void }) {
 
           {/* Error */}
           {error && (
-            <div className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-md">
+            <div className="text-sm text-red-400 bg-red-900/30 border border-red-800/50 px-3 py-2 rounded-md">
               {error}
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div className="flex justify-end gap-3 px-6 py-4 border-t bg-gray-50 rounded-b-lg">
+        <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-700 bg-gray-800/50 rounded-b-lg">
           <button
             onClick={onClose}
             disabled={uploading}
-            className="px-4 py-2 text-sm text-gray-700 hover:text-gray-900 transition-colors"
+            className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 transition-colors"
           >
             Cancel
           </button>
