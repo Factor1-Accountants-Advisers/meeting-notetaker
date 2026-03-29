@@ -1,9 +1,9 @@
 """Meeting processing pipeline.
 
 Celery tasks for processing uploaded audio files through:
-1. Transcription (Whisper)
-2. Speaker diarization (Pyannote)
-3. AI summarization (Claude)
+1. Transcription + speaker diarisation (AssemblyAI)
+2. Speaker label renaming
+3. AI summarisation (OpenAI)
 
 Each step updates the meeting status and can notify clients via WebSocket.
 """
@@ -72,13 +72,13 @@ def process_meeting(self, meeting_id: int) -> dict:
         # Update status to processing
         update_meeting_status(meeting_id, MeetingStatus.PROCESSING)
 
-        # Step 4: Transcribe with Whisper
+        # Step 1: Transcribe + diarise with AssemblyAI
         transcribe_meeting(meeting_id)
 
-        # Step 5: Diarize speakers with Pyannote
+        # Step 2: Rename speaker labels
         diarize_meeting(meeting_id)
 
-        # Step 6: Summarise with Claude
+        # Step 3: Summarise with OpenAI
         summarise_meeting(meeting_id)
 
         logger.info(f"Pipeline completed for meeting {meeting_id}")
@@ -99,10 +99,10 @@ def process_meeting(self, meeting_id: int) -> dict:
 
 @shared_task(bind=True, max_retries=3)
 def transcribe_meeting(self, meeting_id: int) -> dict:
-    """Celery task to transcribe a meeting's audio.
+    """Celery task to transcribe a meeting's audio via AssemblyAI.
 
-    Downloads audio from blob storage, runs Whisper transcription,
-    and saves the transcript to the database.
+    Downloads audio from blob storage, sends to AssemblyAI for
+    transcription with speaker diarisation, and saves to database.
 
     Args:
         meeting_id: ID of the meeting to transcribe
@@ -132,20 +132,20 @@ def transcribe_meeting(self, meeting_id: int) -> dict:
 
 @shared_task(bind=True, max_retries=3)
 def diarize_meeting(self, meeting_id: int) -> dict:
-    """Celery task to add speaker labels to a meeting transcript.
+    """Celery task to rename speaker labels on a transcript.
 
-    Downloads audio from blob storage, runs Pyannote diarisation,
-    merges speaker labels with transcript segments.
+    AssemblyAI already provides speaker labels (A, B, C) during
+    transcription. This step renames them to human-readable names.
 
     Args:
-        meeting_id: ID of the meeting to diarize
+        meeting_id: ID of the meeting to process
 
     Returns:
         Dictionary with diarisation results
     """
     from app.services.diarisation import process_diarisation
 
-    logger.info(f"Starting diarisation task for meeting {meeting_id}")
+    logger.info(f"Starting speaker label renaming for meeting {meeting_id}")
 
     with SyncSessionLocal() as session:
         try:
@@ -163,14 +163,13 @@ def diarize_meeting(self, meeting_id: int) -> dict:
             }
 
         except Exception as e:
-            logger.error(f"Diarisation task failed for meeting {meeting_id}: {e}")
-            # Status already set to FAILED by process_diarisation
+            logger.error(f"Speaker renaming failed for meeting {meeting_id}: {e}")
             raise
 
 
 @shared_task(bind=True, max_retries=3)
 def summarise_meeting(self, meeting_id: int) -> dict:
-    """Celery task to summarise a meeting transcript with Claude.
+    """Celery task to summarise a meeting transcript with OpenAI.
 
     Args:
         meeting_id: ID of the meeting to summarise

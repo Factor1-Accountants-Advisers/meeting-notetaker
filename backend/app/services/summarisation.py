@@ -1,7 +1,7 @@
-"""Summarisation service using Claude API.
+"""Summarisation service using OpenAI API.
 
 Handles:
-1. Calling the Claude API with meeting transcripts
+1. Calling the OpenAI API with meeting transcripts
 2. Parsing structured JSON responses
 3. Saving summaries and action items to the database
 """
@@ -33,20 +33,20 @@ SYSTEM_PROMPT = """You are a meeting summariser for an Australian accounting fir
 Be specific about action items. Extract real deadlines mentioned in the conversation. If a speaker volunteers to do something, they are the owner."""
 
 
-def get_anthropic_client():
-    """Get an Anthropic API client.
+def get_openai_client():
+    """Get an OpenAI API client.
 
-    Lazy import to avoid loading anthropic on module import.
+    Lazy import to avoid loading openai on module import.
 
     Returns:
-        anthropic.Anthropic client instance
+        openai.OpenAI client instance
     """
-    import anthropic
-    return anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    from openai import OpenAI
+    return OpenAI(api_key=settings.openai_api_key)
 
 
-def call_claude_api(transcript_text: str) -> Dict[str, Any]:
-    """Call Claude API to summarise a meeting transcript.
+def call_llm_api(transcript_text: str) -> Dict[str, Any]:
+    """Call OpenAI API to summarise a meeting transcript.
 
     Args:
         transcript_text: The meeting transcript text with speaker labels
@@ -55,33 +55,33 @@ def call_claude_api(transcript_text: str) -> Dict[str, Any]:
         Parsed JSON response dict with summary, key_points, action_items, follow_ups
 
     Raises:
-        ValueError: If Claude returns invalid JSON
+        ValueError: If the model returns invalid JSON
         Exception: On API errors (propagated as-is)
     """
-    client = get_anthropic_client()
+    client = get_openai_client()
 
-    message = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=4096,
-        system=SYSTEM_PROMPT,
+    response = client.chat.completions.create(
+        model=settings.openai_model,
+        response_format={"type": "json_object"},
         messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
                 "content": f"Please summarise this meeting transcript:\n\n{transcript_text}",
-            }
+            },
         ],
     )
 
-    response_text = message.content[0].text
+    response_text = response.choices[0].message.content
 
     try:
         return json.loads(response_text)
     except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON response from Claude: {e}")
+        raise ValueError(f"Invalid JSON response from OpenAI: {e}")
 
 
 def summarise_transcript(transcript_text: str) -> Dict[str, Any]:
-    """Summarise a meeting transcript using Claude.
+    """Summarise a meeting transcript using OpenAI.
 
     Args:
         transcript_text: The meeting transcript text with speaker labels
@@ -89,11 +89,11 @@ def summarise_transcript(transcript_text: str) -> Dict[str, Any]:
     Returns:
         Parsed JSON response dict with summary, key_points, action_items, follow_ups
     """
-    return call_claude_api(transcript_text)
+    return call_llm_api(transcript_text)
 
 
-def format_segments_for_claude(segments: List[Dict[str, Any]]) -> str:
-    """Format transcript segments into readable text for Claude.
+def format_segments_for_llm(segments: List[Dict[str, Any]]) -> str:
+    """Format transcript segments into readable text for the LLM.
 
     Args:
         segments: List of segment dicts with keys: speaker, start, end, text
@@ -169,7 +169,7 @@ def save_summary(
 def process_summarisation(db: Session, meeting_id: int) -> Tuple[Summary, List[ActionItem]]:
     """Orchestrate the full summarisation pipeline for a meeting.
 
-    Fetches transcript, calls Claude API, saves results, and updates meeting status.
+    Fetches transcript, calls OpenAI API, saves results, and updates meeting status.
 
     Args:
         db: SQLAlchemy session
@@ -195,15 +195,15 @@ def process_summarisation(db: Session, meeting_id: int) -> Tuple[Summary, List[A
     db.commit()
 
     try:
-        # Format transcript text for Claude
-        formatted_text = format_segments_for_claude(transcript.segments or [])
+        # Format transcript text for the LLM
+        formatted_text = format_segments_for_llm(transcript.segments or [])
 
         # Fallback to full_text if segments are empty
         if not formatted_text and transcript.full_text:
             formatted_text = transcript.full_text
 
-        # Call Claude API
-        result = call_claude_api(formatted_text)
+        # Call OpenAI API
+        result = call_llm_api(formatted_text)
 
         # Save summary and action items
         summary, action_items = save_summary(db, meeting_id, result)

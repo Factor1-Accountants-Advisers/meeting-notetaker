@@ -1,6 +1,6 @@
 """Tests for summarisation service (TDD - written first).
 
-Tests Claude API summarisation and action item extraction.
+Tests OpenAI API summarisation and action item extraction.
 Following TDD: write tests FIRST, watch them fail, then implement.
 """
 import json
@@ -12,8 +12,8 @@ from sqlalchemy.orm import Session
 from app.models import Meeting, Transcript, Summary, ActionItem, MeetingStatus
 
 
-class TestClaudeSummarisation:
-    """Tests for Claude API summarisation."""
+class TestOpenAISummarisation:
+    """Tests for OpenAI API summarisation."""
 
     def test_summarise_transcript_returns_structured_response(self):
         """Summarisation should return summary, key_points, action_items, follow_ups."""
@@ -26,7 +26,6 @@ class TestClaudeSummarisation:
         Speaker 2: Sure, I'll have it ready by then.
         """
 
-        # Mock Claude API response
         mock_response = {
             "summary": "Discussion about Q4 budget review and marketing spend increase.",
             "key_points": [
@@ -45,8 +44,8 @@ class TestClaudeSummarisation:
             ]
         }
 
-        with patch("app.services.summarisation.call_claude_api") as mock_claude:
-            mock_claude.return_value = mock_response
+        with patch("app.services.summarisation.call_llm_api") as mock_llm:
+            mock_llm.return_value = mock_response
 
             result = summarise_transcript(transcript_text)
 
@@ -68,8 +67,8 @@ class TestClaudeSummarisation:
             "follow_ups": []
         }
 
-        with patch("app.services.summarisation.call_claude_api") as mock_claude:
-            mock_claude.return_value = mock_response
+        with patch("app.services.summarisation.call_llm_api") as mock_llm:
+            mock_llm.return_value = mock_response
 
             result = summarise_transcript("")
 
@@ -77,97 +76,102 @@ class TestClaudeSummarisation:
         assert result["key_points"] == []
         assert result["action_items"] == []
 
-    def test_call_claude_api_sends_correct_prompt(self):
-        """Should send transcript with proper system prompt to Claude."""
-        from app.services.summarisation import call_claude_api
+    def test_call_llm_api_sends_correct_prompt(self):
+        """Should send transcript with proper system prompt to OpenAI."""
+        from app.services.summarisation import call_llm_api
 
         transcript = "Speaker 1: Hello\nSpeaker 2: Hi there"
 
         mock_client = Mock()
-        mock_message = Mock()
-        mock_message.content = [Mock(text=json.dumps({
+        mock_choice = Mock()
+        mock_choice.message.content = json.dumps({
             "summary": "Greeting exchange",
             "key_points": [],
             "action_items": [],
             "follow_ups": []
-        }))]
-        mock_client.messages.create.return_value = mock_message
+        })
+        mock_response = Mock()
+        mock_response.choices = [mock_choice]
+        mock_client.chat.completions.create.return_value = mock_response
 
-        with patch("app.services.summarisation.get_anthropic_client") as mock_get_client:
+        with patch("app.services.summarisation.get_openai_client") as mock_get_client:
             mock_get_client.return_value = mock_client
 
-            result = call_claude_api(transcript)
+            result = call_llm_api(transcript)
 
         # Verify API was called
-        mock_client.messages.create.assert_called_once()
-        call_args = mock_client.messages.create.call_args
+        mock_client.chat.completions.create.assert_called_once()
+        call_args = mock_client.chat.completions.create.call_args
 
         # Check that transcript is in the user message
-        user_message = call_args.kwargs["messages"][0]["content"]
+        messages = call_args.kwargs["messages"]
+        user_message = messages[1]["content"]
         assert transcript in user_message
 
-    def test_call_claude_api_handles_api_error(self):
+    def test_call_llm_api_handles_api_error(self):
         """Should raise on API errors."""
-        from app.services.summarisation import call_claude_api
+        from app.services.summarisation import call_llm_api
 
-        with patch("app.services.summarisation.get_anthropic_client") as mock_get_client:
+        with patch("app.services.summarisation.get_openai_client") as mock_get_client:
             mock_client = Mock()
-            mock_client.messages.create.side_effect = Exception("API Error")
+            mock_client.chat.completions.create.side_effect = Exception("API Error")
             mock_get_client.return_value = mock_client
 
             with pytest.raises(Exception, match="API Error"):
-                call_claude_api("test transcript")
+                call_llm_api("test transcript")
 
-    def test_call_claude_api_handles_invalid_json(self):
+    def test_call_llm_api_handles_invalid_json(self):
         """Should raise ValueError on invalid JSON response."""
-        from app.services.summarisation import call_claude_api
+        from app.services.summarisation import call_llm_api
 
         mock_client = Mock()
-        mock_message = Mock()
-        mock_message.content = [Mock(text="Not valid JSON")]
-        mock_client.messages.create.return_value = mock_message
+        mock_choice = Mock()
+        mock_choice.message.content = "Not valid JSON"
+        mock_response = Mock()
+        mock_response.choices = [mock_choice]
+        mock_client.chat.completions.create.return_value = mock_response
 
-        with patch("app.services.summarisation.get_anthropic_client") as mock_get_client:
+        with patch("app.services.summarisation.get_openai_client") as mock_get_client:
             mock_get_client.return_value = mock_client
 
             with pytest.raises(ValueError, match="Invalid JSON"):
-                call_claude_api("test transcript")
+                call_llm_api("test transcript")
 
 
 class TestTranscriptFormatting:
     """Tests for formatting transcript segments for Claude."""
 
-    def test_format_segments_for_claude(self):
+    def test_format_segments_for_llm(self):
         """Should format segments as readable text."""
-        from app.services.summarisation import format_segments_for_claude
+        from app.services.summarisation import format_segments_for_llm
 
         segments = [
             {"speaker": "John", "start": 0.0, "end": 5.0, "text": "Hello everyone."},
             {"speaker": "Jane", "start": 5.0, "end": 10.0, "text": "Hi John."},
         ]
 
-        formatted = format_segments_for_claude(segments)
+        formatted = format_segments_for_llm(segments)
 
         assert "John: Hello everyone." in formatted
         assert "Jane: Hi John." in formatted
 
     def test_format_segments_handles_unknown_speaker(self):
         """Should handle Unknown speaker label."""
-        from app.services.summarisation import format_segments_for_claude
+        from app.services.summarisation import format_segments_for_llm
 
         segments = [
             {"speaker": "Unknown", "start": 0.0, "end": 5.0, "text": "Hello."},
         ]
 
-        formatted = format_segments_for_claude(segments)
+        formatted = format_segments_for_llm(segments)
 
         assert "Unknown: Hello." in formatted
 
     def test_format_segments_handles_empty_list(self):
         """Should return empty string for empty segments."""
-        from app.services.summarisation import format_segments_for_claude
+        from app.services.summarisation import format_segments_for_llm
 
-        formatted = format_segments_for_claude([])
+        formatted = format_segments_for_llm([])
 
         assert formatted == ""
 
@@ -271,7 +275,7 @@ class TestSummarisationPipeline:
             "follow_ups": []
         }
 
-        with patch("app.services.summarisation.call_claude_api") as mock_claude:
+        with patch("app.services.summarisation.call_llm_api") as mock_claude:
             mock_claude.return_value = mock_claude_response
 
             summary, action_items = process_summarisation(db_session, test_meeting.id)
@@ -310,7 +314,7 @@ class TestSummarisationPipeline:
         db_session.add(transcript)
         db_session.commit()
 
-        with patch("app.services.summarisation.call_claude_api") as mock_claude:
+        with patch("app.services.summarisation.call_llm_api") as mock_claude:
             mock_claude.side_effect = Exception("Claude API failed")
 
             with pytest.raises(Exception):
@@ -349,7 +353,7 @@ class TestSummarisationCeleryTask:
             "follow_ups": ["Follow up 1"]
         }
 
-        with patch("app.services.summarisation.call_claude_api") as mock_claude, \
+        with patch("app.services.summarisation.call_llm_api") as mock_claude, \
              patch("app.services.pipeline.SyncSessionLocal") as mock_session:
             mock_claude.return_value = mock_claude_response
             mock_session.return_value.__enter__ = Mock(return_value=db_session)

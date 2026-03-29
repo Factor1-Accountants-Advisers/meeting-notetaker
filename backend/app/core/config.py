@@ -28,13 +28,17 @@ class Settings(BaseSettings):
     minio_access_key: str = "minioadmin"
     minio_secret_key: str = "minioadmin"
 
-    # Anthropic
-    anthropic_api_key: str = ""
+    # OpenAI
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o"
 
-    # HuggingFace
+    # AssemblyAI (transcription + diarisation)
+    assemblyai_api_key: str = ""
+
+    # HuggingFace (legacy, kept for reference)
     hf_token: str = ""
 
-    # Whisper
+    # Whisper (legacy, kept for reference)
     whisper_model: str = "medium"
 
     # Dev auth bypass

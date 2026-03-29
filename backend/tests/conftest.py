@@ -128,19 +128,19 @@ def mock_storage():
 
 
 @pytest.fixture
-def mock_whisper_result():
-    """Mock Whisper transcription result."""
+def mock_transcription_result():
+    """Mock AssemblyAI transcription result with speaker labels."""
     return {
         "text": "Hello, this is a test meeting. We discussed the project timeline.",
         "segments": [
             {
-                "id": 0,
+                "speaker": "A",
                 "start": 0.0,
                 "end": 2.5,
                 "text": "Hello, this is a test meeting.",
             },
             {
-                "id": 1,
+                "speaker": "B",
                 "start": 2.5,
                 "end": 5.0,
                 "text": "We discussed the project timeline.",

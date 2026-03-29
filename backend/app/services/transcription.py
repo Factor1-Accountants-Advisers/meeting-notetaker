@@ -1,10 +1,13 @@
-"""Transcription service using OpenAI Whisper.
+"""Transcription service using AssemblyAI.
 
 Handles:
 1. Downloading audio from blob storage
-2. Running Whisper transcription
+2. Uploading to AssemblyAI for transcription + speaker diarisation
 3. Saving transcript to database
 4. Updating meeting status
+
+AssemblyAI performs transcription and speaker diarisation in a single API call,
+eliminating the need for local Whisper and Pyannote models.
 
 OWASP: No sensitive data logged, fail-closed on errors.
 """
@@ -21,23 +24,15 @@ from app.services.storage import get_storage
 
 logger = logging.getLogger(__name__)
 
-# Whisper model (lazy loaded)
-_whisper_model = None
 
+def get_assemblyai_client():
+    """Configure and return the AssemblyAI module.
 
-def get_whisper_model():
-    """Get or load the Whisper model.
-
-    Lazy loading to avoid loading model on import.
+    Lazy import to avoid loading assemblyai on module import.
     """
-    global _whisper_model
-    if _whisper_model is None:
-        import whisper
-        model_name = settings.whisper_model
-        logger.info(f"Loading Whisper model: {model_name}")
-        _whisper_model = whisper.load_model(model_name)
-        logger.info(f"Whisper model loaded successfully")
-    return _whisper_model
+    import assemblyai as aai
+    aai.settings.api_key = settings.assemblyai_api_key
+    return aai
 
 
 def download_audio(blob_path: str) -> str:
@@ -70,53 +65,57 @@ def download_audio(blob_path: str) -> str:
 
 
 def transcribe_audio(audio_path: str) -> Dict[str, Any]:
-    """Transcribe audio file using Whisper.
+    """Transcribe audio file using AssemblyAI with speaker diarisation.
+
+    Sends the audio to AssemblyAI's API which returns both the transcript
+    and speaker labels in a single call.
 
     Args:
         audio_path: Path to the local audio file
 
     Returns:
-        Dictionary with 'text' and 'segments' keys
+        Dictionary with 'text' and 'segments' keys.
+        Each segment has: speaker, start, end, text
 
     Raises:
         FileNotFoundError: If audio file doesn't exist
-        ValueError: If audio file is invalid
+        ValueError: If transcription fails
     """
     if not os.path.exists(audio_path):
         raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
-    try:
-        model = get_whisper_model()
+    aai = get_assemblyai_client()
 
-        logger.info(f"Starting transcription: {audio_path}")
-        result = model.transcribe(
-            audio_path,
-            language="en",  # Can be made configurable
-            task="transcribe",
-            verbose=False,
-        )
+    config = aai.TranscriptionConfig(
+        speaker_labels=True,
+        language_code="en",
+    )
 
-        # Extract segments with required fields
-        segments = []
-        for seg in result.get("segments", []):
+    transcriber = aai.Transcriber()
+
+    logger.info(f"Starting AssemblyAI transcription: {audio_path}")
+    transcript = transcriber.transcribe(audio_path, config=config)
+
+    if transcript.status == aai.TranscriptStatus.error:
+        raise ValueError(f"AssemblyAI transcription failed: {transcript.error}")
+
+    # Build segments from utterances (speaker-labelled chunks)
+    segments = []
+    if transcript.utterances:
+        for utterance in transcript.utterances:
             segments.append({
-                "start": float(seg["start"]),
-                "end": float(seg["end"]),
-                "text": seg["text"].strip(),
+                "speaker": utterance.speaker,
+                "start": utterance.start / 1000.0,  # ms -> seconds
+                "end": utterance.end / 1000.0,
+                "text": utterance.text.strip(),
             })
 
-        logger.info(f"Transcription complete: {len(segments)} segments")
+    logger.info(f"Transcription complete: {len(segments)} speaker segments")
 
-        return {
-            "text": result.get("text", "").strip(),
-            "segments": segments,
-        }
-
-    except Exception as e:
-        logger.error(f"Transcription failed: {type(e).__name__}")
-        if "Invalid" in str(e) or "not a valid" in str(e).lower():
-            raise ValueError(f"Invalid audio file: {audio_path}")
-        raise
+    return {
+        "text": transcript.text or "",
+        "segments": segments,
+    }
 
 
 def save_transcript(
@@ -158,11 +157,14 @@ def save_transcript(
 def process_transcription(db: Session, meeting_id: int) -> Transcript:
     """Run the full transcription pipeline for a meeting.
 
+    Uses AssemblyAI to transcribe audio with speaker diarisation
+    in a single API call. No local ML models needed.
+
     Pipeline steps:
     1. Get meeting from database
     2. Download audio from blob storage
-    3. Run Whisper transcription
-    4. Save transcript to database
+    3. Send to AssemblyAI (transcription + diarisation)
+    4. Save transcript with speaker labels to database
     5. Update meeting status
 
     Args:
@@ -191,8 +193,8 @@ def process_transcription(db: Session, meeting_id: int) -> Transcript:
         logger.info(f"Downloading audio for meeting {meeting_id}")
         local_audio_path = download_audio(meeting.audio_blob_url)
 
-        # Transcribe
-        logger.info(f"Transcribing meeting {meeting_id}")
+        # Transcribe + diarise via AssemblyAI
+        logger.info(f"Transcribing meeting {meeting_id} via AssemblyAI")
         transcription_result = transcribe_audio(local_audio_path)
 
         # Save results
