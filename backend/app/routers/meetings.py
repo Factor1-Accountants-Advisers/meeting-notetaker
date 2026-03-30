@@ -6,7 +6,7 @@ import logging
 import os
 import tempfile
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pydantic import ValidationError
 
@@ -78,6 +78,15 @@ def validate_audio_file(file: UploadFile) -> None:
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         logger.warning(f"Unexpected content type: {file.content_type}")
         # Be lenient on content type as browsers may vary
+
+
+def normalize_scheduled_time(value: Optional[datetime]) -> Optional[datetime]:
+    """Convert aware datetimes to naive UTC for the current DB schema."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 @router.post("/upload", response_model=MeetingUploadResponse)
@@ -183,7 +192,7 @@ async def upload_meeting(
         # Create meeting record
         meeting = Meeting(
             title=meeting_metadata.meeting_title,
-            scheduled_time=meeting_metadata.scheduled_time,
+            scheduled_time=normalize_scheduled_time(meeting_metadata.scheduled_time),
             status=MeetingStatus.PROCESSING,
             audio_blob_url=blob_path,
             user_id=current_user.id
