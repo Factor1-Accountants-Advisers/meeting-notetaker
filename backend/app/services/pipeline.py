@@ -10,10 +10,10 @@ Each step updates the meeting status and can notify clients via WebSocket.
 import logging
 from typing import Optional
 
-from celery import shared_task
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.celery_app import celery_app
 from app.core.config import settings
 from app.models import Meeting, MeetingStatus
 
@@ -53,7 +53,7 @@ def update_meeting_status(meeting_id: int, status: MeetingStatus) -> None:
             logger.info(f"Meeting {meeting_id} status updated to {status.value}")
 
 
-@shared_task(bind=True, max_retries=3)
+@celery_app.task(bind=True, max_retries=3)
 def process_meeting(self, meeting_id: int) -> dict:
     """Main pipeline task to process a meeting recording.
 
@@ -97,7 +97,7 @@ def process_meeting(self, meeting_id: int) -> dict:
         raise self.retry(exc=e, countdown=60 * (2 ** self.request.retries))
 
 
-@shared_task(bind=True, max_retries=3)
+@celery_app.task(bind=True, max_retries=3)
 def transcribe_meeting(self, meeting_id: int) -> dict:
     """Celery task to transcribe a meeting's audio via AssemblyAI.
 
@@ -130,7 +130,7 @@ def transcribe_meeting(self, meeting_id: int) -> dict:
             raise
 
 
-@shared_task(bind=True, max_retries=3)
+@celery_app.task(bind=True, max_retries=3)
 def diarize_meeting(self, meeting_id: int) -> dict:
     """Celery task to rename speaker labels on a transcript.
 
@@ -167,7 +167,7 @@ def diarize_meeting(self, meeting_id: int) -> dict:
             raise
 
 
-@shared_task(bind=True, max_retries=3)
+@celery_app.task(bind=True, max_retries=3)
 def summarise_meeting(self, meeting_id: int) -> dict:
     """Celery task to summarise a meeting transcript with OpenAI.
 
@@ -196,7 +196,7 @@ def summarise_meeting(self, meeting_id: int) -> dict:
             raise
 
 
-@shared_task
+@celery_app.task
 def cleanup_temp_files(meeting_id: int) -> None:
     """Clean up temporary files after processing.
 

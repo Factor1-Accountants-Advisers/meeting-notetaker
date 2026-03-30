@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Calendar, CheckSquare, Settings, PenTool } from "lucide-react";
 import { useAuth } from "@/lib/useAuth";
+import ThemeToggle from "./ThemeToggle";
 
 const navItems = [
   { href: "/", label: "Meetings", icon: Calendar },
@@ -25,13 +26,11 @@ export default function IconSidebar() {
   const { user } = useAuth();
 
   return (
-    <nav className="w-14 bg-gray-900 flex flex-col items-center py-4 h-full gap-1">
-      {/* Brand mark */}
-      <div className="mb-6 text-gray-400">
-        <PenTool className="w-6 h-6" />
+    <nav className="flex h-full w-[74px] flex-col items-center gap-2 border-r border-[color:var(--border-subtle)] bg-[color:var(--sidebar-bg)] px-3 py-5">
+      <div className="mb-4 rounded-2xl border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] p-2.5 text-[color:var(--text-primary)] shadow-[var(--shadow-soft)]">
+        <PenTool className="h-5 w-5" />
       </div>
 
-      {/* Nav icons */}
       {navItems.map((item) => {
         const active =
           item.href === "/"
@@ -45,27 +44,27 @@ export default function IconSidebar() {
             href={item.href}
             title={item.label}
             aria-label={item.label}
-            className={`w-10 h-10 flex items-center justify-center rounded-lg transition-colors ${
+            className={`flex h-11 w-11 items-center justify-center rounded-2xl border transition-all ${
               active
-                ? "bg-blue-600/20 text-blue-400"
-                : "text-gray-500 hover:bg-gray-800 hover:text-gray-300"
+                ? "border-[color:var(--border-strong)] bg-[color:var(--surface-elevated)] text-[color:var(--text-primary)] shadow-[var(--shadow-soft)]"
+                : "border-transparent text-[color:var(--text-muted)] hover:border-[color:var(--border-subtle)] hover:bg-[color:var(--surface)] hover:text-[color:var(--text-primary)]"
             }`}
           >
-            <Icon className="w-5 h-5" />
+            <Icon className="h-5 w-5" />
           </Link>
         );
       })}
 
-      {/* Spacer */}
       <div className="flex-1" />
 
-      {/* User avatar */}
+      <ThemeToggle />
+
       {user && (
         <Link
           href="/settings"
           title={user.name}
           aria-label={`${user.name} — Settings`}
-          className="w-9 h-9 rounded-full bg-gray-700 text-gray-300 text-xs font-medium flex items-center justify-center hover:bg-gray-600 transition-colors"
+          className="mt-2 flex h-10 w-10 items-center justify-center rounded-full border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] text-xs font-medium text-[color:var(--text-primary)] shadow-[var(--shadow-soft)] transition hover:border-[color:var(--border-strong)]"
         >
           {getInitials(user.name)}
         </Link>

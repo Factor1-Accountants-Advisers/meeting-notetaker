@@ -8,9 +8,9 @@ export default function ProtectedLayout({
 }) {
   return (
     <AuthGuard>
-      <div className="flex h-screen overflow-hidden bg-gray-950">
+      <div className="flex h-screen overflow-hidden bg-[color:var(--app-bg)] text-[color:var(--text-primary)]">
         <IconSidebar />
-        <main className="flex-1 p-6 overflow-hidden">{children}</main>
+        <main className="flex-1 overflow-hidden p-5 md:p-6">{children}</main>
       </div>
     </AuthGuard>
   );

@@ -39,7 +39,7 @@ function SkeletonBlock({ lines = 3 }: { lines?: number }) {
       {Array.from({ length: lines }, (_, i) => (
         <div
           key={i}
-          className="h-4 bg-gray-800 rounded animate-pulse"
+          className="h-4 animate-pulse rounded-full bg-[color:var(--surface-soft)]"
           style={{ width: `${70 + Math.random() * 30}%` }}
         />
       ))}
@@ -77,9 +77,9 @@ export default function MeetingDetailContent({
   const audioRef = useRef<AudioPlayerHandle>(null);
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
 
-  if (!numericId) return <div className="text-gray-500">No meeting selected.</div>;
-  if (isLoading) return <div className="text-gray-500">Loading meeting...</div>;
-  if (error || !m) return <div className="text-red-400">Meeting not found.</div>;
+  if (!numericId) return <div className="text-[color:var(--text-secondary)]">No meeting selected.</div>;
+  if (isLoading) return <div className="text-[color:var(--text-secondary)]">Loading meeting...</div>;
+  if (error || !m) return <div className="text-[color:var(--danger)]">Meeting not found.</div>;
 
   const segments = m.transcript?.segments ?? [];
   const visibleSegments = transcriptExpanded
@@ -95,11 +95,11 @@ export default function MeetingDetailContent({
   const isProcessing = m.status !== "complete" && m.status !== "failed";
 
   return (
-    <div className="max-w-3xl">
+    <div className="max-w-3xl pb-8">
       {/* Back link */}
       <button
         onClick={() => (onClose ? onClose() : router.push("/"))}
-        className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-300 mb-6 transition-colors"
+        className="mb-6 flex items-center gap-1 text-sm text-[color:var(--text-secondary)] transition-colors hover:text-[color:var(--text-primary)]"
       >
         <ArrowLeft className="w-4 h-4" />
         {onClose ? "Close" : "Back to Meetings"}
@@ -109,10 +109,10 @@ export default function MeetingDetailContent({
       <div className="flex items-start justify-between gap-4 mb-6">
         <div>
           <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-xl font-bold text-gray-100">{m.title}</h1>
+            <h1 className="text-[2rem] font-semibold tracking-tight text-[color:var(--text-primary)]">{m.title}</h1>
             <StatusBadge status={m.status} />
           </div>
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-[color:var(--text-secondary)]">
             {m.scheduled_time &&
               new Date(m.scheduled_time).toLocaleDateString("en-US", {
                 weekday: "long",
@@ -139,7 +139,7 @@ export default function MeetingDetailContent({
       {m.audio_url ? (
         <AudioPlayer ref={audioRef} src={m.audio_url} />
       ) : (
-        <div className="py-3 px-4 rounded-lg bg-gray-800/50 text-sm text-gray-600 mb-6">
+        <div className="mb-6 rounded-[20px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-soft)] px-4 py-3 text-sm text-[color:var(--text-secondary)]">
           Audio unavailable
         </div>
       )}
@@ -152,22 +152,22 @@ export default function MeetingDetailContent({
       )}
 
       {/* Summary */}
-      <div className="mt-8 p-5 rounded-xl bg-gray-900/50 border border-gray-800">
+      <div className="surface-card mt-8 rounded-[28px] p-6 shadow-[var(--shadow-soft)]">
         <div className="flex items-center gap-2 mb-4">
-          <FileText className="w-4 h-4 text-gray-500" />
-          <h2 className="text-sm font-semibold text-gray-300">Summary</h2>
+          <FileText className="h-4 w-4 text-[color:var(--text-muted)]" />
+          <h2 className="text-[1.05rem] font-semibold text-[color:var(--text-primary)]">Summary</h2>
         </div>
         {m.summary ? (
           <div className="space-y-4">
-            <p className="text-sm text-gray-300 leading-relaxed">
+            <p className="text-[15px] leading-8 text-[color:var(--text-primary)]">
               {m.summary.summary_text}
             </p>
             {m.summary.key_points.length > 0 && (
               <div>
-                <h3 className="text-xs font-semibold text-gray-500 uppercase mb-2">
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-[color:var(--text-muted)]">
                   Key Points
                 </h3>
-                <ul className="list-disc list-inside space-y-1 text-sm text-gray-400">
+                <ul className="list-disc list-inside space-y-2 text-sm leading-7 text-[color:var(--text-secondary)]">
                   {m.summary.key_points.map((point, i) => (
                     <li key={i}>{point}</li>
                   ))}
@@ -176,10 +176,10 @@ export default function MeetingDetailContent({
             )}
             {m.summary.follow_ups.length > 0 && (
               <div>
-                <h3 className="text-xs font-semibold text-gray-500 uppercase mb-2">
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-[color:var(--text-muted)]">
                   Follow-ups
                 </h3>
-                <ul className="list-disc list-inside space-y-1 text-sm text-gray-400">
+                <ul className="list-disc list-inside space-y-2 text-sm leading-7 text-[color:var(--text-secondary)]">
                   {m.summary.follow_ups.map((item, i) => (
                     <li key={i}>{item}</li>
                   ))}
@@ -193,12 +193,12 @@ export default function MeetingDetailContent({
       </div>
 
       {/* Action Items */}
-      <div className="mt-6 p-5 rounded-xl bg-gray-900/50 border border-gray-800">
+      <div className="surface-card mt-6 rounded-[28px] p-6 shadow-[var(--shadow-soft)]">
         <div className="flex items-center gap-2 mb-4">
-          <CheckSquare className="w-4 h-4 text-gray-500" />
-          <h2 className="text-sm font-semibold text-gray-300">Action Items</h2>
+          <CheckSquare className="h-4 w-4 text-[color:var(--text-muted)]" />
+          <h2 className="text-[1.05rem] font-semibold text-[color:var(--text-primary)]">Action Items</h2>
           {m.action_items.length > 0 && (
-            <span className="px-1.5 py-0.5 rounded-full bg-gray-800 text-xs text-gray-400">
+            <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full bg-[color:var(--surface-soft)] px-2 text-xs font-medium text-[color:var(--text-secondary)]">
               {m.action_items.length}
             </span>
           )}
@@ -211,24 +211,24 @@ export default function MeetingDetailContent({
       </div>
 
       {/* Transcript */}
-      <div className="mt-6 p-5 rounded-xl bg-gray-900/50 border border-gray-800">
-        <h2 className="text-sm font-semibold text-gray-300 mb-4">Transcript</h2>
+      <div className="surface-card mt-6 rounded-[28px] p-6 shadow-[var(--shadow-soft)]">
+        <h2 className="mb-4 text-[1.05rem] font-semibold text-[color:var(--text-primary)]">Transcript</h2>
         {segments.length > 0 ? (
-          <div className="space-y-3">
+          <div className="space-y-5">
             {visibleSegments.map((seg, i) => (
-              <div key={i} className="flex gap-3">
-                <div className="flex-shrink-0 w-20">
-                  <span className={`text-xs font-medium ${speakerColors[seg.speaker] || "text-gray-400"}`}>
+              <div key={i} className="flex gap-4 rounded-[22px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-muted)] px-4 py-4">
+                <div className="w-24 flex-shrink-0">
+                  <span className={`text-sm font-semibold ${speakerColors[seg.speaker] || "text-[color:var(--text-secondary)]"}`}>
                     {seg.speaker}
                   </span>
                   <button
                     onClick={() => audioRef.current?.seekTo(seg.start)}
-                    className="block text-[10px] text-gray-600 hover:text-blue-400 mt-0.5 transition-colors"
+                    className="mt-1 block text-xs text-[color:var(--text-muted)] transition-colors hover:text-[color:var(--accent-text)]"
                   >
                     {formatTimestamp(seg.start)}
                   </button>
                 </div>
-                <p className="text-sm text-gray-400 leading-relaxed flex-1">
+                <p className="flex-1 text-[15px] leading-8 text-[color:var(--text-secondary)]">
                   {seg.text}
                 </p>
               </div>
@@ -236,7 +236,7 @@ export default function MeetingDetailContent({
             {segments.length > INITIAL_SEGMENTS && (
               <button
                 onClick={() => setTranscriptExpanded(!transcriptExpanded)}
-                className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 mt-2 transition-colors"
+                className="mt-2 flex items-center gap-1 text-xs font-medium text-[color:var(--accent-text)] transition-colors hover:opacity-80"
               >
                 {transcriptExpanded ? (
                   <>
@@ -252,7 +252,7 @@ export default function MeetingDetailContent({
             )}
           </div>
         ) : m.status === "complete" ? (
-          <p className="text-sm text-gray-600 italic">No transcript available</p>
+          <p className="text-sm italic text-[color:var(--text-secondary)]">No transcript available</p>
         ) : (
           <SkeletonBlock lines={5} />
         )}

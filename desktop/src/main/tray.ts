@@ -30,6 +30,11 @@ export interface TrayConfig {
   onOpenApp: () => void;
 }
 
+export function updateTrayDevices(micName: string, loopbackName: string): void {
+  _micName = micName;
+  _loopbackName = loopbackName;
+}
+
 export function setPendingMeeting(title: string, attendees: AttendeeMetadata[], scheduledTime?: string): void {
   _pendingTitle = title;
   _pendingAttendees = attendees;
@@ -75,12 +80,23 @@ function broadcastRecordingStatus(recording: boolean, meetingTitle?: string): vo
 }
 
 function handleStartRecording(): void {
+  if (!_micName || !_loopbackName) {
+    console.error('[tray] Cannot start recording — audio devices not configured. Open the app and go to Settings.');
+    _onOpenApp();
+    return;
+  }
   _currentOutputPath = path.join(_recordingOutputDir, `meeting-${Date.now()}.wav`);
-  startRecording({ micName: _micName, loopbackName: _loopbackName, outputPath: _currentOutputPath });
-  tray?.setImage(nativeImage.createFromPath(RECORDING_ICON));
-  tray?.setToolTip('Meeting Note-Taker — Recording...');
-  rebuildMenu();
-  broadcastRecordingStatus(true, _pendingTitle);
+  try {
+    startRecording({ micName: _micName, loopbackName: _loopbackName, outputPath: _currentOutputPath });
+    tray?.setImage(nativeImage.createFromPath(RECORDING_ICON));
+    tray?.setToolTip('Meeting Note-Taker — Recording...');
+    rebuildMenu();
+    broadcastRecordingStatus(true, _pendingTitle);
+  } catch (err) {
+    console.error('[tray] Failed to start recording:', err);
+    tray?.setToolTip('Meeting Note-Taker — Recording failed');
+    setTimeout(() => { tray?.setToolTip('Meeting Note-Taker'); }, 3000);
+  }
 }
 
 async function handleStopRecording(): Promise<void> {

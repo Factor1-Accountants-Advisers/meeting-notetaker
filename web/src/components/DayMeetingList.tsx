@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Check } from "lucide-react";
 import type { CalendarEvent } from "@/types";
 
@@ -9,6 +9,7 @@ interface DayMeetingListProps {
   selectedMeetingId: string | null;
   onSelectMeeting: (meeting: CalendarEvent) => void;
   dateLabel: string;
+  contentKey?: string;
   expandedMeetingId?: string | null;
   renderExpandedContent?: (meeting: CalendarEvent) => ReactNode;
 }
@@ -47,6 +48,15 @@ function InlineReveal({
 }) {
   const [shouldRender, setShouldRender] = useState(isOpen);
   const [isVisible, setIsVisible] = useState(isOpen);
+  const [height, setHeight] = useState(isOpen ? "auto" : "0px");
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (!shouldRender || !contentRef.current) return;
+
+    const nextHeight = `${contentRef.current.scrollHeight}px`;
+    setHeight(nextHeight);
+  }, [children, shouldRender]);
 
   useEffect(() => {
     let timeoutId: number | undefined;
@@ -55,13 +65,22 @@ function InlineReveal({
     if (isOpen) {
       setShouldRender(true);
       frameId = window.requestAnimationFrame(() => {
+        if (contentRef.current) {
+          setHeight(`${contentRef.current.scrollHeight}px`);
+        }
         setIsVisible(true);
       });
     } else if (shouldRender) {
-      setIsVisible(false);
+      if (contentRef.current) {
+        setHeight(`${contentRef.current.scrollHeight}px`);
+      }
+      frameId = window.requestAnimationFrame(() => {
+        setHeight("0px");
+        setIsVisible(false);
+      });
       timeoutId = window.setTimeout(() => {
         setShouldRender(false);
-      }, 240);
+      }, 320);
     }
 
     return () => {
@@ -74,14 +93,15 @@ function InlineReveal({
 
   return (
     <div
-      className={`grid transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+      className={`overflow-hidden transition-[max-height,opacity,transform,margin] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
         isVisible
-          ? "mt-3 grid-rows-[1fr] translate-y-0 opacity-100"
-          : "mt-1 grid-rows-[0fr] -translate-y-2 opacity-0"
+          ? "mt-3 translate-y-0 opacity-100"
+          : "mt-1 -translate-y-2 opacity-0"
       }`}
+      style={{ maxHeight: height }}
     >
-      <div className="overflow-hidden">
-        <div className="px-1 pb-1">{children}</div>
+      <div ref={contentRef} className="px-1 pb-1">
+        {children}
       </div>
     </div>
   );
@@ -92,67 +112,73 @@ export default function DayMeetingList({
   selectedMeetingId,
   onSelectMeeting,
   dateLabel,
+  contentKey,
   expandedMeetingId,
   renderExpandedContent,
 }: DayMeetingListProps) {
   return (
     <div className="mt-4">
-      <p className="text-xs text-gray-500 font-medium mb-3">{dateLabel}</p>
+      <div
+        key={contentKey ?? dateLabel}
+        className="animate-[panelMorph_220ms_cubic-bezier(0.22,1,0.36,1)]"
+      >
+        <p className="mb-3 text-sm text-[color:var(--text-secondary)]">{dateLabel}</p>
 
-      {meetings.length === 0 ? (
-        <p className="text-sm text-gray-600 italic">No meetings scheduled</p>
-      ) : (
-        <div className="space-y-2">
-          {meetings.map((meeting, i) => {
-            const isSelected = meeting.id === selectedMeetingId;
-            const isExpanded = meeting.id === expandedMeetingId;
-            const accent = ACCENT_COLORS[i % ACCENT_COLORS.length];
+        {meetings.length === 0 ? (
+          <p className="text-sm italic text-[color:var(--text-muted)]">No meetings scheduled</p>
+        ) : (
+          <div className="space-y-2">
+            {meetings.map((meeting, i) => {
+              const isSelected = meeting.id === selectedMeetingId;
+              const isExpanded = meeting.id === expandedMeetingId;
+              const accent = ACCENT_COLORS[i % ACCENT_COLORS.length];
 
-            return (
-              <div key={meeting.id}>
-                <button
-                  onClick={() => onSelectMeeting(meeting)}
-                  className={`w-full text-left border-l-4 p-3 transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${accent} ${
-                    isSelected
-                      ? `bg-blue-600/10 ring-1 ring-blue-500/30 shadow-[0_10px_30px_rgba(37,99,235,0.12)] ${
-                          isExpanded ? "rounded-t-lg rounded-b-md" : "rounded-lg"
-                        }`
-                      : "rounded-lg bg-gray-800/40 hover:bg-gray-800/70"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-gray-200 truncate">
-                      {meeting.subject}
-                    </span>
-                    {isSelected ? (
-                      <Check className="w-4 h-4 text-blue-400 flex-shrink-0" />
-                    ) : (
-                      <span className="text-[10px] text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full flex-shrink-0">
-                        Select
+              return (
+                <div key={meeting.id}>
+                  <button
+                    onClick={() => onSelectMeeting(meeting)}
+                    className={`w-full border-l-4 p-4 text-left transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${accent} ${
+                      isSelected
+                        ? `border border-[color:var(--border-strong)] bg-[color:var(--surface-elevated)] shadow-[var(--shadow-soft)] ${
+                            isExpanded ? "rounded-t-lg rounded-b-md" : "rounded-lg"
+                          }`
+                        : "rounded-[22px] border border-[color:var(--border-subtle)] bg-[color:var(--surface)] hover:border-[color:var(--border-strong)] hover:bg-[color:var(--surface-elevated)]"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="truncate text-sm font-medium text-[color:var(--text-primary)]">
+                        {meeting.subject}
                       </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 mt-1 text-xs text-gray-500">
-                    <span>
-                      {formatTime(meeting.start)} – {formatTime(meeting.end)}
-                    </span>
-                    <span>·</span>
-                    <span>{formatDuration(meeting.start, meeting.end)}</span>
-                  </div>
-                </button>
-
-                {renderExpandedContent && (
-                  <InlineReveal isOpen={isExpanded}>
-                    <div className="rounded-b-xl rounded-t-md border border-blue-500/20 bg-gradient-to-b from-blue-500/8 to-transparent p-1 shadow-[0_18px_40px_rgba(10,20,40,0.28)]">
-                      {renderExpandedContent(meeting)}
+                      {isSelected ? (
+                        <Check className="h-4 w-4 flex-shrink-0 text-[color:var(--accent-text)]" />
+                      ) : (
+                        <span className="flex-shrink-0 rounded-full bg-[color:var(--surface-soft)] px-2 py-0.5 text-[10px] text-[color:var(--text-muted)]">
+                          Select
+                        </span>
+                      )}
                     </div>
-                  </InlineReveal>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
+                    <div className="mt-2 flex items-center gap-2 text-xs text-[color:var(--text-secondary)]">
+                      <span>
+                        {formatTime(meeting.start)} – {formatTime(meeting.end)}
+                      </span>
+                      <span>·</span>
+                      <span>{formatDuration(meeting.start, meeting.end)}</span>
+                    </div>
+                  </button>
+
+                  {renderExpandedContent && (
+                    <InlineReveal isOpen={isExpanded}>
+                      <div className="rounded-b-[24px] rounded-t-[14px] border border-[color:var(--border-strong)] bg-[color:var(--surface)] p-1 shadow-[var(--shadow-soft)]">
+                        {renderExpandedContent(meeting)}
+                      </div>
+                    </InlineReveal>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

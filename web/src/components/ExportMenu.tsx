@@ -72,27 +72,27 @@ export default function ExportMenu({ meetingTitle, segments, summary }: ExportMe
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen(!open)}
-        className="px-3 py-1.5 border border-gray-700 rounded-md text-sm text-gray-300 hover:bg-gray-800 transition-colors"
+        className="inline-flex h-11 items-center rounded-2xl border border-[color:var(--border-strong)] bg-[color:var(--surface-elevated)] px-4 text-sm font-medium text-[color:var(--text-primary)] shadow-[var(--shadow-soft)] transition hover:bg-[color:var(--surface-soft)]"
       >
         Export
       </button>
       {open && (
-        <div className="absolute right-0 mt-1 w-48 bg-gray-800 border border-gray-700 rounded-md shadow-lg z-10">
+        <div className="absolute right-0 z-10 mt-2 w-52 overflow-hidden rounded-2xl border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] shadow-[var(--shadow-panel)]">
           <button
             onClick={() => { navigator.clipboard.writeText(text); setOpen(false); }}
-            className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700"
+            className="w-full px-4 py-3 text-left text-sm text-[color:var(--text-primary)] transition hover:bg-[color:var(--surface-soft)]"
           >
             Copy to clipboard
           </button>
           <button
             onClick={() => { downloadFile(text, `${slug}.txt`); setOpen(false); }}
-            className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700"
+            className="w-full px-4 py-3 text-left text-sm text-[color:var(--text-primary)] transition hover:bg-[color:var(--surface-soft)]"
           >
             Download as .txt
           </button>
           <button
             onClick={() => { downloadFile(text, `${slug}.md`); setOpen(false); }}
-            className="w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700"
+            className="w-full px-4 py-3 text-left text-sm text-[color:var(--text-primary)] transition hover:bg-[color:var(--surface-soft)]"
           >
             Download as .md
           </button>

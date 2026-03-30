@@ -33,6 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.updateTrayDevices = updateTrayDevices;
 exports.setPendingMeeting = setPendingMeeting;
 exports.createTray = createTray;
 const electron_1 = require("electron");
@@ -54,6 +55,10 @@ let _currentOutputPath = '';
 let _pendingTitle = '';
 let _pendingAttendees = [];
 let _pendingScheduledTime;
+function updateTrayDevices(micName, loopbackName) {
+    _micName = micName;
+    _loopbackName = loopbackName;
+}
 function setPendingMeeting(title, attendees, scheduledTime) {
     _pendingTitle = title;
     _pendingAttendees = attendees;
@@ -95,12 +100,24 @@ function broadcastRecordingStatus(recording, meetingTitle) {
     }
 }
 function handleStartRecording() {
+    if (!_micName || !_loopbackName) {
+        console.error('[tray] Cannot start recording — audio devices not configured. Open the app and go to Settings.');
+        _onOpenApp();
+        return;
+    }
     _currentOutputPath = path.join(_recordingOutputDir, `meeting-${Date.now()}.wav`);
-    (0, recorder_1.startRecording)({ micName: _micName, loopbackName: _loopbackName, outputPath: _currentOutputPath });
-    tray?.setImage(electron_1.nativeImage.createFromPath(RECORDING_ICON));
-    tray?.setToolTip('Meeting Note-Taker — Recording...');
-    rebuildMenu();
-    broadcastRecordingStatus(true, _pendingTitle);
+    try {
+        (0, recorder_1.startRecording)({ micName: _micName, loopbackName: _loopbackName, outputPath: _currentOutputPath });
+        tray?.setImage(electron_1.nativeImage.createFromPath(RECORDING_ICON));
+        tray?.setToolTip('Meeting Note-Taker — Recording...');
+        rebuildMenu();
+        broadcastRecordingStatus(true, _pendingTitle);
+    }
+    catch (err) {
+        console.error('[tray] Failed to start recording:', err);
+        tray?.setToolTip('Meeting Note-Taker — Recording failed');
+        setTimeout(() => { tray?.setToolTip('Meeting Note-Taker'); }, 3000);
+    }
 }
 async function handleStopRecording() {
     (0, recorder_1.stopRecording)();

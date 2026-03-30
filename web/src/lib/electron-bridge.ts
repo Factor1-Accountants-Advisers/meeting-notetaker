@@ -63,6 +63,7 @@ export interface ElectronAPI {
 
   // Audio devices
   getAudioDevices: () => Promise<AudioDevice[]>;
+  getDefaultAudioDevices: () => Promise<{ micName: string; loopbackName: string }>;
 }
 
 declare global {

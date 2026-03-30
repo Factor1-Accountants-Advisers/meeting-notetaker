@@ -5,8 +5,8 @@ dotenv.config({ path: path.join(process.cwd(), '.env.local') });
 
 import { app, BrowserWindow } from 'electron';
 import { autoUpdater } from 'electron-updater';
-import { createTray } from './tray';
-import { registerIpcHandlers } from './ipc';
+import { createTray, updateTrayDevices } from './tray';
+import { registerIpcHandlers, listAudioDevices, pickDefaultDevices } from './ipc';
 import { registerAppProtocol } from './protocol';
 
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -77,6 +77,16 @@ app.whenReady().then(() => {
     loopbackName: process.env.LOOPBACK_DEVICE_NAME ?? '',
     onOpenApp: showMainWindow,
   });
+
+  // Auto-detect audio devices for tray recording (non-blocking)
+  listAudioDevices().then((devices) =>
+    pickDefaultDevices(devices).then((defaults) => {
+      if (defaults.micName || defaults.loopbackName) {
+        updateTrayDevices(defaults.micName, defaults.loopbackName);
+        console.log(`[startup] Auto-detected audio: mic="${defaults.micName}", loopback="${defaults.loopbackName}"`);
+      }
+    })
+  ).catch((err) => console.warn('[startup] Audio device detection failed:', err));
 
   // Show main window on startup
   mainWindow = createMainWindow();

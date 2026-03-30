@@ -140,11 +140,15 @@ def save_summary(
     # Create ActionItem records
     action_items = []
     for item in summarisation_result.get("action_items", []):
-        # Parse due_date: if truthy string, use date.fromisoformat, else None
+        # Parse due_date: if valid ISO string, use date.fromisoformat, else None
         due = item.get("due_date")
         due_date = None
-        if due:
-            due_date = date.fromisoformat(due)
+        if due and isinstance(due, str) and due not in ("null", "None", ""):
+            try:
+                due_date = date.fromisoformat(due)
+            except (ValueError, TypeError):
+                logger.warning(f"Could not parse due_date '{due}' — setting to None")
+                due_date = None
 
         action_item = ActionItem(
             meeting_id=meeting_id,

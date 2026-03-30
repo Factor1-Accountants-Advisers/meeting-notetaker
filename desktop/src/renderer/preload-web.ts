@@ -38,4 +38,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Audio devices
   getAudioDevices: () => ipcRenderer.invoke('audio:get-devices'),
+  getDefaultAudioDevices: () => ipcRenderer.invoke('audio:get-default-devices'),
 });

@@ -61,20 +61,20 @@ export default function ProcessingProgress({
 
   if (isFailed) {
     return (
-      <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-5">
+      <div className="rounded-[24px] border border-[color:var(--danger-soft)] bg-[color:var(--surface-elevated)] p-5 shadow-[var(--shadow-soft)]">
         <div className="flex items-center gap-2 mb-2">
-          <XCircle className="w-5 h-5 text-red-400" />
-          <h3 className="text-sm font-semibold text-red-300">
+          <XCircle className="h-5 w-5 text-[color:var(--danger)]" />
+          <h3 className="text-sm font-semibold text-[color:var(--danger)]">
             Processing failed
           </h3>
         </div>
-        <p className="text-xs text-gray-400 mb-3">
+        <p className="mb-3 text-xs text-[color:var(--text-secondary)]">
           Something went wrong while processing your meeting. You can try again.
         </p>
         <button
           onClick={handleRetry}
           disabled={retrying}
-          className="px-4 py-2 text-xs font-medium text-white bg-red-600 hover:bg-red-700 disabled:bg-gray-700 rounded-lg transition-colors"
+          className="inline-flex h-10 items-center rounded-full bg-[color:var(--danger)] px-4 text-xs font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {retrying ? "Retrying..." : "Retry Processing"}
         </button>
@@ -85,10 +85,10 @@ export default function ProcessingProgress({
   const steps = getSteps(status);
 
   return (
-    <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-5">
+    <div className="rounded-[24px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] p-5 shadow-[var(--shadow-soft)]">
       <div className="flex items-center gap-2 mb-4">
-        <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
-        <h3 className="text-sm font-semibold text-blue-300">
+        <Loader2 className="h-5 w-5 animate-spin text-[color:var(--accent-text)]" />
+        <h3 className="text-sm font-semibold text-[color:var(--text-primary)]">
           Processing your meeting...
         </h3>
       </div>
@@ -97,21 +97,21 @@ export default function ProcessingProgress({
         {steps.map((step, i) => (
           <div key={i} className="flex items-center gap-3">
             {step.state === "done" && (
-              <CheckCircle2 className="w-4 h-4 text-green-400 flex-shrink-0" />
+              <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-emerald-500" />
             )}
             {step.state === "active" && (
-              <Loader2 className="w-4 h-4 text-blue-400 animate-spin flex-shrink-0" />
+              <Loader2 className="h-4 w-4 animate-spin flex-shrink-0 text-[color:var(--accent-text)]" />
             )}
             {step.state === "pending" && (
-              <div className="w-4 h-4 rounded-full border border-gray-700 flex-shrink-0" />
+              <div className="h-4 w-4 flex-shrink-0 rounded-full border border-[color:var(--border-strong)]" />
             )}
             <span
               className={`text-sm ${
                 step.state === "done"
-                  ? "text-gray-400"
+                  ? "text-[color:var(--text-secondary)]"
                   : step.state === "active"
-                    ? "text-gray-200"
-                    : "text-gray-600"
+                    ? "text-[color:var(--text-primary)]"
+                    : "text-[color:var(--text-muted)]"
               }`}
             >
               {step.label}

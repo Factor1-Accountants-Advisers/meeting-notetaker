@@ -25,5 +25,6 @@ electron_1.contextBridge.exposeInMainWorld('electronAPI', {
     selectMeeting: (event) => electron_1.ipcRenderer.invoke('meeting-selector:select', event),
     // Audio devices
     getAudioDevices: () => electron_1.ipcRenderer.invoke('audio:get-devices'),
+    getDefaultAudioDevices: () => electron_1.ipcRenderer.invoke('audio:get-default-devices'),
 });
 //# sourceMappingURL=preload-web.js.map

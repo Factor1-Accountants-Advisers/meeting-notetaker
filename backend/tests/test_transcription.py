@@ -42,6 +42,11 @@ class TestTranscriptionService:
         assert "text" in result
         assert "segments" in result
         assert len(result["segments"]) == 2
+        aai_module.TranscriptionConfig.assert_called_once_with(
+            speaker_labels=True,
+            language_code="en",
+            speech_models=["universal-2"],
+        )
 
     def test_transcribe_audio_segments_have_required_fields(self, sample_audio_file):
         """Each segment should have speaker, start, end, and text fields."""

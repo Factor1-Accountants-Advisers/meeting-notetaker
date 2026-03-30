@@ -102,6 +102,13 @@ electron_1.app.whenReady().then(() => {
         loopbackName: process.env.LOOPBACK_DEVICE_NAME ?? '',
         onOpenApp: showMainWindow,
     });
+    // Auto-detect audio devices for tray recording (non-blocking)
+    (0, ipc_1.listAudioDevices)().then((devices) => (0, ipc_1.pickDefaultDevices)(devices).then((defaults) => {
+        if (defaults.micName || defaults.loopbackName) {
+            (0, tray_1.updateTrayDevices)(defaults.micName, defaults.loopbackName);
+            console.log(`[startup] Auto-detected audio: mic="${defaults.micName}", loopback="${defaults.loopbackName}"`);
+        }
+    })).catch((err) => console.warn('[startup] Audio device detection failed:', err));
     // Show main window on startup
     mainWindow = createMainWindow();
     if (electron_1.app.isPackaged) {

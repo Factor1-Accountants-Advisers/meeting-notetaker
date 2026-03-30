@@ -89,6 +89,7 @@ def transcribe_audio(audio_path: str) -> Dict[str, Any]:
     config = aai.TranscriptionConfig(
         speaker_labels=True,
         language_code="en",
+        speech_models=["universal-2"],
     )
 
     transcriber = aai.Transcriber()

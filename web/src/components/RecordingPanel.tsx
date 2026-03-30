@@ -1,16 +1,22 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { Mic, Volume2, X, CircleDot, Square, AlertCircle, Loader2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Mic, Volume2, CircleDot, Square, AlertCircle, Loader2 } from "lucide-react";
 import { getElectronAPIOrNull } from "@/lib/electron-bridge";
 import { useRecordingStatus } from "@/lib/useRecordingStatus";
+import {
+  readAudioSettings,
+  hasCompleteAudioSettings,
+  needsDefaultAudioSettings,
+  applyDefaultAudioSettings,
+} from "@/lib/audio-settings";
 import type { CalendarEvent } from "@/types";
 
 type PanelMode = "prefilled" | "adhoc" | "recording" | "uploading";
 
 interface RecordingPanelProps {
   selectedMeeting: CalendarEvent | null;
-  onDismiss: () => void;
   onMeetingCreated?: (meetingId: number) => void;
 }
 
@@ -21,11 +27,40 @@ function formatElapsed(ms: number): string {
   return `${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
 
+function formatMeetingDateTime(start: string, end: string): string {
+  return `${new Date(start).toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  })} · ${new Date(start).toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  })} - ${new Date(end).toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  })}`;
+}
+
+function summarizeParticipants(
+  attendees: { name: string }[],
+  maxVisible = 3
+): string {
+  const names = attendees
+    .map((attendee) => attendee.name.trim())
+    .filter(Boolean);
+
+  if (names.length === 0) return "No participants listed";
+  if (names.length <= maxVisible) return names.join(", ");
+
+  const visible = names.slice(0, maxVisible).join(", ");
+  return `${visible} +${names.length - maxVisible} more`;
+}
+
 export default function RecordingPanel({
   selectedMeeting,
-  onDismiss,
   onMeetingCreated,
 }: RecordingPanelProps) {
+  const router = useRouter();
   const electron = getElectronAPIOrNull();
   const { recording, elapsed } = useRecordingStatus();
 
@@ -48,6 +83,8 @@ export default function RecordingPanel({
         : "adhoc";
 
   const meetingTitle = selectedMeeting?.subject ?? title;
+  const audioSettings = readAudioSettings();
+  const audioReady = hasCompleteAudioSettings(audioSettings);
 
   const buildMetadata = () => ({
     meeting_title: meetingTitle || `Recording ${new Date().toLocaleString()}`,
@@ -76,13 +113,31 @@ export default function RecordingPanel({
     if (!electron) return;
     setError(null);
     try {
-      const devices = await electron.getAudioDevices();
-      const micName = localStorage.getItem("settings:micName") || devices?.[0]?.name || "default";
-      const loopbackName = localStorage.getItem("settings:loopbackName") || devices?.[1]?.name || "default";
+      let settings = audioSettings;
+
+      // Auto-detect defaults if no settings saved yet
+      if (!hasCompleteAudioSettings(settings) && needsDefaultAudioSettings()) {
+        try {
+          const defaults = await electron.getDefaultAudioDevices();
+          const applied = applyDefaultAudioSettings(defaults);
+          if (applied && hasCompleteAudioSettings(applied)) {
+            settings = applied;
+          }
+        } catch {
+          // Fall through to the "not ready" error below
+        }
+      }
+
+      if (!hasCompleteAudioSettings(settings)) {
+        setError(
+          "Before recording, choose your microphone and system audio in Settings."
+        );
+        return;
+      }
 
       await electron.startRecording({
-        micName,
-        loopbackName,
+        micName: settings.micName,
+        loopbackName: settings.loopbackName,
         outputPath: "", // main process generates the path
         metadata: buildMetadata(),
       });
@@ -142,11 +197,11 @@ export default function RecordingPanel({
 
   if (mode === "uploading") {
     return (
-      <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-5">
+      <div className="rounded-[24px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] p-5">
         <div className="flex flex-col items-center py-6">
-          <Loader2 className="w-8 h-8 text-blue-400 animate-spin mb-3" />
-          <p className="text-sm font-medium text-gray-200">Uploading recording...</p>
-          <p className="text-xs text-gray-500 mt-1">
+          <Loader2 className="mb-3 h-8 w-8 animate-spin text-[color:var(--accent-text)]" />
+          <p className="text-sm font-medium text-[color:var(--text-primary)]">Uploading recording...</p>
+          <p className="mt-1 text-xs text-[color:var(--text-secondary)]">
             This may take a moment depending on the file size.
           </p>
         </div>
@@ -156,23 +211,23 @@ export default function RecordingPanel({
 
   if (mode === "recording") {
     return (
-      <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-5">
+      <div className="rounded-[24px] border border-[color:var(--danger-soft)] bg-[color:var(--surface-elevated)] p-5">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-            <span className="text-xs font-semibold text-red-400 uppercase tracking-wide">
+            <span className="h-2 w-2 rounded-full bg-[color:var(--danger)] animate-pulse" />
+            <span className="text-xs font-semibold uppercase tracking-wide text-[color:var(--danger)]">
               Recording in Progress
             </span>
           </div>
         </div>
 
-        <p className="text-sm font-medium text-gray-200 mb-1">{meetingTitle}</p>
+        <p className="mb-1 text-sm font-medium text-[color:var(--text-primary)]">{meetingTitle}</p>
 
-        <div className="text-4xl font-mono font-bold text-gray-100 my-4">
+        <div className="my-4 font-mono text-4xl font-bold text-[color:var(--text-primary)]">
           {formatElapsed(elapsed)}
         </div>
 
-        <div className="flex gap-4 mb-4 text-xs text-gray-500">
+        <div className="mb-4 flex gap-4 text-xs text-[color:var(--text-secondary)]">
           <div className="flex items-center gap-1.5">
             <Mic className="w-3 h-3" />
             <div className="flex gap-px items-end h-3">
@@ -200,13 +255,13 @@ export default function RecordingPanel({
         </div>
 
         {uploadError && (
-          <div className="flex items-start gap-2 p-3 mb-3 rounded-lg bg-red-500/10 border border-red-500/20">
-            <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 flex-shrink-0" />
+          <div className="mb-3 flex items-start gap-2 rounded-2xl border border-[color:var(--danger-soft)] bg-[color:var(--danger-soft)] p-3">
+            <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-[color:var(--danger)]" />
             <div>
-              <p className="text-xs text-red-300">{uploadError}</p>
+              <p className="text-xs text-[color:var(--danger)]">{uploadError}</p>
               <button
                 onClick={handleRetryUpload}
-                className="text-xs text-blue-400 hover:text-blue-300 mt-1"
+                className="mt-1 text-xs text-[color:var(--accent-text)] hover:opacity-80"
               >
                 Retry Upload
               </button>
@@ -216,7 +271,7 @@ export default function RecordingPanel({
 
         <button
           onClick={handleStop}
-          className="w-full py-3 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-xl flex items-center justify-center gap-2 transition-colors"
+          className="flex w-full items-center justify-center gap-2 rounded-full bg-[color:var(--danger)] py-3 text-sm font-semibold text-white transition hover:opacity-90"
         >
           <Square className="w-4 h-4" fill="currentColor" />
           Stop Recording
@@ -226,24 +281,15 @@ export default function RecordingPanel({
   }
 
   return (
-    <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-5">
-      <div className="flex items-center justify-between mb-4">
-        <span className="text-xs font-semibold text-blue-400 uppercase tracking-wide">
-          {mode === "prefilled" ? "Ready to Record" : "New Recording"}
-        </span>
-        <button onClick={onDismiss} className="text-gray-600 hover:text-gray-400">
-          <X className="w-4 h-4" />
-        </button>
-      </div>
-
+    <div className="rounded-[24px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] p-5">
       {uploadError && (
-        <div className="flex items-start gap-2 p-3 mb-3 rounded-lg bg-red-500/10 border border-red-500/20">
-          <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 flex-shrink-0" />
+        <div className="mb-3 flex items-start gap-2 rounded-2xl border border-[color:var(--danger-soft)] bg-[color:var(--danger-soft)] p-3">
+          <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-[color:var(--danger)]" />
           <div>
-            <p className="text-xs text-red-300">{uploadError}</p>
+            <p className="text-xs text-[color:var(--danger)]">{uploadError}</p>
             <button
               onClick={handleRetryUpload}
-              className="text-xs text-blue-400 hover:text-blue-300 mt-1"
+              className="mt-1 text-xs text-[color:var(--accent-text)] hover:opacity-80"
             >
               Retry Upload
             </button>
@@ -252,28 +298,36 @@ export default function RecordingPanel({
       )}
 
       {mode === "prefilled" && selectedMeeting ? (
-        <div className="mb-4">
-          <p className="text-sm font-medium text-gray-200">
-            {selectedMeeting.subject}
-          </p>
-          <p className="text-xs text-gray-500 mt-1">
-            {new Date(selectedMeeting.start).toLocaleDateString("en-US", {
-              weekday: "short",
-              month: "short",
-              day: "numeric",
-            })}{" "}
-            · {new Date(selectedMeeting.start).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
-            {" – "}
-            {new Date(selectedMeeting.end).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
-          </p>
-          <p className="text-xs text-gray-500 mt-0.5">
-            {selectedMeeting.attendees.map((a) => a.name).join(", ")}
-          </p>
+        <div className="mb-5 space-y-3">
+          <div className="grid gap-1">
+            <span className="text-sm font-semibold text-[color:var(--text-primary)]">
+              Title
+            </span>
+            <p className="text-sm font-normal text-[color:var(--text-secondary)]">
+              {selectedMeeting.subject}
+            </p>
+          </div>
+          <div className="grid gap-1">
+            <span className="text-sm font-semibold text-[color:var(--text-primary)]">
+              Date and Time
+            </span>
+            <p className="text-sm font-normal text-[color:var(--text-secondary)]">
+              {formatMeetingDateTime(selectedMeeting.start, selectedMeeting.end)}
+            </p>
+          </div>
+          <div className="grid gap-1">
+            <span className="text-sm font-semibold text-[color:var(--text-primary)]">
+              Participants
+            </span>
+            <p className="text-sm font-normal text-[color:var(--text-secondary)]">
+              {summarizeParticipants(selectedMeeting.attendees)}
+            </p>
+          </div>
         </div>
       ) : (
         <div className="space-y-3 mb-4">
           <div>
-            <label className="text-xs text-gray-500 font-medium block mb-1">
+            <label className="mb-1 block text-xs font-medium text-[color:var(--text-secondary)]">
               Meeting Title
             </label>
             <input
@@ -281,18 +335,18 @@ export default function RecordingPanel({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="e.g. Quick sync with David"
-              className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-gray-200 placeholder:text-gray-600 outline-none focus:border-blue-500/40"
+              className="w-full rounded-2xl border border-[color:var(--border-subtle)] bg-[color:var(--surface-soft)] px-3 py-2 text-sm text-[color:var(--text-primary)] placeholder:text-[color:var(--text-muted)] outline-none focus:border-[color:var(--border-strong)]"
             />
           </div>
           <div>
-            <label className="text-xs text-gray-500 font-medium block mb-1">
+            <label className="mb-1 block text-xs font-medium text-[color:var(--text-secondary)]">
               Attendees
             </label>
-            <div className="w-full px-2.5 py-1.5 bg-white/5 border border-white/10 rounded-lg min-h-[38px] flex flex-wrap gap-1 items-center">
+            <div className="flex min-h-[38px] w-full flex-wrap items-center gap-1 rounded-2xl border border-[color:var(--border-subtle)] bg-[color:var(--surface-soft)] px-2.5 py-1.5">
               {attendees.map((name) => (
                 <span
                   key={name}
-                  className="bg-blue-500/15 text-blue-300 px-2 py-0.5 rounded text-xs flex items-center gap-1"
+                  className="flex items-center gap-1 rounded-full bg-[color:var(--accent-soft)] px-2 py-0.5 text-xs text-[color:var(--accent-text)]"
                 >
                   {name}
                   <button
@@ -314,17 +368,17 @@ export default function RecordingPanel({
                   }
                 }}
                 placeholder={attendees.length === 0 ? "Add name..." : ""}
-                className="flex-1 min-w-[80px] bg-transparent text-xs text-gray-200 outline-none placeholder:text-gray-600 py-0.5"
+                className="min-w-[80px] flex-1 bg-transparent py-0.5 text-xs text-[color:var(--text-primary)] outline-none placeholder:text-[color:var(--text-muted)]"
               />
             </div>
-            <p className="text-[10px] text-gray-600 mt-1">
+            <p className="mt-1 text-[10px] text-[color:var(--text-muted)]">
               Press Enter to add. Helps identify speakers in the transcript.
             </p>
           </div>
         </div>
       )}
 
-      <div className="flex gap-4 mb-4 text-xs text-gray-500">
+      <div className="mb-4 flex gap-4 text-xs text-[color:var(--text-secondary)]">
         <span className="flex items-center gap-1">
           <Mic className="w-3 h-3" /> Microphone
         </span>
@@ -333,17 +387,35 @@ export default function RecordingPanel({
         </span>
       </div>
 
+      {!audioReady && (
+        <div className="mb-4 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4">
+          <p className="text-sm font-medium text-[color:var(--text-primary)]">
+            Before recording, choose your microphone and system audio.
+          </p>
+          <p className="mt-1 text-xs leading-6 text-[color:var(--text-secondary)]">
+            This only needs to be set once on this device.
+          </p>
+          <button
+            type="button"
+            onClick={() => router.push("/settings")}
+            className="mt-3 inline-flex h-10 items-center rounded-full border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] px-4 text-sm font-medium text-[color:var(--text-primary)] transition hover:border-[color:var(--border-strong)]"
+          >
+            Set up audio devices
+          </button>
+        </div>
+      )}
+
       {error && (
-        <div className="flex items-start gap-2 p-3 mb-3 rounded-lg bg-red-500/10 border border-red-500/20">
-          <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 flex-shrink-0" />
-          <p className="text-xs text-red-300">{error}</p>
+        <div className="mb-3 flex items-start gap-2 rounded-2xl border border-[color:var(--danger-soft)] bg-[color:var(--danger-soft)] p-3">
+          <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-[color:var(--danger)]" />
+          <p className="text-xs text-[color:var(--danger)]">{error}</p>
         </div>
       )}
 
       <button
         onClick={handleStart}
-        disabled={!canStart}
-        className="w-full py-3.5 bg-red-600 hover:bg-red-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-semibold rounded-xl flex items-center justify-center gap-2 transition-colors shadow-lg shadow-red-600/20 disabled:shadow-none"
+        disabled={!canStart || !audioReady}
+        className="flex w-full items-center justify-center gap-2 rounded-full bg-[color:var(--surface-inverse)] py-3.5 text-sm font-semibold text-[color:var(--text-inverse)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
       >
         <CircleDot className="w-4 h-4" />
         Start Recording

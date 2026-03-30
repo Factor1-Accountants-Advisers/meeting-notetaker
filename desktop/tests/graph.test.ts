@@ -24,7 +24,7 @@ describe('graph.getUpcomingMeetings', () => {
     );
     expect(events[0]).toMatchObject<CalendarEvent>({
       id: 'evt1', subject: 'Sprint Review',
-      start: '2026-03-20T09:00:00', end: '2026-03-20T10:00:00',
+      start: '2026-03-20T09:00:00Z', end: '2026-03-20T10:00:00Z',
       attendees: [{ name: 'Alice', email: 'alice@firm.com' }],
     });
   });

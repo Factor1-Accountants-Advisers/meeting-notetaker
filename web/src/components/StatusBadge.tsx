@@ -1,16 +1,16 @@
 const statusConfig: Record<string, { label: string; className: string }> = {
-  processing: { label: "Processing", className: "bg-blue-900/50 text-blue-300" },
-  transcribing: { label: "Transcribing", className: "bg-blue-900/50 text-blue-300" },
-  diarising: { label: "Identifying Speakers", className: "bg-purple-900/50 text-purple-300" },
-  summarising: { label: "Summarising", className: "bg-yellow-900/50 text-yellow-300" },
-  complete: { label: "Complete", className: "bg-green-900/50 text-green-300" },
-  failed: { label: "Failed", className: "bg-red-900/50 text-red-300" },
+  processing: { label: "Processing", className: "bg-[color:var(--accent-soft)] text-[color:var(--accent-text)]" },
+  transcribing: { label: "Transcribing", className: "bg-[color:var(--accent-soft)] text-[color:var(--accent-text)]" },
+  diarising: { label: "Identifying Speakers", className: "bg-[rgba(124,58,237,0.1)] text-[rgb(109,40,217)]" },
+  summarising: { label: "Summarising", className: "bg-[rgba(245,158,11,0.12)] text-[rgb(180,83,9)]" },
+  complete: { label: "Complete", className: "bg-[rgba(16,185,129,0.12)] text-[rgb(5,150,105)]" },
+  failed: { label: "Failed", className: "bg-[color:var(--danger-soft)] text-[color:var(--danger)]" },
 };
 
 export default function StatusBadge({ status }: { status: string }) {
   const config = statusConfig[status] ?? {
     label: status,
-    className: "bg-gray-800 text-gray-300",
+    className: "bg-[color:var(--surface-soft)] text-[color:var(--text-secondary)]",
   };
   return (
     <span

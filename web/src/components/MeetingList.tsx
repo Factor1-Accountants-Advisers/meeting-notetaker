@@ -48,6 +48,15 @@ export default function MeetingList({
 
   return (
     <div>
+      <div className="mb-4">
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
+          Past Meetings
+        </p>
+        <p className="mt-2 text-sm text-[color:var(--text-secondary)]">
+          Your recent transcripts, summaries, and extracted action items.
+        </p>
+      </div>
+
       <SearchFilter
         search={search}
         onSearchChange={setSearch}
@@ -56,15 +65,15 @@ export default function MeetingList({
       />
 
       {isLoading && (
-        <div className="text-gray-500 text-sm py-4">Loading meetings...</div>
+        <div className="py-4 text-sm text-[color:var(--text-muted)]">Loading meetings...</div>
       )}
       {error && (
-        <div className="text-red-400 text-sm py-4">
+        <div className="py-4 text-sm text-[color:var(--danger)]">
           {error.message || "Failed to load meetings."}
         </div>
       )}
       {!isLoading && !error && filtered.length === 0 && (
-        <div className="text-gray-500 text-sm py-4">
+        <div className="rounded-[24px] border border-dashed border-[color:var(--border-strong)] px-4 py-5 text-sm text-[color:var(--text-muted)]">
           {hasFilters
             ? "No meetings match your filters."
             : "No meetings yet."}
@@ -85,27 +94,27 @@ export default function MeetingList({
                     ? () => onSelectMeeting(m.id)
                     : undefined
                 }
-                className={`w-full text-left relative p-3 rounded-lg border transition-colors ${
+                className={`relative w-full rounded-[22px] border p-4 text-left transition-all ${
                   isSelected
-                    ? "border-blue-500/50 bg-blue-950/30 border-l-2 border-l-blue-500"
-                    : "border-gray-800 bg-gray-900/50 hover:bg-gray-800/50"
+                    ? "border-[color:var(--border-strong)] bg-[color:var(--surface-elevated)] shadow-[var(--shadow-soft)]"
+                    : "border-[color:var(--border-subtle)] bg-[color:var(--surface)] hover:border-[color:var(--border-strong)] hover:bg-[color:var(--surface-elevated)]"
                 }`}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
                     {onSelectMeeting ? (
-                      <span className="text-sm font-medium text-gray-200 block truncate">
+                      <span className="block truncate text-sm font-medium text-[color:var(--text-primary)]">
                         {m.title}
                       </span>
                     ) : (
                       <Link
                         href={`/meetings/${m.id}`}
-                        className="text-sm font-medium text-blue-400 hover:text-blue-300 block truncate"
+                        className="block truncate text-sm font-medium text-[color:var(--text-primary)] hover:text-[color:var(--accent-text)]"
                       >
                         {m.title}
                       </Link>
                     )}
-                    <div className="flex items-center gap-2 mt-1 text-xs text-gray-500">
+                    <div className="mt-2 flex items-center gap-2 text-xs text-[color:var(--text-secondary)]">
                       {formatDate(m.scheduled_time) && (
                         <span>{formatDate(m.scheduled_time)}</span>
                       )}

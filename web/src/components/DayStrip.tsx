@@ -59,11 +59,11 @@ export default function DayStrip({
   if (error) {
     return (
       <div className="text-center py-6">
-        <p className="text-sm text-red-400 mb-2">Could not load calendar</p>
+        <p className="mb-2 text-sm text-[color:var(--danger)]">Could not load calendar</p>
         {onRetry && (
           <button
             onClick={onRetry}
-            className="text-sm text-blue-400 hover:text-blue-300"
+            className="text-sm text-[color:var(--accent-text)] hover:opacity-80"
           >
             Retry
           </button>
@@ -75,13 +75,13 @@ export default function DayStrip({
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wide">
+        <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-[color:var(--text-muted)]">
           Upcoming Meetings
         </h2>
         {onRefresh && (
           <button
             onClick={onRefresh}
-            className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1"
+            className="flex items-center gap-1 text-xs text-[color:var(--accent-text)] hover:opacity-80"
           >
             <RefreshCw className="w-3 h-3" />
             Refresh
@@ -94,7 +94,7 @@ export default function DayStrip({
           ? Array.from({ length: 7 }, (_, i) => (
               <div
                 key={i}
-                className="w-14 h-16 rounded-xl bg-gray-800 animate-pulse"
+                className="h-16 w-14 animate-pulse rounded-2xl bg-[color:var(--surface-soft)]"
               />
             ))
           : days.map((d) => {
@@ -108,12 +108,12 @@ export default function DayStrip({
                 <button
                   key={key}
                   onClick={() => onSelectDate(key)}
-                  className={`w-14 h-16 rounded-xl flex flex-col items-center justify-center gap-0.5 text-xs transition-all ${
+                  className={`flex h-16 w-14 flex-col items-center justify-center gap-0.5 rounded-2xl border text-xs transition-all ${
                     isSelected
-                      ? "bg-blue-600 text-white shadow-lg shadow-blue-600/30"
+                      ? "border-[color:var(--border-strong)] bg-[color:var(--surface-inverse)] text-[color:var(--text-inverse)] shadow-[var(--shadow-soft)]"
                       : isToday
-                        ? "bg-blue-600/10 text-blue-400 border border-blue-500/30"
-                        : "bg-gray-800/50 hover:bg-gray-800"
+                        ? "border-[color:var(--border-strong)] bg-[color:var(--accent-soft)] text-[color:var(--accent-text)]"
+                        : "border-[color:var(--border-subtle)] bg-[color:var(--surface-soft)] text-[color:var(--text-primary)] hover:border-[color:var(--border-strong)]"
                   } ${weekend && !isSelected && !isToday ? "opacity-60" : ""}`}
                 >
                   <span className="text-[10px] font-medium uppercase">
@@ -126,7 +126,9 @@ export default function DayStrip({
                         <div
                           key={i}
                           className={`w-1 h-1 rounded-full ${
-                            isSelected ? "bg-white/70" : "bg-blue-400"
+                            isSelected
+                              ? "bg-[color:var(--text-inverse)]/70"
+                              : "bg-[color:var(--accent)]"
                           }`}
                         />
                       ))}
