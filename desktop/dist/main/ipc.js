@@ -59,14 +59,10 @@ const FFMPEG_BINARY = (() => {
 // In-app recording state (mirrors what tray.ts does for tray-initiated recordings)
 let _ipcOutputPath = '';
 let _ipcMetadata = null;
-function broadcastRecordingStatus(recording, meetingTitle) {
+function broadcastRecordingStatus() {
     const win = (0, index_1.getMainWindow)();
     if (win && !win.isDestroyed()) {
-        win.webContents.send('recorder:status-changed', {
-            recording,
-            meetingTitle: meetingTitle || undefined,
-            startedAt: recording ? Date.now() : undefined,
-        });
+        win.webContents.send('recorder:status-changed', (0, recorder_1.getRecordingStatus)());
     }
 }
 function parseAudioDevicesFromFfmpegOutput(output) {
@@ -252,18 +248,24 @@ function registerIpcHandlers() {
         const outputPath = opts.outputPath || path.join(electron_1.app.getPath('temp'), `meeting-${Date.now()}.wav`);
         _ipcOutputPath = outputPath;
         _ipcMetadata = opts.metadata || null;
-        (0, recorder_1.startRecording)({ micName: opts.micName, loopbackName: opts.loopbackName, outputPath });
-        broadcastRecordingStatus(true, _ipcMetadata?.meeting_title);
+        (0, recorder_1.startRecording)({
+            micName: opts.micName,
+            loopbackName: opts.loopbackName,
+            outputPath,
+            meetingTitle: _ipcMetadata?.meeting_title,
+        });
+        broadcastRecordingStatus();
         console.log(`[ipc] recorder:start — recording to ${outputPath}`);
     });
     electron_1.ipcMain.handle('recorder:stop', () => {
         (0, recorder_1.stopRecording)();
-        broadcastRecordingStatus(false);
+        broadcastRecordingStatus();
         const outputPath = _ipcOutputPath;
         console.log(`[ipc] recorder:stop — file at ${outputPath}`);
         return outputPath;
     });
     electron_1.ipcMain.handle('recorder:is-recording', () => (0, recorder_1.isRecording)());
+    electron_1.ipcMain.handle('recorder:get-status', () => (0, recorder_1.getRecordingStatus)());
     electron_1.ipcMain.handle('uploader:upload', async (_e, args) => {
         const token = await (0, auth_1.acquireIdToken)();
         const backendUrl = process.env.BACKEND_URL ?? 'http://localhost:8000';

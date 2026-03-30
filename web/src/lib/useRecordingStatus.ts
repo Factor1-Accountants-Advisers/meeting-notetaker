@@ -26,9 +26,14 @@ export function useRecordingStatus(): RecordingState {
   // Poll initial state + subscribe to pushes
   useEffect(() => {
     if (!api) return;
-    api.isRecording().then((isRec) => {
-      setRecording(isRec);
-      if (isRec) startTimeRef.current = Date.now();
+    api.getRecordingStatus().then((status) => {
+      setRecording(status.recording);
+      setMeetingTitle(status.meetingTitle);
+      if (status.recording && status.startedAt) {
+        startTimeRef.current = status.startedAt;
+      } else {
+        startTimeRef.current = null;
+      }
     });
 
     const unsub = api.onRecordingStatus((status) => {

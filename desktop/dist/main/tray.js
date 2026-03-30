@@ -89,14 +89,10 @@ function rebuildMenu() {
         { label: 'Quit', click: () => electron_1.app.quit() },
     ]));
 }
-function broadcastRecordingStatus(recording, meetingTitle) {
+function broadcastRecordingStatus() {
     const win = (0, index_1.getMainWindow)();
     if (win && !win.isDestroyed()) {
-        win.webContents.send('recorder:status-changed', {
-            recording,
-            meetingTitle: meetingTitle || _pendingTitle || undefined,
-            startedAt: recording ? Date.now() : undefined,
-        });
+        win.webContents.send('recorder:status-changed', (0, recorder_1.getRecordingStatus)());
     }
 }
 function handleStartRecording() {
@@ -107,11 +103,16 @@ function handleStartRecording() {
     }
     _currentOutputPath = path.join(_recordingOutputDir, `meeting-${Date.now()}.wav`);
     try {
-        (0, recorder_1.startRecording)({ micName: _micName, loopbackName: _loopbackName, outputPath: _currentOutputPath });
+        (0, recorder_1.startRecording)({
+            micName: _micName,
+            loopbackName: _loopbackName,
+            outputPath: _currentOutputPath,
+            meetingTitle: _pendingTitle || undefined,
+        });
         tray?.setImage(electron_1.nativeImage.createFromPath(RECORDING_ICON));
         tray?.setToolTip('Meeting Note-Taker — Recording...');
         rebuildMenu();
-        broadcastRecordingStatus(true, _pendingTitle);
+        broadcastRecordingStatus();
     }
     catch (err) {
         console.error('[tray] Failed to start recording:', err);
@@ -124,7 +125,7 @@ async function handleStopRecording() {
     tray?.setImage(electron_1.nativeImage.createFromPath(IDLE_ICON));
     tray?.setToolTip('Meeting Note-Taker — Uploading...');
     rebuildMenu();
-    broadcastRecordingStatus(false);
+    broadcastRecordingStatus();
     try {
         const token = await (0, auth_1.acquireToken)();
         const metadata = {

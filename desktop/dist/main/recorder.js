@@ -6,15 +6,23 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.startRecording = startRecording;
 exports.stopRecording = stopRecording;
 exports.isRecording = isRecording;
+exports.getRecordingStatus = getRecordingStatus;
 const fluent_ffmpeg_1 = __importDefault(require("fluent-ffmpeg"));
 const ffmpeg_static_1 = __importDefault(require("ffmpeg-static"));
 if (!ffmpeg_static_1.default)
     throw new Error('ffmpeg-static did not resolve a binary for this platform');
 fluent_ffmpeg_1.default.setFfmpegPath(ffmpeg_static_1.default);
 let activeProcess = null;
+let recordingActive = false;
+let recordingStartedAt = null;
+let activeMeetingTitle;
 function startRecording(options) {
-    if (activeProcess)
+    if (recordingActive || activeProcess) {
         throw new Error('Already recording. Call stopRecording() first.');
+    }
+    recordingActive = true;
+    recordingStartedAt = Date.now();
+    activeMeetingTitle = options.meetingTitle;
     activeProcess = (0, fluent_ffmpeg_1.default)()
         .input(`audio=${options.micName}`)
         .inputOptions(['-f', 'dshow'])
@@ -30,17 +38,42 @@ function startRecording(options) {
         if (!err.message.includes('SIGINT'))
             console.error('[recorder] error:', err.message);
         activeProcess = null;
+        recordingActive = false;
+        recordingStartedAt = null;
+        activeMeetingTitle = undefined;
     })
-        .on('end', () => { activeProcess = null; })
+        .on('end', () => {
+        activeProcess = null;
+        recordingActive = false;
+        recordingStartedAt = null;
+        activeMeetingTitle = undefined;
+    })
         .save(options.outputPath);
 }
 function stopRecording() {
-    if (!activeProcess)
+    if (!activeProcess) {
+        recordingActive = false;
+        recordingStartedAt = null;
+        activeMeetingTitle = undefined;
         return;
+    }
+    recordingActive = false;
+    recordingStartedAt = null;
+    activeMeetingTitle = undefined;
     activeProcess.kill('SIGINT');
     // activeProcess is reset by the 'end' or 'error' event handler
 }
 function isRecording() {
-    return activeProcess !== null;
+    return recordingActive;
+}
+function getRecordingStatus() {
+    if (!recordingActive) {
+        return { recording: false };
+    }
+    return {
+        recording: true,
+        meetingTitle: activeMeetingTitle,
+        startedAt: recordingStartedAt ?? undefined,
+    };
 }
 //# sourceMappingURL=recorder.js.map

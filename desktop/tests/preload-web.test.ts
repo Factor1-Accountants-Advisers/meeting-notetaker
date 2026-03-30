@@ -36,6 +36,7 @@ describe('preload-web', () => {
     expect(typeof exposedApi.startRecording).toBe('function');
     expect(typeof exposedApi.stopRecording).toBe('function');
     expect(typeof exposedApi.isRecording).toBe('function');
+    expect(typeof exposedApi.getRecordingStatus).toBe('function');
     expect(typeof exposedApi.onRecordingStatus).toBe('function');
     expect(typeof exposedApi.uploadRecording).toBe('function');
     expect(typeof exposedApi.selectMeeting).toBe('function');
@@ -63,6 +64,23 @@ describe('preload-web', () => {
     (ipcRenderer.invoke as jest.Mock).mockResolvedValue(undefined);
     await api.startRecording(opts);
     expect(ipcRenderer.invoke).toHaveBeenCalledWith('recorder:start', opts);
+  });
+
+  it('getRecordingStatus invokes correct IPC channel', async () => {
+    jest.isolateModules(() => {
+      require('../src/renderer/preload-web');
+    });
+    const api = (contextBridge.exposeInMainWorld as jest.Mock).mock.calls[0][1];
+
+    (ipcRenderer.invoke as jest.Mock).mockResolvedValue({
+      recording: true,
+      meetingTitle: 'AI Mission Catch Up',
+      startedAt: 123,
+    });
+
+    await api.getRecordingStatus();
+
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith('recorder:get-status');
   });
 
   it('onRecordingStatus subscribes and returns unsubscribe fn', () => {

@@ -1,6 +1,6 @@
 import { Tray, Menu, app, nativeImage, BrowserWindow } from 'electron';
 import * as path from 'path';
-import { startRecording, stopRecording, isRecording } from './recorder';
+import { startRecording, stopRecording, isRecording, getRecordingStatus } from './recorder';
 import { acquireToken } from './auth';
 import { uploadRecording, AttendeeMetadata, MeetingMetadata } from './uploader';
 import { getMainWindow } from './index';
@@ -68,14 +68,10 @@ function rebuildMenu(): void {
   ]));
 }
 
-function broadcastRecordingStatus(recording: boolean, meetingTitle?: string): void {
+function broadcastRecordingStatus(): void {
   const win = getMainWindow();
   if (win && !win.isDestroyed()) {
-    win.webContents.send('recorder:status-changed', {
-      recording,
-      meetingTitle: meetingTitle || _pendingTitle || undefined,
-      startedAt: recording ? Date.now() : undefined,
-    });
+    win.webContents.send('recorder:status-changed', getRecordingStatus());
   }
 }
 
@@ -87,11 +83,16 @@ function handleStartRecording(): void {
   }
   _currentOutputPath = path.join(_recordingOutputDir, `meeting-${Date.now()}.wav`);
   try {
-    startRecording({ micName: _micName, loopbackName: _loopbackName, outputPath: _currentOutputPath });
+    startRecording({
+      micName: _micName,
+      loopbackName: _loopbackName,
+      outputPath: _currentOutputPath,
+      meetingTitle: _pendingTitle || undefined,
+    });
     tray?.setImage(nativeImage.createFromPath(RECORDING_ICON));
     tray?.setToolTip('Meeting Note-Taker — Recording...');
     rebuildMenu();
-    broadcastRecordingStatus(true, _pendingTitle);
+    broadcastRecordingStatus();
   } catch (err) {
     console.error('[tray] Failed to start recording:', err);
     tray?.setToolTip('Meeting Note-Taker — Recording failed');
@@ -104,7 +105,7 @@ async function handleStopRecording(): Promise<void> {
   tray?.setImage(nativeImage.createFromPath(IDLE_ICON));
   tray?.setToolTip('Meeting Note-Taker — Uploading...');
   rebuildMenu();
-  broadcastRecordingStatus(false);
+  broadcastRecordingStatus();
 
   try {
     const token = await acquireToken();

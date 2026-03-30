@@ -8,12 +8,28 @@ export interface RecordingOptions {
   micName: string;
   loopbackName: string;
   outputPath: string;
+  meetingTitle?: string;
+}
+
+export interface RecordingStatusSnapshot {
+  recording: boolean;
+  meetingTitle?: string;
+  startedAt?: number;
 }
 
 let activeProcess: FfmpegCommand | null = null;
+let recordingActive = false;
+let recordingStartedAt: number | null = null;
+let activeMeetingTitle: string | undefined;
 
 export function startRecording(options: RecordingOptions): void {
-  if (activeProcess) throw new Error('Already recording. Call stopRecording() first.');
+  if (recordingActive || activeProcess) {
+    throw new Error('Already recording. Call stopRecording() first.');
+  }
+
+  recordingActive = true;
+  recordingStartedAt = Date.now();
+  activeMeetingTitle = options.meetingTitle;
 
   activeProcess = ffmpeg()
     .input(`audio=${options.micName}`)
@@ -29,17 +45,45 @@ export function startRecording(options: RecordingOptions): void {
     .on('error', (err) => {
       if (!err.message.includes('SIGINT')) console.error('[recorder] error:', err.message);
       activeProcess = null;
+      recordingActive = false;
+      recordingStartedAt = null;
+      activeMeetingTitle = undefined;
     })
-    .on('end', () => { activeProcess = null; })
+    .on('end', () => {
+      activeProcess = null;
+      recordingActive = false;
+      recordingStartedAt = null;
+      activeMeetingTitle = undefined;
+    })
     .save(options.outputPath);
 }
 
 export function stopRecording(): void {
-  if (!activeProcess) return;
+  if (!activeProcess) {
+    recordingActive = false;
+    recordingStartedAt = null;
+    activeMeetingTitle = undefined;
+    return;
+  }
+  recordingActive = false;
+  recordingStartedAt = null;
+  activeMeetingTitle = undefined;
   activeProcess.kill('SIGINT');
   // activeProcess is reset by the 'end' or 'error' event handler
 }
 
 export function isRecording(): boolean {
-  return activeProcess !== null;
+  return recordingActive;
+}
+
+export function getRecordingStatus(): RecordingStatusSnapshot {
+  if (!recordingActive) {
+    return { recording: false };
+  }
+
+  return {
+    recording: true,
+    meetingTitle: activeMeetingTitle,
+    startedAt: recordingStartedAt ?? undefined,
+  };
 }

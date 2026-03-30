@@ -2,7 +2,13 @@ import { ipcMain, BrowserWindow, shell, app } from 'electron';
 import * as path from 'path';
 import { acquireToken, acquireIdToken, clearTokenCache } from './auth';
 import { getUpcomingMeetings, CalendarEvent } from './graph';
-import { startRecording, stopRecording, isRecording, RecordingOptions } from './recorder';
+import {
+  startRecording,
+  stopRecording,
+  isRecording,
+  getRecordingStatus,
+  RecordingOptions,
+} from './recorder';
 import { uploadRecording, MeetingMetadata, UploadResult } from './uploader';
 import { setPendingMeeting } from './tray';
 import { getMainWindow } from './index';
@@ -21,14 +27,10 @@ const FFMPEG_BINARY: string = (() => {
 let _ipcOutputPath = '';
 let _ipcMetadata: MeetingMetadata | null = null;
 
-function broadcastRecordingStatus(recording: boolean, meetingTitle?: string): void {
+function broadcastRecordingStatus(): void {
   const win = getMainWindow();
   if (win && !win.isDestroyed()) {
-    win.webContents.send('recorder:status-changed', {
-      recording,
-      meetingTitle: meetingTitle || undefined,
-      startedAt: recording ? Date.now() : undefined,
-    });
+    win.webContents.send('recorder:status-changed', getRecordingStatus());
   }
 }
 
@@ -253,20 +255,26 @@ export function registerIpcHandlers(): void {
     _ipcOutputPath = outputPath;
     _ipcMetadata = opts.metadata || null;
 
-    startRecording({ micName: opts.micName, loopbackName: opts.loopbackName, outputPath });
-    broadcastRecordingStatus(true, _ipcMetadata?.meeting_title);
+    startRecording({
+      micName: opts.micName,
+      loopbackName: opts.loopbackName,
+      outputPath,
+      meetingTitle: _ipcMetadata?.meeting_title,
+    });
+    broadcastRecordingStatus();
     console.log(`[ipc] recorder:start — recording to ${outputPath}`);
   });
 
   ipcMain.handle('recorder:stop', (): string => {
     stopRecording();
-    broadcastRecordingStatus(false);
+    broadcastRecordingStatus();
     const outputPath = _ipcOutputPath;
     console.log(`[ipc] recorder:stop — file at ${outputPath}`);
     return outputPath;
   });
 
   ipcMain.handle('recorder:is-recording', (): boolean => isRecording());
+  ipcMain.handle('recorder:get-status', () => getRecordingStatus());
 
   ipcMain.handle(
     'uploader:upload',

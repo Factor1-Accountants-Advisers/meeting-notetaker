@@ -14,6 +14,7 @@ electron_1.contextBridge.exposeInMainWorld('electronAPI', {
     startRecording: (opts) => electron_1.ipcRenderer.invoke('recorder:start', opts),
     stopRecording: () => electron_1.ipcRenderer.invoke('recorder:stop'),
     isRecording: () => electron_1.ipcRenderer.invoke('recorder:is-recording'),
+    getRecordingStatus: () => electron_1.ipcRenderer.invoke('recorder:get-status'),
     onRecordingStatus: (cb) => {
         const handler = (_e, status) => cb(status);
         electron_1.ipcRenderer.on('recorder:status-changed', handler);

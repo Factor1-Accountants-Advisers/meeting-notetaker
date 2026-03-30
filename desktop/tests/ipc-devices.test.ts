@@ -26,6 +26,7 @@ jest.mock('../src/main/recorder', () => ({
   startRecording: jest.fn(),
   stopRecording: jest.fn(),
   isRecording: jest.fn(),
+  getRecordingStatus: jest.fn(),
 }));
 jest.mock('../src/main/uploader', () => ({ uploadRecording: jest.fn() }));
 jest.mock('../src/main/tray', () => ({ setPendingMeeting: jest.fn() }));
@@ -36,6 +37,7 @@ jest.mock('../src/main/protocol', () => ({ registerAppProtocol: jest.fn() }));
 import { ipcMain } from 'electron';
 import { acquireIdToken } from '../src/main/auth';
 import { uploadRecording } from '../src/main/uploader';
+import { getRecordingStatus } from '../src/main/recorder';
 
 describe('audio:get-devices IPC handler', () => {
   beforeEach(() => {
@@ -78,6 +80,30 @@ describe('uploader:upload IPC handler', () => {
         metadata,
       })
     );
+  });
+});
+
+describe('recorder:get-status IPC handler', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('returns the persisted recording status snapshot', async () => {
+    (getRecordingStatus as jest.Mock).mockReturnValue({
+      recording: true,
+      meetingTitle: 'AI Mission Catch Up',
+      startedAt: 123,
+    });
+
+    require('../src/main/ipc').registerIpcHandlers();
+    const handleCalls = (ipcMain.handle as jest.Mock).mock.calls;
+    const statusHandler = handleCalls.find((c: [string, Function]) => c[0] === 'recorder:get-status')?.[1];
+
+    expect(statusHandler()).toEqual({
+      recording: true,
+      meetingTitle: 'AI Mission Catch Up',
+      startedAt: 123,
+    });
   });
 });
 

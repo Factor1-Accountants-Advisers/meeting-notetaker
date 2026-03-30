@@ -16,10 +16,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     micName: string;
     loopbackName: string;
     outputPath: string;
+    meetingTitle?: string;
     metadata?: { meeting_title: string; attendees: { name: string; email?: string }[]; scheduled_time?: string };
   }) => ipcRenderer.invoke('recorder:start', opts),
   stopRecording: (): Promise<string> => ipcRenderer.invoke('recorder:stop'),
   isRecording: () => ipcRenderer.invoke('recorder:is-recording'),
+  getRecordingStatus: () => ipcRenderer.invoke('recorder:get-status'),
   onRecordingStatus: (cb: (status: { recording: boolean; meetingTitle?: string; startedAt?: number }) => void) => {
     const handler = (_e: Electron.IpcRendererEvent, status: { recording: boolean; meetingTitle?: string; startedAt?: number }) => cb(status);
     ipcRenderer.on('recorder:status-changed', handler);

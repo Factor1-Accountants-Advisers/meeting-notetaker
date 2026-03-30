@@ -73,6 +73,21 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!recording || selectedCalendarEvent || !meetingTitle || calendarEvents.length === 0) {
+      return;
+    }
+
+    const matchedMeeting = calendarEvents.find(
+      (event) => event.subject === meetingTitle
+    );
+
+    if (matchedMeeting) {
+      setSelectedCalendarEvent(matchedMeeting);
+      setShowRecordingPanel(true);
+    }
+  }, [calendarEvents, meetingTitle, recording, selectedCalendarEvent]);
+
   const dayMeetings = useMemo(
     () =>
       calendarEvents.filter(
@@ -90,7 +105,20 @@ export default function DashboardPage() {
     });
   }, [selectedDate]);
 
+  const activeRecordingMeetingId = useMemo(() => {
+    if (!recording || !meetingTitle) return null;
+    return (
+      calendarEvents.find((event) => event.subject === meetingTitle)?.id ?? null
+    );
+  }, [calendarEvents, meetingTitle, recording]);
+
   const handleSelectMeeting = (meeting: CalendarEvent) => {
+    if (recording) {
+      if (!activeRecordingMeetingId || meeting.id !== activeRecordingMeetingId) {
+        return;
+      }
+    }
+
     if (showRecordingPanel && selectedCalendarEvent?.id === meeting.id) {
       setShowRecordingPanel(false);
       setSelectedCalendarEvent(null);
@@ -139,7 +167,7 @@ export default function DashboardPage() {
         )}
 
         {isElectron && (
-          <section className={`${recording ? "pointer-events-none opacity-60" : ""}`}>
+          <section className={recording ? "opacity-80" : ""}>
             <DayStrip
               meetings={calendarEvents}
               selectedDate={selectedDate}

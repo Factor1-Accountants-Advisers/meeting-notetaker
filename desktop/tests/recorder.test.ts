@@ -26,6 +26,7 @@ jest.mock('ffmpeg-static', () => '/usr/bin/ffmpeg');
 describe('recorder', () => {
   let startRecording: typeof import('../src/main/recorder').startRecording;
   let stopRecording: typeof import('../src/main/recorder').stopRecording;
+  let getRecordingStatus: typeof import('../src/main/recorder').getRecordingStatus;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -48,6 +49,7 @@ describe('recorder', () => {
     const recorder = require('../src/main/recorder');
     startRecording = recorder.startRecording;
     stopRecording = recorder.stopRecording;
+    getRecordingStatus = recorder.getRecordingStatus;
   });
 
   it('calls ffmpeg with two dshow inputs and amix filter', () => {
@@ -67,5 +69,30 @@ describe('recorder', () => {
   it('stopRecording is a no-op when not recording', () => {
     expect(() => stopRecording()).not.toThrow();
     expect(mockKill).not.toHaveBeenCalled();
+  });
+
+  it('tracks meeting title and startedAt across recording status queries', () => {
+    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(123456789);
+
+    startRecording({
+      micName: 'Mic',
+      loopbackName: 'Loop',
+      outputPath: 'out.wav',
+      meetingTitle: 'AI Mission Catch Up',
+    });
+
+    expect(getRecordingStatus()).toEqual({
+      recording: true,
+      meetingTitle: 'AI Mission Catch Up',
+      startedAt: 123456789,
+    });
+
+    stopRecording();
+
+    expect(getRecordingStatus()).toEqual({
+      recording: false,
+    });
+
+    nowSpy.mockRestore();
   });
 });
