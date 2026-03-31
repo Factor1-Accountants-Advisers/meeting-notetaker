@@ -18,20 +18,45 @@ function makeGroup(overrides: Partial<MeetingActionItemsGroup>): MeetingActionIt
 }
 
 describe("MeetingRail", () => {
-  it("shows the meeting title and calls onSelectMeeting when clicked", async () => {
+  it("shows an empty state when there are no meetings", () => {
+    render(
+      <MeetingRail
+        groups={[]}
+        selectedMeetingId={null}
+        onSelectMeeting={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("No meetings available.")).toBeVisible();
+  });
+
+  it("shows the meeting title, marks the selected meeting current, and calls onSelectMeeting when clicked", () => {
     const onSelectMeeting = vi.fn();
 
     render(
       <MeetingRail
-        groups={[makeGroup({ meetingId: 7, title: "Weekly design review", openCount: 2, completedCount: 0 })]}
-        selectedMeetingId={null}
+        groups={[
+          makeGroup({
+            meetingId: 7,
+            title: "Weekly design review",
+            openCount: 2,
+            completedCount: 0,
+          }),
+        ]}
+        selectedMeetingId={7}
         onSelectMeeting={onSelectMeeting}
       />
     );
 
-    expect(screen.getByText("Weekly design review")).toBeVisible();
+    const meetingButton = screen.getByRole("button", {
+      name: /weekly design review/i,
+    });
 
-    fireEvent.click(screen.getByRole("button", { name: /weekly design review/i }));
+    expect(screen.getByText("Weekly design review")).toBeVisible();
+    expect(meetingButton).toHaveAttribute("aria-current", "true");
+    expect(meetingButton).not.toHaveAttribute("aria-pressed");
+
+    fireEvent.click(meetingButton);
 
     expect(onSelectMeeting).toHaveBeenCalledWith(7);
   });

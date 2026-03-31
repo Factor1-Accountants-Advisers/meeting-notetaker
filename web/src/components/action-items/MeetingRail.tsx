@@ -46,7 +46,7 @@ export default function MeetingRail({
                 key={group.meetingId}
                 type="button"
                 onClick={() => onSelectMeeting(group.meetingId)}
-                aria-pressed={selected}
+                aria-current={selected ? "true" : undefined}
                 className={`w-full rounded-[24px] border px-4 py-4 text-left transition ${
                   selected
                     ? "border-[color:var(--border-strong)] bg-[color:var(--surface-elevated)] shadow-[var(--shadow-soft)]"
