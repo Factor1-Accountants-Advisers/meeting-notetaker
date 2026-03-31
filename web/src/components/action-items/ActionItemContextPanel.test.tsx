@@ -61,6 +61,25 @@ describe("ActionItemContextPanel", () => {
     expect(screen.getByText("No due date")).toBeVisible();
   });
 
+  it("falls back safely for impossible calendar dates", () => {
+    render(
+      <ActionItemContextPanel
+        meetingTitle="Weekly design review"
+        meetingSummary="Reviewed the onboarding flow, resolved copy changes, and confirmed the next demo."
+        actionItem={{
+          id: 103,
+          description: "Confirm vendor shortlist and next steps",
+          owner_name: "Ava",
+          due_date: "2026-02-30",
+          status: "open",
+        }}
+      />
+    );
+
+    expect(screen.getByText("No due date")).toBeVisible();
+    expect(screen.queryByText("Mar 2, 2026")).not.toBeInTheDocument();
+  });
+
   it("keeps the meeting context visible when no action item is selected", () => {
     render(
       <ActionItemContextPanel
