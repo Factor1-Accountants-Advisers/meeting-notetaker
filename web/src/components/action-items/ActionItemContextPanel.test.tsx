@@ -131,4 +131,28 @@ describe("ActionItemContextPanel", () => {
     ).toBeVisible();
     expect(screen.getByText("No action item selected.")).toBeVisible();
   });
+
+  it("uses unique section labels when rendered more than once", () => {
+    const { container } = render(
+      <div>
+        <ActionItemContextPanel
+          meetingTitle="Weekly design review"
+          meetingSummary="Reviewed the onboarding flow, resolved copy changes, and confirmed the next demo."
+          actionItem={null}
+        />
+        <ActionItemContextPanel
+          meetingTitle="Weekly design review"
+          meetingSummary="Reviewed the onboarding flow, resolved copy changes, and confirmed the next demo."
+          actionItem={null}
+        />
+      </div>
+    );
+
+    const sectionLabels = Array.from(
+      container.querySelectorAll("section h2[id]")
+    ).map((node) => node.id);
+
+    expect(sectionLabels).toHaveLength(4);
+    expect(new Set(sectionLabels)).toHaveLength(4);
+  });
 });

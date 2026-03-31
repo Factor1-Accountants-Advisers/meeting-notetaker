@@ -1,5 +1,7 @@
 "use client";
 
+import { useId } from "react";
+
 type ActionItemContextPanelProps = {
   meetingTitle: string;
   meetingSummary: string;
@@ -68,6 +70,10 @@ export default function ActionItemContextPanel({
   meetingSummary,
   actionItem,
 }: ActionItemContextPanelProps) {
+  const instanceId = useId();
+  const meetingTitleId = `${instanceId}-meeting-title`;
+  const actionItemTitleId = `${instanceId}-action-item-title`;
+
   return (
     <aside
       aria-label="Action item context"
@@ -75,11 +81,11 @@ export default function ActionItemContextPanel({
     >
       <div className="space-y-6 xl:sticky xl:top-8">
         <section
-          aria-labelledby="action-item-context-meeting-title"
+          aria-labelledby={meetingTitleId}
           className="rounded-[28px] border border-[color:var(--border-subtle)] bg-[color:var(--surface)] p-5 shadow-[var(--shadow-soft)]"
         >
           <h2
-            id="action-item-context-meeting-title"
+            id={meetingTitleId}
             className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[color:var(--text-muted)]"
           >
             Source meeting
@@ -93,11 +99,11 @@ export default function ActionItemContextPanel({
         </section>
 
         <section
-          aria-labelledby="action-item-context-item-title"
+          aria-labelledby={actionItemTitleId}
           className="rounded-[28px] border border-[color:var(--border-subtle)] bg-[color:var(--surface)] p-5 shadow-[var(--shadow-soft)]"
         >
           <h2
-            id="action-item-context-item-title"
+            id={actionItemTitleId}
             className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[color:var(--text-muted)]"
           >
             Selected action item
