@@ -60,9 +60,6 @@ export default function MeetingActionItemsView({
                     <p className="min-w-0 text-sm font-medium leading-6 text-[color:var(--text-primary)]">
                       {item.description}
                     </p>
-                    <span className="shrink-0 rounded-full bg-[color:var(--surface-soft)] px-2.5 py-1 text-xs text-[color:var(--text-secondary)]">
-                      {item.status === "complete" ? "Completed" : "Open"}
-                    </span>
                   </div>
 
                   <div className="mt-3 flex flex-wrap gap-3 text-sm text-[color:var(--text-secondary)]">

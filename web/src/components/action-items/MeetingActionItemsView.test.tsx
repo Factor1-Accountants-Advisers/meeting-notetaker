@@ -39,6 +39,8 @@ describe("MeetingActionItemsView", () => {
     ).toBeVisible();
     expect(screen.getByText("Ava")).toBeVisible();
     expect(screen.getByText("Apr 3, 2026")).toBeVisible();
+    expect(screen.queryByText("Open")).not.toBeInTheDocument();
+    expect(screen.queryByText("Completed")).not.toBeInTheDocument();
 
     const rowButton = screen.getByRole("button", {
       name: /confirm vendor shortlist and next steps/i,
