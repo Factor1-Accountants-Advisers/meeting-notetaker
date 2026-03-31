@@ -31,7 +31,11 @@ export default function ActionItemsPage() {
 
   const { data: actionItemsData, error: actionItemsError, isLoading: actionItemsLoading } =
     useActionItems(1, ACTION_ITEMS_PAGE_SIZE);
-  const { data: meetingsData } = useMeetings(1, MEETINGS_PAGE_SIZE);
+  const {
+    data: meetingsData,
+    error: meetingsError,
+    isLoading: meetingsLoading,
+  } = useMeetings(1, MEETINGS_PAGE_SIZE);
 
   const filteredItems = useMemo(
     () => filterActionItems(actionItemsData?.items ?? [], DEFAULT_FILTERS),
@@ -97,6 +101,9 @@ export default function ActionItemsPage() {
 
   const actionItemsTruncated =
     (actionItemsData?.total ?? 0) > (actionItemsData?.items.length ?? 0);
+  const unresolvedMeetingTitleCount = meetingGroups.filter(
+    (group) => !meetingTitles[group.meetingId]
+  ).length;
   const unresolvedMeetingTitles = meetingGroups.some(
     (group) => !meetingTitles[group.meetingId]
   );
@@ -139,7 +146,25 @@ export default function ActionItemsPage() {
             </div>
           ) : null}
 
-          {unresolvedMeetingTitles ? (
+          {meetingsLoading && unresolvedMeetingTitleCount > 0 ? (
+            <div
+              role="status"
+              className="rounded-[24px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-soft)] px-4 py-3 text-sm text-[color:var(--text-secondary)]"
+            >
+              Loading meeting titles...
+            </div>
+          ) : null}
+
+          {!meetingsLoading && meetingsError && unresolvedMeetingTitleCount > 0 ? (
+            <div
+              role="status"
+              className="rounded-[24px] border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100"
+            >
+              Meeting titles could not be loaded.
+            </div>
+          ) : null}
+
+          {!meetingsLoading && !meetingsError && unresolvedMeetingTitles ? (
             <div
               role="status"
               className="rounded-[24px] border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"

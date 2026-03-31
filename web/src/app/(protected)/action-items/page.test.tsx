@@ -110,6 +110,8 @@ function renderPage(options: {
   actionItemsError?: Error | undefined;
   actionItemsLoading?: boolean;
   meetingsData?: MeetingListResponse | undefined;
+  meetingsError?: Error | undefined;
+  meetingsLoading?: boolean;
   meetingData?: MeetingDetail | undefined;
 } = {}) {
   const actionItemsData =
@@ -117,6 +119,8 @@ function renderPage(options: {
   const actionItemsError = options.actionItemsError;
   const actionItemsLoading = options.actionItemsLoading ?? false;
   const meetingsData = "meetingsData" in options ? options.meetingsData : makeMeetingsResponse();
+  const meetingsError = options.meetingsError;
+  const meetingsLoading = options.meetingsLoading ?? false;
   const meetingData = "meetingData" in options ? options.meetingData : makeMeetingDetail();
 
   mockedUseActionItems.mockReturnValue({
@@ -127,8 +131,8 @@ function renderPage(options: {
 
   mockedUseMeetings.mockReturnValue({
     data: meetingsData,
-    error: undefined,
-    isLoading: false,
+    error: meetingsError,
+    isLoading: meetingsLoading,
   } as never);
 
   mockedUseMeeting.mockReturnValue({
@@ -261,5 +265,75 @@ describe("ActionItemsPage", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "Some visible meetings are using fallback titles because meeting details were not loaded."
     );
+  });
+
+  it("suppresses the fallback warning while meetings metadata is still loading and shows a loading note instead", () => {
+    renderPage({
+      actionItemsData: makeActionItemsResponse({
+        items: [
+          {
+            id: 301,
+            meeting_id: 999,
+            description: "Confirm budget owner",
+            owner_name: "Ava",
+            owner_email: "ava@example.com",
+            due_date: null,
+            status: "open",
+            created_at: "2026-03-30T08:00:00.000Z",
+            updated_at: "2026-03-30T08:00:00.000Z",
+          },
+        ],
+        total: 1,
+      }),
+      meetingsData: undefined,
+      meetingsLoading: true,
+      meetingData: makeMeetingDetail({
+        id: 999,
+        title: "Meeting 999",
+      }),
+    });
+
+    expect(screen.getByRole("status")).toHaveTextContent("Loading meeting titles...");
+    expect(
+      screen.queryByText(
+        "Some visible meetings are using fallback titles because meeting details were not loaded."
+      )
+    ).not.toBeInTheDocument();
+  });
+
+  it("replaces the fallback warning with an error notice when meetings metadata fails", () => {
+    renderPage({
+      actionItemsData: makeActionItemsResponse({
+        items: [
+          {
+            id: 401,
+            meeting_id: 999,
+            description: "Confirm budget owner",
+            owner_name: "Ava",
+            owner_email: "ava@example.com",
+            due_date: null,
+            status: "open",
+            created_at: "2026-03-30T08:00:00.000Z",
+            updated_at: "2026-03-30T08:00:00.000Z",
+          },
+        ],
+        total: 1,
+      }),
+      meetingsData: undefined,
+      meetingsError: new Error("metadata failed"),
+      meetingData: makeMeetingDetail({
+        id: 999,
+        title: "Meeting 999",
+      }),
+    });
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Meeting titles could not be loaded."
+    );
+    expect(
+      screen.queryByText(
+        "Some visible meetings are using fallback titles because meeting details were not loaded."
+      )
+    ).not.toBeInTheDocument();
   });
 });
