@@ -9,7 +9,7 @@ import { buildMeetingGroups, filterActionItems } from "@/components/action-items
 import { useActionItems, useMeeting, useMeetings } from "@/lib/api";
 
 const ACTION_ITEMS_PAGE_SIZE = 250;
-const MEETINGS_PAGE_SIZE = 250;
+const MEETINGS_PAGE_SIZE = 500;
 
 const DEFAULT_FILTERS = {
   owner: "",
@@ -97,6 +97,9 @@ export default function ActionItemsPage() {
 
   const actionItemsTruncated =
     (actionItemsData?.total ?? 0) > (actionItemsData?.items.length ?? 0);
+  const unresolvedMeetingTitles = meetingGroups.some(
+    (group) => !meetingTitles[group.meetingId]
+  );
 
   return (
     <div className="space-y-6">
@@ -133,6 +136,15 @@ export default function ActionItemsPage() {
               className="rounded-[24px] border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"
             >
               {`Showing the first ${actionItemsData?.items.length ?? 0} of ${actionItemsData?.total ?? 0} action items.`}
+            </div>
+          ) : null}
+
+          {unresolvedMeetingTitles ? (
+            <div
+              role="status"
+              className="rounded-[24px] border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"
+            >
+              Some visible meetings are using fallback titles because meeting details were not loaded.
             </div>
           ) : null}
 

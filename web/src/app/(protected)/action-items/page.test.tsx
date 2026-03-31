@@ -165,6 +165,8 @@ describe("ActionItemsPage", () => {
         "Reviewed the onboarding flow, resolved copy changes, and confirmed the next demo."
       )
     ).toBeVisible();
+    expect(mockedUseActionItems).toHaveBeenCalledWith(1, 250);
+    expect(mockedUseMeetings).toHaveBeenCalledWith(1, 500);
     expect(mockedUseMeeting).toHaveBeenCalledWith(7);
   });
 
@@ -223,6 +225,41 @@ describe("ActionItemsPage", () => {
 
     expect(screen.getByRole("status")).toHaveTextContent(
       "Showing the first 100 of 150 action items."
+    );
+  });
+
+  it("shows a title-resolution notice when visible meeting groups are missing titles from the meetings payload", () => {
+    renderPage({
+      actionItemsData: makeActionItemsResponse({
+        items: [
+          {
+            id: 201,
+            meeting_id: 999,
+            description: "Follow up on budget changes",
+            owner_name: "Ava",
+            owner_email: "ava@example.com",
+            due_date: null,
+            status: "open",
+            created_at: "2026-03-30T08:00:00.000Z",
+            updated_at: "2026-03-30T08:00:00.000Z",
+          },
+        ],
+        total: 1,
+      }),
+      meetingsData: makeMeetingsResponse({
+        items: [],
+        total: 500,
+        per_page: 250,
+      }),
+      meetingData: makeMeetingDetail({
+        id: 999,
+        title: "Meeting 999",
+      }),
+    });
+
+    expect(screen.getByRole("button", { name: /meeting 999/i })).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Some visible meetings are using fallback titles because meeting details were not loaded."
     );
   });
 });
