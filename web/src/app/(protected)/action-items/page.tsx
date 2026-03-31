@@ -8,6 +8,9 @@ import MeetingRail from "@/components/action-items/MeetingRail";
 import { buildMeetingGroups, filterActionItems } from "@/components/action-items/selectors";
 import { useActionItems, useMeeting, useMeetings } from "@/lib/api";
 
+const ACTION_ITEMS_PAGE_SIZE = 250;
+const MEETINGS_PAGE_SIZE = 250;
+
 const DEFAULT_FILTERS = {
   owner: "",
   search: "",
@@ -27,8 +30,8 @@ export default function ActionItemsPage() {
   const [selectedActionItemId, setSelectedActionItemId] = useState<number | null>(null);
 
   const { data: actionItemsData, error: actionItemsError, isLoading: actionItemsLoading } =
-    useActionItems(1, 100);
-  const { data: meetingsData } = useMeetings(1, 100);
+    useActionItems(1, ACTION_ITEMS_PAGE_SIZE);
+  const { data: meetingsData } = useMeetings(1, MEETINGS_PAGE_SIZE);
 
   const filteredItems = useMemo(
     () => filterActionItems(actionItemsData?.items ?? [], DEFAULT_FILTERS),
@@ -92,6 +95,9 @@ export default function ActionItemsPage() {
       ? "Unable to load meeting context."
       : getMeetingSummary(selectedMeeting?.summary?.summary_text);
 
+  const actionItemsTruncated =
+    (actionItemsData?.total ?? 0) > (actionItemsData?.items.length ?? 0);
+
   return (
     <div className="space-y-6">
       <div>
@@ -99,35 +105,55 @@ export default function ActionItemsPage() {
       </div>
 
       {actionItemsLoading && !actionItemsData ? (
-        <div className="rounded-[28px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] px-6 py-10 text-sm text-[color:var(--text-secondary)] shadow-[var(--shadow-soft)]">
+        <div
+          role="status"
+          className="rounded-[28px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] px-6 py-10 text-sm text-[color:var(--text-secondary)] shadow-[var(--shadow-soft)]"
+        >
           Loading action items...
         </div>
       ) : actionItemsError ? (
-        <div className="rounded-[28px] border border-red-500/30 bg-red-500/10 px-6 py-10 text-sm text-red-100">
+        <div
+          role="alert"
+          className="rounded-[28px] border border-red-500/30 bg-red-500/10 px-6 py-10 text-sm text-red-100"
+        >
           Failed to load action items.
         </div>
       ) : meetingGroups.length === 0 ? (
-        <div className="rounded-[28px] border border-dashed border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] px-6 py-10 text-sm text-[color:var(--text-secondary)] shadow-[var(--shadow-soft)]">
+        <div
+          role="status"
+          className="rounded-[28px] border border-dashed border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] px-6 py-10 text-sm text-[color:var(--text-secondary)] shadow-[var(--shadow-soft)]"
+        >
           No action items yet.
         </div>
       ) : (
-        <div className="overflow-hidden rounded-[32px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] shadow-[var(--shadow-panel)] xl:grid xl:min-h-[calc(100vh-16rem)] xl:grid-cols-[280px_minmax(0,1fr)_360px]">
-          <MeetingRail
-            groups={meetingGroups}
-            selectedMeetingId={effectiveSelectedMeetingId}
-            onSelectMeeting={setSelectedMeetingId}
-          />
-          <MeetingActionItemsView
-            meetingTitle={selectedMeetingTitle}
-            items={selectedMeetingGroup?.items ?? []}
-            selectedActionItemId={effectiveSelectedActionItemId}
-            onSelectActionItem={setSelectedActionItemId}
-          />
-          <ActionItemContextPanel
-            meetingTitle={selectedMeetingTitle}
-            meetingSummary={selectedMeetingSummary}
-            actionItem={selectedActionItem}
-          />
+        <div className="space-y-4">
+          {actionItemsTruncated ? (
+            <div
+              role="status"
+              className="rounded-[24px] border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"
+            >
+              {`Showing the first ${actionItemsData?.items.length ?? 0} of ${actionItemsData?.total ?? 0} action items.`}
+            </div>
+          ) : null}
+
+          <div className="overflow-hidden rounded-[32px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] shadow-[var(--shadow-panel)] xl:grid xl:min-h-[calc(100vh-16rem)] xl:grid-cols-[280px_minmax(0,1fr)_360px]">
+            <MeetingRail
+              groups={meetingGroups}
+              selectedMeetingId={effectiveSelectedMeetingId}
+              onSelectMeeting={setSelectedMeetingId}
+            />
+            <MeetingActionItemsView
+              meetingTitle={selectedMeetingTitle}
+              items={selectedMeetingGroup?.items ?? []}
+              selectedActionItemId={effectiveSelectedActionItemId}
+              onSelectActionItem={setSelectedActionItemId}
+            />
+            <ActionItemContextPanel
+              meetingTitle={selectedMeetingTitle}
+              meetingSummary={selectedMeetingSummary}
+              actionItem={selectedActionItem}
+            />
+          </div>
         </div>
       )}
     </div>
