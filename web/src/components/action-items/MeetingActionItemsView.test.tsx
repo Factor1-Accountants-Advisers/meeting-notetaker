@@ -34,6 +34,7 @@ describe("MeetingActionItemsView", () => {
     );
 
     expect(screen.getByText("Weekly design review")).toBeVisible();
+    expect(screen.queryByText("Meeting action items")).not.toBeInTheDocument();
     expect(
       screen.getByText("Confirm vendor shortlist and next steps")
     ).toBeVisible();

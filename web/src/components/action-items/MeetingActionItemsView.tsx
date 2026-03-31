@@ -26,9 +26,6 @@ export default function MeetingActionItemsView({
   return (
     <section className="flex h-full min-h-0 flex-col rounded-[32px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] shadow-[var(--shadow-panel)]">
       <div className="border-b border-[color:var(--border-subtle)] px-6 py-5">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[color:var(--text-muted)]">
-          Meeting action items
-        </p>
         <h2 className="mt-2 text-2xl font-semibold tracking-tight text-[color:var(--text-primary)]">
           {meetingTitle}
         </h2>
