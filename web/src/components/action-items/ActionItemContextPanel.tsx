@@ -2,6 +2,8 @@
 
 import { useId } from "react";
 
+import { formatDueDate } from "./dateFormatting";
+
 type ActionItemContextPanelProps = {
   meetingTitle: string;
   meetingSummary: string;
@@ -13,41 +15,6 @@ type ActionItemContextPanelProps = {
     status: string;
   } | null;
 };
-
-function formatDueDate(value: string | null): string {
-  const parsed = parseDueDate(value);
-  if (!parsed) return "No due date";
-
-  return parsed.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    timeZone: "UTC",
-  });
-}
-
-function parseDueDate(value: string | null): Date | null {
-  if (!value) return null;
-
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (!match) return null;
-
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const parsed = new Date(Date.UTC(year, month - 1, day));
-
-  if (
-    Number.isNaN(parsed.getTime()) ||
-    parsed.getUTCFullYear() !== year ||
-    parsed.getUTCMonth() !== month - 1 ||
-    parsed.getUTCDate() !== day
-  ) {
-    return null;
-  }
-
-  return parsed;
-}
 
 function formatStatus(value: string): string {
   if (!value) return "Unknown";
@@ -123,7 +90,9 @@ export default function ActionItemContextPanel({
                   </dd>
                 </div>
                 <div className="flex items-center justify-between gap-4">
-                  <dt className="text-[color:var(--text-secondary)]">Due date</dt>
+                  <dt className="text-[color:var(--text-secondary)]">
+                    Due date
+                  </dt>
                   <dd className="font-medium text-[color:var(--text-primary)]">
                     {formatDueDate(actionItem.due_date)}
                   </dd>

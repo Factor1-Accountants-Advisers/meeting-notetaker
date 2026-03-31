@@ -2,15 +2,7 @@
 
 import type { ActionItem } from "@/types";
 
-function formatDueDate(value: string | null): string {
-  if (!value) return "No due date";
-
-  return new Date(`${value}T00:00:00`).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
+import { formatDueDate } from "./dateFormatting";
 
 export default function MeetingActionItemsView({
   meetingTitle,
@@ -46,6 +38,7 @@ export default function MeetingActionItemsView({
                   key={item.id}
                   type="button"
                   data-selected={selected ? "true" : undefined}
+                  aria-pressed={selected}
                   onClick={() => onSelectActionItem(item.id)}
                   className={`w-full rounded-[24px] border px-4 py-4 text-left transition ${
                     selected

@@ -68,14 +68,34 @@ describe("MeetingActionItemsView", () => {
     );
 
     const selectedRow = screen.getByRole("button", {
+      pressed: true,
       name: /draft follow-up note for stakeholders/i,
     });
     const unselectedRow = screen.getByRole("button", {
+      pressed: false,
       name: /confirm vendor shortlist and next steps/i,
     });
 
     expect(selectedRow).toHaveAttribute("data-selected", "true");
     expect(unselectedRow).not.toHaveAttribute("data-selected");
+  });
+
+  it("falls back safely for impossible due dates in the meeting list", () => {
+    render(
+      <MeetingActionItemsView
+        meetingTitle="Weekly design review"
+        items={[
+          makeItem({
+            due_date: "2026-02-30",
+          }),
+        ]}
+        selectedActionItemId={101}
+        onSelectActionItem={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("No due date")).toBeVisible();
+    expect(screen.queryByText("Mar 2, 2026")).not.toBeInTheDocument();
   });
 
   it("shows an empty state when there are no action items", () => {
