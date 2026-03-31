@@ -37,7 +37,7 @@ export default function MeetingActionItemsView({
             No action items in this meeting.
           </div>
         ) : (
-          <div className="space-y-2">
+          <div role="listbox" aria-label={`Action items for ${meetingTitle}`} className="space-y-2">
             {items.map((item) => {
               const selected = item.id === selectedActionItemId;
 
@@ -45,7 +45,8 @@ export default function MeetingActionItemsView({
                 <button
                   key={item.id}
                   type="button"
-                  aria-current={selected ? "true" : undefined}
+                  role="option"
+                  aria-selected={selected}
                   onClick={() => onSelectActionItem(item.id)}
                   className={`w-full rounded-[24px] border px-4 py-4 text-left transition ${
                     selected

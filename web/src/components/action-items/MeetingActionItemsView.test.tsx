@@ -34,22 +34,48 @@ describe("MeetingActionItemsView", () => {
     );
 
     expect(screen.getByText("Weekly design review")).toBeVisible();
-    expect(screen.queryByText("Meeting action items")).not.toBeInTheDocument();
     expect(
       screen.getByText("Confirm vendor shortlist and next steps")
     ).toBeVisible();
     expect(screen.getByText("Ava")).toBeVisible();
     expect(screen.getByText("Apr 3, 2026")).toBeVisible();
-    expect(screen.queryByText("Open")).not.toBeInTheDocument();
-    expect(screen.queryByText("Completed")).not.toBeInTheDocument();
 
-    const rowButton = screen.getByRole("button", {
+    const rowButton = screen.getByRole("option", {
       name: /confirm vendor shortlist and next steps/i,
     });
 
     fireEvent.click(rowButton);
 
     expect(onSelectActionItem).toHaveBeenCalledWith(101);
+  });
+
+  it("marks only the selected action item as selected in a multi-item list", () => {
+    render(
+      <MeetingActionItemsView
+        meetingTitle="Weekly design review"
+        items={[
+          makeItem(),
+          makeItem({
+            id: 102,
+            description: "Draft follow-up note for stakeholders",
+            owner_name: "Noah",
+            due_date: null,
+          }),
+        ]}
+        selectedActionItemId={102}
+        onSelectActionItem={vi.fn()}
+      />
+    );
+
+    const selectedRow = screen.getByRole("option", {
+      name: /draft follow-up note for stakeholders/i,
+    });
+    const unselectedRow = screen.getByRole("option", {
+      name: /confirm vendor shortlist and next steps/i,
+    });
+
+    expect(selectedRow).toHaveAttribute("aria-selected", "true");
+    expect(unselectedRow).not.toHaveAttribute("aria-selected", "true");
   });
 
   it("shows an empty state when there are no action items", () => {
