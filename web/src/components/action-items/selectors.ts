@@ -44,13 +44,14 @@ export function buildMeetingGroups(
   const groups = new Map<number, MeetingActionItemsGroup>();
 
   for (const item of items) {
+    const status = item.status.toLowerCase();
     const group = groups.get(item.meeting_id);
 
     if (group) {
       group.items.push(item);
-      if (item.status === "complete") {
+      if (status === "complete") {
         group.completedCount += 1;
-      } else {
+      } else if (status === "open") {
         group.openCount += 1;
       }
       if (item.owner_name && !group.owners.includes(item.owner_name)) {
@@ -63,17 +64,13 @@ export function buildMeetingGroups(
       meetingId: item.meeting_id,
       title: titles[item.meeting_id] ?? "",
       items: [item],
-      openCount: item.status === "complete" ? 0 : 1,
-      completedCount: item.status === "complete" ? 1 : 0,
+      openCount: status === "open" ? 1 : 0,
+      completedCount: status === "complete" ? 1 : 0,
       owners: item.owner_name ? [item.owner_name] : [],
     });
   }
 
   return Array.from(groups.values())
-    .map((group) => ({
-      ...group,
-      owners: Array.from(new Set(group.owners)),
-    }))
     .sort((a, b) => {
       if (b.openCount !== a.openCount) {
         return b.openCount - a.openCount;
