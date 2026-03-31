@@ -1,57 +1,134 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { useActionItems } from "@/lib/api";
-import ActionItemsTable from "@/components/ActionItemsTable";
+import { useEffect, useMemo, useState } from "react";
+
+import ActionItemContextPanel from "@/components/action-items/ActionItemContextPanel";
+import MeetingActionItemsView from "@/components/action-items/MeetingActionItemsView";
+import MeetingRail from "@/components/action-items/MeetingRail";
+import { buildMeetingGroups, filterActionItems } from "@/components/action-items/selectors";
+import { useActionItems, useMeeting, useMeetings } from "@/lib/api";
+
+const DEFAULT_FILTERS = {
+  owner: "",
+  search: "",
+  status: "all",
+} as const;
+
+function getMeetingSummary(summaryText: string | null | undefined): string {
+  if (summaryText?.trim()) {
+    return summaryText;
+  }
+
+  return "No meeting summary available.";
+}
 
 export default function ActionItemsPage() {
-  const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
-  const [ownerFilter, setOwnerFilter] = useState<string>("");
-  const { data, error, isLoading } = useActionItems(1, 100, statusFilter);
+  const [selectedMeetingId, setSelectedMeetingId] = useState<number | null>(null);
+  const [selectedActionItemId, setSelectedActionItemId] = useState<number | null>(null);
 
-  // Client-side owner filter (backend doesn't have owner query param)
-  const filtered = useMemo(() => {
-    if (!data) return [];
-    if (!ownerFilter) return data.items;
-    const lower = ownerFilter.toLowerCase();
-    return data.items.filter((i) => i.owner_name?.toLowerCase().includes(lower));
-  }, [data, ownerFilter]);
+  const { data: actionItemsData, error: actionItemsError, isLoading: actionItemsLoading } =
+    useActionItems(1, 100);
+  const { data: meetingsData } = useMeetings(1, 100);
+
+  const filteredItems = useMemo(
+    () => filterActionItems(actionItemsData?.items ?? [], DEFAULT_FILTERS),
+    [actionItemsData?.items]
+  );
+
+  const meetingTitles = useMemo(
+    () =>
+      Object.fromEntries(
+        (meetingsData?.items ?? []).map((meeting) => [meeting.id, meeting.title])
+      ),
+    [meetingsData?.items]
+  );
+
+  const meetingGroups = useMemo(
+    () =>
+      buildMeetingGroups(filteredItems, meetingTitles).map((group) => ({
+        ...group,
+        title: group.title || `Meeting ${group.meetingId}`,
+      })),
+    [filteredItems, meetingTitles]
+  );
+
+  const effectiveSelectedMeetingId =
+    selectedMeetingId != null &&
+    meetingGroups.some((group) => group.meetingId === selectedMeetingId)
+      ? selectedMeetingId
+      : meetingGroups[0]?.meetingId ?? null;
+
+  const selectedMeetingGroup =
+    meetingGroups.find((group) => group.meetingId === effectiveSelectedMeetingId) ?? null;
+
+  const effectiveSelectedActionItemId =
+    selectedActionItemId != null &&
+    selectedMeetingGroup?.items.some((item) => item.id === selectedActionItemId)
+      ? selectedActionItemId
+      : selectedMeetingGroup?.items[0]?.id ?? null;
+
+  const selectedActionItem =
+    selectedMeetingGroup?.items.find((item) => item.id === effectiveSelectedActionItemId) ?? null;
+
+  useEffect(() => {
+    setSelectedMeetingId(effectiveSelectedMeetingId);
+  }, [effectiveSelectedMeetingId]);
+
+  useEffect(() => {
+    setSelectedActionItemId(effectiveSelectedActionItemId);
+  }, [effectiveSelectedActionItemId]);
+
+  const {
+    data: selectedMeeting,
+    error: selectedMeetingError,
+    isLoading: selectedMeetingLoading,
+  } = useMeeting(effectiveSelectedMeetingId ?? undefined);
+
+  const selectedMeetingTitle = selectedMeeting?.title || selectedMeetingGroup?.title || "Action Items";
+
+  const selectedMeetingSummary = selectedMeetingLoading
+    ? "Loading meeting context..."
+    : selectedMeetingError
+      ? "Unable to load meeting context."
+      : getMeetingSummary(selectedMeeting?.summary?.summary_text);
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-gray-100">Action Items</h1>
-        <div className="flex gap-3">
-          <input
-            type="text"
-            placeholder="Filter by owner..."
-            value={ownerFilter}
-            onChange={(e) => setOwnerFilter(e.target.value)}
-            className="rounded-md border border-gray-700 bg-gray-800 px-3 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <select
-            value={statusFilter ?? "all"}
-            onChange={(e) =>
-              setStatusFilter(e.target.value === "all" ? undefined : e.target.value)
-            }
-            className="rounded-md border border-gray-700 bg-gray-800 px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            <option value="all">All</option>
-            <option value="open">Open</option>
-            <option value="complete">Complete</option>
-          </select>
-        </div>
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold text-[color:var(--text-primary)]">Action Items</h1>
       </div>
 
-      {isLoading && <div className="text-gray-500">Loading...</div>}
-      {error && <div className="text-red-400">Failed to load action items.</div>}
-      {data && (
-        <>
-          <ActionItemsTable items={filtered} showMeetingLink />
-          <p className="mt-4 text-sm text-gray-500">
-            {filtered.length} of {data.total} item{data.total !== 1 ? "s" : ""}
-          </p>
-        </>
+      {actionItemsLoading && !actionItemsData ? (
+        <div className="rounded-[28px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] px-6 py-10 text-sm text-[color:var(--text-secondary)] shadow-[var(--shadow-soft)]">
+          Loading action items...
+        </div>
+      ) : actionItemsError ? (
+        <div className="rounded-[28px] border border-red-500/30 bg-red-500/10 px-6 py-10 text-sm text-red-100">
+          Failed to load action items.
+        </div>
+      ) : meetingGroups.length === 0 ? (
+        <div className="rounded-[28px] border border-dashed border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] px-6 py-10 text-sm text-[color:var(--text-secondary)] shadow-[var(--shadow-soft)]">
+          No action items yet.
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-[32px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] shadow-[var(--shadow-panel)] xl:grid xl:min-h-[calc(100vh-16rem)] xl:grid-cols-[280px_minmax(0,1fr)_360px]">
+          <MeetingRail
+            groups={meetingGroups}
+            selectedMeetingId={effectiveSelectedMeetingId}
+            onSelectMeeting={setSelectedMeetingId}
+          />
+          <MeetingActionItemsView
+            meetingTitle={selectedMeetingTitle}
+            items={selectedMeetingGroup?.items ?? []}
+            selectedActionItemId={effectiveSelectedActionItemId}
+            onSelectActionItem={setSelectedActionItemId}
+          />
+          <ActionItemContextPanel
+            meetingTitle={selectedMeetingTitle}
+            meetingSummary={selectedMeetingSummary}
+            actionItem={selectedActionItem}
+          />
+        </div>
       )}
     </div>
   );
