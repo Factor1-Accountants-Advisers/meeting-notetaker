@@ -40,7 +40,7 @@ describe("MeetingActionItemsView", () => {
     expect(screen.getByText("Ava")).toBeVisible();
     expect(screen.getByText("Apr 3, 2026")).toBeVisible();
 
-    const rowButton = screen.getByRole("option", {
+    const rowButton = screen.getByRole("button", {
       name: /confirm vendor shortlist and next steps/i,
     });
 
@@ -67,15 +67,15 @@ describe("MeetingActionItemsView", () => {
       />
     );
 
-    const selectedRow = screen.getByRole("option", {
+    const selectedRow = screen.getByRole("button", {
       name: /draft follow-up note for stakeholders/i,
     });
-    const unselectedRow = screen.getByRole("option", {
+    const unselectedRow = screen.getByRole("button", {
       name: /confirm vendor shortlist and next steps/i,
     });
 
-    expect(selectedRow).toHaveAttribute("aria-selected", "true");
-    expect(unselectedRow).not.toHaveAttribute("aria-selected", "true");
+    expect(selectedRow).toHaveAttribute("data-selected", "true");
+    expect(unselectedRow).not.toHaveAttribute("data-selected");
   });
 
   it("shows an empty state when there are no action items", () => {
