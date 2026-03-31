@@ -39,32 +39,33 @@ describe("filterActionItems", () => {
 describe("buildMeetingGroups", () => {
   it("groups items by source meeting", () => {
     const items = [
-      makeActionItem({ id: 4, meeting_id: 101, owner_name: "maria", status: "open", description: "Product planning review" }),
-      makeActionItem({ id: 5, meeting_id: 101, owner_name: "maria", status: "complete", description: "Product planning review" }),
-      makeActionItem({ id: 1, meeting_id: 100, owner_name: "nina", status: "open", description: "Operations weekly sync" }),
-      makeActionItem({ id: 2, meeting_id: 100, owner_name: "lee", status: "complete", description: "Operations weekly sync" }),
-      makeActionItem({ id: 3, meeting_id: 100, owner_name: "nina", status: "open", description: "Operations weekly sync" }),
+      makeActionItem({ id: 4, meeting_id: 101, owner_name: "maria", status: "open", description: "Alpha planning review" }),
+      makeActionItem({ id: 5, meeting_id: 101, owner_name: "maria", status: "complete", description: "Alpha planning review" }),
+      makeActionItem({ id: 6, meeting_id: 101, owner_name: "sam", status: "open", description: "Alpha planning review" }),
+      makeActionItem({ id: 1, meeting_id: 100, owner_name: "nina", status: "open", description: "Zeta operations sync" }),
+      makeActionItem({ id: 2, meeting_id: 100, owner_name: "lee", status: "complete", description: "Zeta operations sync" }),
+      makeActionItem({ id: 3, meeting_id: 100, owner_name: "nina", status: "open", description: "Zeta operations sync" }),
     ];
 
     const groups = buildMeetingGroups(items, {
-      100: "Operations weekly sync",
-      101: "Product planning review",
+      100: "Zeta operations sync",
+      101: "Alpha planning review",
     });
 
-    expect(groups.map((group) => group.meetingId)).toEqual([100, 101]);
+    expect(groups.map((group) => group.meetingId)).toEqual([101, 100]);
     expect(groups[0]).toMatchObject({
+      meetingId: 101,
+      title: "Alpha planning review",
+      openCount: 2,
+      completedCount: 1,
+      owners: ["maria", "sam"],
+    });
+    expect(groups[1]).toMatchObject({
       meetingId: 100,
-      title: "Operations weekly sync",
+      title: "Zeta operations sync",
       openCount: 2,
       completedCount: 1,
       owners: ["nina", "lee"],
-    });
-    expect(groups[1]).toMatchObject({
-      meetingId: 101,
-      title: "Product planning review",
-      openCount: 1,
-      completedCount: 1,
-      owners: ["maria"],
     });
   });
 });
