@@ -1,9 +1,13 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import ActionItemContextPanel from "./ActionItemContextPanel";
 
 describe("ActionItemContextPanel", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("renders the named context landmark and labeled sections", () => {
     render(
       <ActionItemContextPanel
@@ -40,6 +44,36 @@ describe("ActionItemContextPanel", () => {
     expect(screen.getByText("Ava")).toBeVisible();
     expect(screen.getByText("Apr 3, 2026")).toBeVisible();
     expect(screen.getByText("Open")).toBeVisible();
+  });
+
+  it("formats valid due dates in UTC", () => {
+    const toLocaleDateStringSpy = vi
+      .spyOn(Date.prototype, "toLocaleDateString")
+      .mockReturnValue("Apr 3, 2026");
+
+    render(
+      <ActionItemContextPanel
+        meetingTitle="Weekly design review"
+        meetingSummary="Reviewed the onboarding flow, resolved copy changes, and confirmed the next demo."
+        actionItem={{
+          id: 104,
+          description: "Confirm vendor shortlist and next steps",
+          owner_name: "Ava",
+          due_date: "2026-04-03",
+          status: "open",
+        }}
+      />
+    );
+
+    expect(toLocaleDateStringSpy).toHaveBeenCalledWith(
+      "en-US",
+      expect.objectContaining({
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        timeZone: "UTC",
+      })
+    );
   });
 
   it("falls back safely for invalid due dates and empty owner names", () => {
