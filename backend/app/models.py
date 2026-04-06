@@ -63,6 +63,7 @@ class Meeting(Base):
     duration_seconds = Column(Integer, nullable=True)
     status = Column(Enum(MeetingStatus, values_callable=lambda e: [x.value for x in e]), default=MeetingStatus.PROCESSING, nullable=False, index=True)
     audio_blob_url = Column(String, nullable=True)
+    identity_hints = Column(JSONType, nullable=True)  # {current_user, organizer, source_event_id}
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
 
@@ -82,6 +83,7 @@ class Participant(Base):
     meeting_id = Column(Integer, ForeignKey("meetings.id"), nullable=False, index=True)
     name = Column(String, nullable=False)
     email = Column(String, nullable=True)
+    is_organizer = Column(Boolean, default=False, nullable=False)
 
     # Relationships
     meeting = relationship("Meeting", back_populates="participants")
