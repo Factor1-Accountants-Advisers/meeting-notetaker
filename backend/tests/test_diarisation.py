@@ -204,3 +204,123 @@ class TestDiarisationCeleryTask:
         assert result["meeting_id"] == test_meeting.id
         assert result["status"] == "diarised"
         assert result["speaker_count"] == 2
+
+
+class TestDiarisationWithSpeakerInference:
+    """Tests for diarisation with LLM speaker inference."""
+
+    def test_applies_llm_mapping_when_confident(
+        self,
+        db_session: Session,
+        test_meeting_with_participants: Meeting,
+    ):
+        """Should replace Speaker N with real names when LLM is confident."""
+        from app.services.diarisation import process_diarisation
+
+        transcript = Transcript(
+            meeting_id=test_meeting_with_participants.id,
+            full_text="Thanks Melissa. No worries.",
+            segments=[
+                {"speaker": "A", "start": 0.0, "end": 3.0, "text": "Thanks Melissa, I agree with the plan."},
+                {"speaker": "B", "start": 3.0, "end": 6.0, "text": "No worries, happy to help."},
+            ],
+        )
+        db_session.add(transcript)
+        db_session.commit()
+
+        mock_mapping = {
+            "Speaker 1": {
+                "display_name": "Test User",
+                "email": "test@example.com",
+                "confidence": 0.95,
+                "reasoning": "Speaker 2 is addressed as Melissa, so Speaker 1 is the other participant",
+            },
+            "Speaker 2": {
+                "display_name": "Melissa Hall",
+                "email": "melissa@example.com",
+                "confidence": 0.9,
+                "reasoning": "Addressed as Melissa by Speaker 1",
+            },
+        }
+
+        with patch("app.services.diarisation.infer_speaker_identities", return_value=mock_mapping):
+            updated = process_diarisation(db_session, test_meeting_with_participants.id)
+
+        assert updated.segments[0]["speaker"] == "Test User"
+        assert updated.segments[1]["speaker"] == "Melissa Hall"
+        assert updated.segments[0]["raw_speaker"] == "A"
+        assert updated.segments[1]["raw_speaker"] == "B"
+
+    def test_keeps_generic_labels_when_inference_fails(
+        self,
+        db_session: Session,
+        test_meeting_with_participants: Meeting,
+    ):
+        """Should keep Speaker N labels when LLM inference fails."""
+        from app.services.diarisation import process_diarisation
+
+        transcript = Transcript(
+            meeting_id=test_meeting_with_participants.id,
+            full_text="Hello. Hi.",
+            segments=[
+                {"speaker": "A", "start": 0.0, "end": 3.0, "text": "Hello."},
+                {"speaker": "B", "start": 3.0, "end": 6.0, "text": "Hi."},
+            ],
+        )
+        db_session.add(transcript)
+        db_session.commit()
+
+        with patch("app.services.diarisation.infer_speaker_identities", side_effect=Exception("API down")):
+            updated = process_diarisation(db_session, test_meeting_with_participants.id)
+
+        assert updated.segments[0]["speaker"] == "Speaker 1"
+        assert updated.segments[1]["speaker"] == "Speaker 2"
+
+    def test_keeps_generic_labels_when_no_candidates(
+        self,
+        db_session: Session,
+        test_meeting: Meeting,
+    ):
+        """Should keep Speaker N labels when no identity hints exist."""
+        from app.services.diarisation import process_diarisation
+
+        transcript = Transcript(
+            meeting_id=test_meeting.id,
+            full_text="Hello. Hi.",
+            segments=[
+                {"speaker": "A", "start": 0.0, "end": 3.0, "text": "Hello."},
+                {"speaker": "B", "start": 3.0, "end": 6.0, "text": "Hi."},
+            ],
+        )
+        db_session.add(transcript)
+        db_session.commit()
+
+        updated = process_diarisation(db_session, test_meeting.id)
+
+        assert updated.segments[0]["speaker"] == "Speaker 1"
+        assert updated.segments[1]["speaker"] == "Speaker 2"
+
+    def test_preserves_raw_speaker_on_all_segments(
+        self,
+        db_session: Session,
+        test_meeting_with_participants: Meeting,
+    ):
+        """Every segment should have raw_speaker after diarisation."""
+        from app.services.diarisation import process_diarisation
+
+        transcript = Transcript(
+            meeting_id=test_meeting_with_participants.id,
+            full_text="Hello. Hi.",
+            segments=[
+                {"speaker": "A", "start": 0.0, "end": 3.0, "text": "Hello."},
+                {"speaker": "B", "start": 3.0, "end": 6.0, "text": "Hi."},
+            ],
+        )
+        db_session.add(transcript)
+        db_session.commit()
+
+        with patch("app.services.diarisation.infer_speaker_identities", return_value={}):
+            updated = process_diarisation(db_session, test_meeting_with_participants.id)
+
+        for seg in updated.segments:
+            assert "raw_speaker" in seg

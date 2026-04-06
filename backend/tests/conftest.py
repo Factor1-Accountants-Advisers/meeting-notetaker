@@ -86,6 +86,53 @@ def test_meeting(db_session: Session, test_user: User) -> Meeting:
 
 
 @pytest.fixture
+def test_meeting_with_participants(db_session: Session, test_user: User) -> Meeting:
+    """Create a test meeting with participants and identity hints."""
+    from app.models import Participant
+
+    meeting = Meeting(
+        title="Scheduled Team Meeting",
+        scheduled_time=datetime.utcnow(),
+        status=MeetingStatus.PROCESSING,
+        audio_blob_url="audio/2026/04/06/test_audio.wav",
+        user_id=test_user.id,
+        identity_hints={
+            "current_user": {
+                "name": "Test User",
+                "email": "test@example.com",
+                "azure_ad_id": "test-azure-id-123",
+                "is_current_user": True,
+            },
+            "organizer": {
+                "name": "Melissa Hall",
+                "email": "melissa@example.com",
+                "is_organizer": True,
+            },
+            "source_event_id": "evt-123",
+        },
+    )
+    db_session.add(meeting)
+    db_session.flush()
+
+    p1 = Participant(
+        meeting_id=meeting.id,
+        name="Test User",
+        email="test@example.com",
+        is_organizer=False,
+    )
+    p2 = Participant(
+        meeting_id=meeting.id,
+        name="Melissa Hall",
+        email="melissa@example.com",
+        is_organizer=True,
+    )
+    db_session.add_all([p1, p2])
+    db_session.commit()
+    db_session.refresh(meeting)
+    return meeting
+
+
+@pytest.fixture
 def sample_audio_file() -> Generator[str, None, None]:
     """Create a temporary sample audio file for testing."""
     # Create a minimal WAV file header (44 bytes) + some data
