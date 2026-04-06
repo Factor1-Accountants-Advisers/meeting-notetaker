@@ -188,3 +188,45 @@ class TestInferSpeakerIdentities:
             mapping = infer_speaker_identities(segments, candidates)
 
         assert mapping == {}
+
+    def test_returns_empty_mapping_on_non_list_mappings(self):
+        from app.services.speaker_inference import infer_speaker_identities
+
+        segments = [{"speaker": "Speaker 1", "start": 0.0, "end": 1.0, "text": "Hello"}]
+        candidates = [{"display_name": "Alice", "email": "a@b.com", "is_organizer": False, "is_recorder": False}]
+
+        # LLM returns valid JSON but mappings is a string (schema violation)
+        mock_response_content = json.dumps({"mappings": "Speaker 1 is Alice"})
+        mock_client = Mock()
+        mock_choice = Mock()
+        mock_choice.message.content = mock_response_content
+        mock_client.chat.completions.create.return_value = Mock(choices=[mock_choice])
+
+        with patch("app.services.speaker_inference.get_openai_client", return_value=mock_client):
+            mapping = infer_speaker_identities(segments, candidates)
+
+        assert mapping == {}
+
+    def test_returns_empty_mapping_on_non_numeric_confidence(self):
+        from app.services.speaker_inference import infer_speaker_identities
+
+        segments = [{"speaker": "Speaker 1", "start": 0.0, "end": 1.0, "text": "Hello"}]
+        candidates = [{"display_name": "Alice", "email": "a@b.com", "is_organizer": False, "is_recorder": False}]
+
+        # LLM returns confidence as a string instead of a float
+        mock_response_content = json.dumps({
+            "mappings": [
+                {"speaker_label": "Speaker 1", "assigned_name": "Alice", "assigned_email": "a@b.com", "confidence": "high", "reasoning": "test"},
+            ]
+        })
+        mock_client = Mock()
+        mock_choice = Mock()
+        mock_choice.message.content = mock_response_content
+        mock_client.chat.completions.create.return_value = Mock(choices=[mock_choice])
+
+        with patch("app.services.speaker_inference.get_openai_client", return_value=mock_client):
+            # Must not raise, must return empty mapping (or skip the bad entry)
+            mapping = infer_speaker_identities(segments, candidates)
+
+        # Approach A: whole call returns {} because TypeError caught
+        assert mapping == {}

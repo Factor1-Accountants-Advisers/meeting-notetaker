@@ -178,26 +178,26 @@ def infer_speaker_identities(
         )
 
         result = json.loads(response.choices[0].message.content)
+
+        mapping = {}
+        for entry in result.get("mappings", []):
+            label = entry.get("speaker_label")
+            name = entry.get("assigned_name")
+            confidence = entry.get("confidence", 0.0)
+
+            if label and name and confidence >= confidence_threshold:
+                mapping[label] = {
+                    "display_name": name,
+                    "email": entry.get("assigned_email"),
+                    "confidence": confidence,
+                    "reasoning": entry.get("reasoning", ""),
+                }
+            else:
+                logger.info(
+                    f"Speaker '{label}' not mapped: confidence={confidence}, name={name}"
+                )
+
+        return mapping
     except Exception as e:
-        logger.warning(f"Speaker inference LLM call failed: {e}")
+        logger.warning(f"Speaker inference failed: {e}")
         return {}
-
-    mapping = {}
-    for entry in result.get("mappings", []):
-        label = entry.get("speaker_label")
-        name = entry.get("assigned_name")
-        confidence = entry.get("confidence", 0.0)
-
-        if label and name and confidence >= confidence_threshold:
-            mapping[label] = {
-                "display_name": name,
-                "email": entry.get("assigned_email"),
-                "confidence": confidence,
-                "reasoning": entry.get("reasoning", ""),
-            }
-        else:
-            logger.info(
-                f"Speaker '{label}' not mapped: confidence={confidence:.2f}, name={name}"
-            )
-
-    return mapping
