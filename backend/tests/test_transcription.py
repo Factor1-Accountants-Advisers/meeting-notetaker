@@ -381,6 +381,62 @@ class TestTranscriptionPipeline:
                 assert "Outside Organizer" in names, f"Expected 'Outside Organizer' in {names}"
                 assert "Outside Recorder" in names, f"Expected 'Outside Recorder' in {names}"
 
+    def test_process_transcription_survives_malformed_identity_hints(
+        self, db_session: Session, test_user: User, sample_audio_file
+    ):
+        """Malformed identity_hints (non-dict shape) must NOT abort transcription.
+
+        The JSON column has no schema enforcement on its internal shape, so a
+        list/string/garbage value could appear. The enrichment must degrade
+        gracefully and let transcription continue with the participant-only name pool.
+        """
+        from app.models import Meeting, MeetingStatus, Participant
+        from app.services.transcription import process_transcription
+        from datetime import datetime
+
+        meeting = Meeting(
+            title="Malformed Hints Test",
+            scheduled_time=datetime.utcnow(),
+            status=MeetingStatus.PROCESSING,
+            audio_blob_url="audio/2026/04/06/malformed_hints.wav",
+            user_id=test_user.id,
+            # Garbage shape — not a dict. Could be a stringified value, an array, anything.
+            identity_hints=["not", "a", "dict"],
+        )
+        db_session.add(meeting)
+        db_session.flush()
+
+        participant = Participant(
+            meeting_id=meeting.id,
+            name="Real Attendee",
+            email="real@example.com",
+            is_organizer=False,
+        )
+        db_session.add(participant)
+        db_session.commit()
+        db_session.refresh(meeting)
+
+        with patch("app.services.transcription.download_audio") as mock_download:
+            mock_download.return_value = sample_audio_file
+
+            with patch("app.services.transcription.transcribe_audio") as mock_transcribe:
+                mock_transcribe.return_value = {
+                    "text": "Test",
+                    "segments": [{"speaker": "A", "start": 0.0, "end": 1.0, "text": "Test"}],
+                    "speaker_identified": False,
+                }
+
+                # Must not raise — pipeline continues, status does not become FAILED.
+                process_transcription(db_session, meeting.id)
+
+                names = mock_transcribe.call_args.kwargs.get("participant_names", [])
+                assert names == ["Real Attendee"], (
+                    f"Expected only the participant name, got {names}"
+                )
+
+        db_session.refresh(meeting)
+        assert meeting.status != MeetingStatus.FAILED
+
 
 class TestCeleryTask:
     """Tests for Celery task integration."""
