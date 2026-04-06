@@ -1,7 +1,9 @@
 """FastAPI application entry point."""
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 
@@ -9,11 +11,11 @@ from app.core.config import settings
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events for startup and shutdown."""
-    # Startup: Initialize resources
-    # (Database connection is handled by SQLAlchemy's pool)
+    # Startup: auto-create tables for SQLite (no Alembic needed in dev)
+    if settings.database_url.startswith("sqlite"):
+        from app.core.database import create_tables
+        await create_tables()
     yield
-    # Shutdown: Clean up resources
-    # (Database connections are automatically closed by SQLAlchemy)
 
 
 # Create FastAPI app
@@ -38,6 +40,16 @@ from app.routers import users, meetings, action_items
 app.include_router(users.router)
 app.include_router(meetings.router)
 app.include_router(action_items.router)
+
+
+# Serve local audio files when using LocalFileStorage
+_storage_mode = (settings.storage_backend or "").lower()
+if _storage_mode != "minio" and not settings.azure_storage_connection_string:
+    _audio_dir = os.path.abspath(
+        settings.local_storage_dir or os.path.join(os.getcwd(), "data", "audio")
+    )
+    os.makedirs(_audio_dir, exist_ok=True)
+    app.mount("/api/audio", StaticFiles(directory=_audio_dir), name="audio-files")
 
 
 @app.get("/health")

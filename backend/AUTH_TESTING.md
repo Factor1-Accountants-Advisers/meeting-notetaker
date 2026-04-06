@@ -2,6 +2,18 @@
 
 This guide explains how to test the Azure AD JWT authentication implementation.
 
+## Important
+
+The app now runs natively by default for local development.
+Use Docker in this guide only when you specifically need the containerized backend stack.
+
+Preferred local backend startup:
+
+```powershell
+cd C:\Projects\meeting-notetaker\backend
+uvicorn app.main:app --reload --port 8000
+```
+
 ## Overview
 
 The authentication system validates Azure AD JWT tokens using:

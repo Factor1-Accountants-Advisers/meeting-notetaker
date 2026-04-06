@@ -2,6 +2,16 @@
 
 This guide explains how to test the meeting upload endpoint and verify blob storage + Celery integration.
 
+## Important
+
+This guide is Docker-oriented because it covers MinIO + Celery integration.
+For normal local app development, the preferred backend startup is native:
+
+```powershell
+cd C:\Projects\meeting-notetaker\backend
+uvicorn app.main:app --reload --port 8000
+```
+
 ## Overview
 
 The upload endpoint:

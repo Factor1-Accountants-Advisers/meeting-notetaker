@@ -1,3 +1,6 @@
+# OPTIONAL: Docker Compose is no longer required for local development.
+# The app runs natively with SQLite + local file storage.
+# Use this only if you want a production-like setup with PostgreSQL + MinIO.
 services:
   postgres:
     image: postgres:16-alpine

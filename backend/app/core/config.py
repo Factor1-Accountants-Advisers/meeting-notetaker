@@ -17,14 +17,15 @@ class Settings(BaseSettings):
     azure_storage_connection_string: str = ""
     azure_storage_container_name: str = "meeting-audio"
 
-    # Database
-    database_url: str = "postgresql+asyncpg://meetings_user:meetings_password@postgres:5432/meetings_db"
+    # Database (SQLite default for dev, PostgreSQL for production)
+    database_url: str = "sqlite+aiosqlite:///./data/meetings.db"
 
-    # Redis
-    redis_url: str = "redis://redis:6379/0"
+    # Storage backend: "local" (default), "minio", or auto-detect Azure
+    storage_backend: str = "local"
+    local_storage_dir: str = ""  # defaults to ./data/audio
 
-    # MinIO (local development)
-    minio_endpoint: str = "http://minio:9000"
+    # MinIO (only needed if storage_backend=minio)
+    minio_endpoint: str = "http://localhost:9000"
     minio_access_key: str = "minioadmin"
     minio_secret_key: str = "minioadmin"
 
@@ -47,7 +48,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=(".env", ".env.local"),
         env_file_encoding="utf-8",
-        case_sensitive=False
+        case_sensitive=False,
+        extra="ignore",  # Ignore legacy env vars (REDIS_URL, etc.)
     )
 
 

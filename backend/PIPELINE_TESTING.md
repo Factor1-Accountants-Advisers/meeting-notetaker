@@ -2,6 +2,16 @@
 
 Testing the Transcription and Diarisation workers.
 
+## Important
+
+This guide is for the heavier pipeline stack.
+Normal local app development is now native and does not require Docker by default:
+
+```powershell
+cd C:\Projects\meeting-notetaker\backend
+uvicorn app.main:app --reload --port 8000
+```
+
 ## Prerequisites
 
 1. **Docker Desktop** with WSL integration enabled

@@ -193,6 +193,8 @@ def process_summarisation(db: Session, meeting_id: int) -> Tuple[Summary, List[A
 
     # Query meeting
     meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+    if not meeting:
+        raise ValueError(f"Meeting not found: {meeting_id}")
 
     # Set status to SUMMARISING
     meeting.status = MeetingStatus.SUMMARISING
@@ -205,6 +207,9 @@ def process_summarisation(db: Session, meeting_id: int) -> Tuple[Summary, List[A
         # Fallback to full_text if segments are empty
         if not formatted_text and transcript.full_text:
             formatted_text = transcript.full_text
+
+        if not formatted_text or not formatted_text.strip():
+            raise ValueError(f"Transcript for meeting {meeting_id} has no content to summarise")
 
         # Call OpenAI API
         result = call_llm_api(formatted_text)

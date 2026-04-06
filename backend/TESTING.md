@@ -2,6 +2,19 @@
 
 This document outlines how to test each step of the backend implementation.
 
+## Important
+
+Normal local development is now native, not Docker-first.
+
+For everyday app development, run the backend with:
+
+```powershell
+cd C:\Projects\meeting-notetaker\backend
+uvicorn app.main:app --reload --port 8000
+```
+
+Use Docker in this document only when you explicitly want the production-like stack.
+
 ## Prerequisites
 
 - Docker and Docker Compose installed and WSL integration enabled

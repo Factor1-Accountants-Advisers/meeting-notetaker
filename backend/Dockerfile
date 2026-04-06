@@ -18,7 +18,7 @@ RUN pip install --upgrade pip
 # Copy requirements
 COPY requirements-base.txt ./
 
-# Install base dependencies
+# Install backend runtime dependencies without the legacy heavy ML stack.
 RUN pip install --no-cache-dir -r requirements-base.txt
 
 # Install PyTorch CPU version

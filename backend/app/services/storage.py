@@ -60,6 +60,67 @@ class StorageBackend(ABC):
         pass
 
 
+class LocalFileStorage(StorageBackend):
+    """Local filesystem storage backend for development without Docker.
+
+    Stores files in a local directory, serving them via direct file paths.
+    """
+
+    def __init__(self):
+        self.base_dir = os.path.abspath(
+            settings.local_storage_dir or os.path.join(os.getcwd(), "data", "audio")
+        )
+        os.makedirs(self.base_dir, exist_ok=True)
+        logger.info(f"Using local file storage: {self.base_dir}")
+
+    async def upload_file(
+        self,
+        file: BinaryIO,
+        filename: str,
+        content_type: str = "audio/wav"
+    ) -> str:
+        timestamp = datetime.utcnow().strftime("%Y/%m/%d")
+        unique_id = uuid.uuid4().hex[:12]
+        blob_path = f"audio/{timestamp}/{unique_id}_{filename}"
+
+        full_path = os.path.join(self.base_dir, blob_path)
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+
+        with open(full_path, "wb") as f:
+            while chunk := file.read(8192):
+                f.write(chunk)
+
+        logger.info(f"Saved file locally: {blob_path}")
+        return blob_path
+
+    def download_file(self, blob_path: str, local_path: str) -> str:
+        full_path = os.path.join(self.base_dir, blob_path)
+        if not os.path.exists(full_path):
+            raise FileNotFoundError(f"Local file not found: {full_path}")
+
+        import shutil
+        shutil.copy2(full_path, local_path)
+        logger.info(f"Copied local file: {blob_path} -> {local_path}")
+        return local_path
+
+    async def get_signed_url(self, blob_path: str, expires_in: int = 3600) -> str:
+        full_path = os.path.join(self.base_dir, blob_path)
+        if not os.path.exists(full_path):
+            raise FileNotFoundError(f"Local file not found: {full_path}")
+        # Return a URL that the FastAPI static file endpoint can serve
+        return f"/api/audio/{blob_path}"
+
+    async def delete_file(self, blob_path: str) -> bool:
+        full_path = os.path.join(self.base_dir, blob_path)
+        try:
+            os.unlink(full_path)
+            logger.info(f"Deleted local file: {blob_path}")
+            return True
+        except OSError as e:
+            logger.error(f"Failed to delete local file: {e}")
+            return False
+
+
 class MinIOStorage(StorageBackend):
     """MinIO storage backend for local development.
 
@@ -277,14 +338,23 @@ class AzureBlobStorage(StorageBackend):
 def get_storage_backend() -> StorageBackend:
     """Get the appropriate storage backend based on environment.
 
-    Uses MinIO for local development, Azure Blob Storage for production.
+    Priority:
+    1. Azure Blob Storage (if connection string is set)
+    2. MinIO (if minio_endpoint points to a running instance)
+    3. Local file storage (no external dependencies)
     """
-    if settings.environment == "development" or not settings.azure_storage_connection_string:
-        logger.info("Using MinIO storage backend")
-        return MinIOStorage()
-    else:
+    if settings.azure_storage_connection_string:
         logger.info("Using Azure Blob Storage backend")
         return AzureBlobStorage()
+
+    storage_mode = (settings.storage_backend or "").lower()
+    if storage_mode == "minio":
+        logger.info("Using MinIO storage backend")
+        return MinIOStorage()
+
+    # Default: local filesystem (no Docker needed)
+    logger.info("Using local file storage backend")
+    return LocalFileStorage()
 
 
 # Global storage instance (lazy-loaded)

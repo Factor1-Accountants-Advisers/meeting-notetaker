@@ -28,7 +28,7 @@ from app.schemas import (
     ActionItemResponse,
 )
 from app.services.storage import get_storage
-from app.services.pipeline import process_meeting
+from app.services.pipeline import enqueue_meeting
 from app.services.audio import extract_audio_from_video
 
 logger = logging.getLogger(__name__)
@@ -142,13 +142,14 @@ async def upload_meeting(
             detail=f"Invalid metadata: {str(e)}"
         )
 
+    opened_file = None
+    temp_files: list[str] = []
     try:
         # If video file, extract audio first
         file_ext = os.path.splitext(audio_file.filename or "")[1].lower()
         upload_file = audio_file.file
         upload_filename = audio_file.filename or "recording.wav"
         upload_content_type = "audio/wav"
-        temp_files: list[str] = []
 
         if file_ext in VIDEO_EXTENSIONS:
             # Save uploaded video to temp file, then extract audio
@@ -161,7 +162,8 @@ async def upload_meeting(
                 temp_video.close()
                 extracted_path = extract_audio_from_video(temp_video.name)
                 temp_files.append(extracted_path)
-                upload_file = open(extracted_path, "rb")
+                opened_file = open(extracted_path, "rb")
+                upload_file = opened_file
                 upload_filename = os.path.splitext(upload_filename)[0] + ".wav"
                 logger.info(f"Extracted audio from video: {audio_file.filename}")
             except RuntimeError as e:
@@ -179,13 +181,6 @@ async def upload_meeting(
             filename=upload_filename,
             content_type=upload_content_type,
         )
-
-        # Clean up temp files
-        for tf in temp_files:
-            try:
-                os.unlink(tf)
-            except OSError:
-                pass
 
         logger.info(f"Audio uploaded to: {blob_path}")
 
@@ -214,9 +209,8 @@ async def upload_meeting(
 
         logger.info(f"Meeting record created: {meeting.id}")
 
-        # Enqueue processing task
-        task = process_meeting.delay(meeting.id)
-        logger.info(f"Processing task enqueued: {task.id} for meeting {meeting.id}")
+        # Launch processing pipeline in background thread
+        enqueue_meeting(meeting.id)
 
         return MeetingUploadResponse(
             meeting_id=meeting.id,
@@ -231,6 +225,14 @@ async def upload_meeting(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to process upload"
         )
+    finally:
+        if opened_file:
+            opened_file.close()
+        for tf in temp_files:
+            try:
+                os.unlink(tf)
+            except OSError:
+                pass
 
 
 @router.get("", response_model=MeetingListResponse)
@@ -264,37 +266,48 @@ async def list_meetings(
     )
     total = count_result.scalar() or 0
 
-    # Fetch page
+    # Correlated subqueries to avoid N+1
+    participant_count_sq = (
+        select(func.count())
+        .where(Participant.meeting_id == Meeting.id)
+        .correlate(Meeting)
+        .scalar_subquery()
+        .label("participant_count")
+    )
+    has_summary_sq = (
+        select(func.count())
+        .where(Summary.meeting_id == Meeting.id)
+        .correlate(Meeting)
+        .scalar_subquery()
+        .label("summary_count")
+    )
+
+    # Fetch page with counts in a single query
     offset = (page - 1) * per_page
     result = await db.execute(
-        base.order_by(Meeting.created_at.desc())
+        select(Meeting, participant_count_sq, has_summary_sq)
+        .where(Meeting.user_id == current_user.id)
+        .where(
+            Meeting.status == MeetingStatus(status_filter) if status_filter else True
+        )
+        .where(Meeting.created_at >= date_from if date_from else True)
+        .where(Meeting.created_at <= date_to if date_to else True)
+        .order_by(Meeting.created_at.desc())
         .offset(offset)
         .limit(per_page)
     )
-    meetings = result.scalars().all()
+    rows = result.all()
 
     items = []
-    for m in meetings:
-        # Participant count
-        p_result = await db.execute(
-            select(func.count()).where(Participant.meeting_id == m.id)
-        )
-        participant_count = p_result.scalar() or 0
-
-        # Has summary?
-        s_result = await db.execute(
-            select(func.count()).where(Summary.meeting_id == m.id)
-        )
-        has_summary = (s_result.scalar() or 0) > 0
-
+    for m, participant_count, summary_count in rows:
         items.append(MeetingListItem(
             id=m.id,
             title=m.title,
             scheduled_time=m.scheduled_time,
             duration_seconds=m.duration_seconds,
             status=m.status.value,
-            participant_count=participant_count,
-            has_summary=has_summary,
+            participant_count=participant_count or 0,
+            has_summary=(summary_count or 0) > 0,
             created_at=m.created_at,
         ))
 
@@ -498,8 +511,8 @@ async def retry_meeting(
     meeting.status = MeetingStatus.PROCESSING
     await db.commit()
 
-    task = process_meeting.delay(meeting.id)
-    logger.info(f"Retry task enqueued: {task.id} for meeting {meeting.id}")
+    enqueue_meeting(meeting.id)
+    logger.info(f"Retry enqueued for meeting {meeting.id}")
 
     return MeetingUploadResponse(meeting_id=meeting.id, status="processing")
 

@@ -2,6 +2,7 @@
 import enum
 from datetime import datetime
 from sqlalchemy import (
+    Boolean,
     Column,
     Integer,
     String,
@@ -10,11 +11,15 @@ from sqlalchemy import (
     Enum,
     Text,
     Date,
+    JSON,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
+
+# Use JSON type which works on both PostgreSQL (as JSONB) and SQLite (as TEXT).
+# PostgreSQL will use its native JSON support; SQLite serializes to text.
+JSONType = JSON
 
 
 class MeetingStatus(str, enum.Enum):
@@ -89,7 +94,8 @@ class Transcript(Base):
     id = Column(Integer, primary_key=True, index=True)
     meeting_id = Column(Integer, ForeignKey("meetings.id"), unique=True, nullable=False, index=True)
     full_text = Column(Text, nullable=True)
-    segments = Column(JSONB, nullable=True)  # Array of {speaker, start, end, text}
+    segments = Column(JSONType, nullable=True)  # Array of {speaker, start, end, text}
+    speaker_identified = Column(Boolean, default=False, nullable=False)  # True when AssemblyAI matched real names
 
     # Relationships
     meeting = relationship("Meeting", back_populates="transcript")
@@ -102,8 +108,8 @@ class Summary(Base):
     id = Column(Integer, primary_key=True, index=True)
     meeting_id = Column(Integer, ForeignKey("meetings.id"), unique=True, nullable=False, index=True)
     summary_text = Column(Text, nullable=True)
-    key_points = Column(JSONB, nullable=True)  # Array of strings
-    follow_ups = Column(JSONB, nullable=True)  # Array of strings
+    key_points = Column(JSONType, nullable=True)  # Array of strings
+    follow_ups = Column(JSONType, nullable=True)  # Array of strings
 
     # Relationships
     meeting = relationship("Meeting", back_populates="summary")

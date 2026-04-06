@@ -97,9 +97,18 @@ def process_diarisation(db: Session, meeting_id: int) -> Transcript:
         meeting.status = MeetingStatus.DIARISING
         db.commit()
 
-        # Rename speakers to human-readable names
-        logger.info(f"Renaming speaker labels for meeting {meeting_id}")
-        final_segments = rename_speakers(transcript.segments or [])
+        segments = transcript.segments or []
+
+        if transcript.speaker_identified:
+            # AssemblyAI already mapped speakers to real names — skip renaming
+            logger.info(
+                f"Meeting {meeting_id}: speaker identification was used, skipping rename"
+            )
+            final_segments = segments
+        else:
+            # Fall back to generic numbering (Speaker 1, Speaker 2, ...)
+            logger.info(f"Renaming speaker labels for meeting {meeting_id}")
+            final_segments = rename_speakers(segments)
 
         # Count unique speakers
         speakers = {seg.get("speaker") for seg in final_segments}

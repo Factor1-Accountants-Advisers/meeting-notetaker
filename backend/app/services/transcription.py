@@ -14,12 +14,12 @@ OWASP: No sensitive data logged, fail-closed on errors.
 import os
 import logging
 import tempfile
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models import Meeting, Transcript, MeetingStatus
+from app.models import Meeting, Participant, Transcript, MeetingStatus
 from app.services.storage import get_storage
 
 logger = logging.getLogger(__name__)
@@ -64,17 +64,22 @@ def download_audio(blob_path: str) -> str:
         raise FileNotFoundError(f"Could not download audio: {blob_path}")
 
 
-def transcribe_audio(audio_path: str) -> Dict[str, Any]:
+def transcribe_audio(
+    audio_path: str,
+    participant_names: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """Transcribe audio file using AssemblyAI with speaker diarisation.
 
     Sends the audio to AssemblyAI's API which returns both the transcript
-    and speaker labels in a single call.
+    and speaker labels in a single call. When participant names are provided,
+    uses AssemblyAI's Speaker Identification to map voices to real names.
 
     Args:
         audio_path: Path to the local audio file
+        participant_names: Optional list of attendee names for speaker identification
 
     Returns:
-        Dictionary with 'text' and 'segments' keys.
+        Dictionary with 'text', 'segments', and 'speaker_identified' keys.
         Each segment has: speaker, start, end, text
 
     Raises:
@@ -86,12 +91,32 @@ def transcribe_audio(audio_path: str) -> Dict[str, Any]:
 
     aai = get_assemblyai_client()
 
-    config = aai.TranscriptionConfig(
-        speaker_labels=True,
-        language_code="en",
-        speech_models=["universal-2"],
-    )
+    config_kwargs: Dict[str, Any] = {
+        "speaker_labels": True,
+        "language_code": "en",
+        "speech_models": ["universal-2"],
+    }
 
+    # When we know participant names, enable Speaker Identification
+    # so AssemblyAI returns real names instead of generic A/B/C labels.
+    names = [n.strip() for n in (participant_names or []) if n.strip()]
+    speaker_identified = False
+
+    if names:
+        logger.info(f"Speaker identification enabled with {len(names)} names: {names}")
+        config_kwargs["speech_understanding"] = aai.SpeechUnderstandingRequest(
+            request=aai.SpeechUnderstandingFeatureRequests(
+                speaker_identification=aai.SpeakerIdentificationRequest(
+                    speaker_type="name",
+                    known_values=names,
+                )
+            )
+        )
+        # Boost transcription accuracy for names spoken aloud
+        config_kwargs["keyterms_prompt"] = names
+        speaker_identified = True
+
+    config = aai.TranscriptionConfig(**config_kwargs)
     transcriber = aai.Transcriber()
 
     logger.info(f"Starting AssemblyAI transcription: {audio_path}")
@@ -116,6 +141,7 @@ def transcribe_audio(audio_path: str) -> Dict[str, Any]:
     return {
         "text": transcript.text or "",
         "segments": segments,
+        "speaker_identified": speaker_identified,
     }
 
 
@@ -139,6 +165,7 @@ def save_transcript(
         meeting_id=meeting_id,
         full_text=transcription_result["text"],
         segments=transcription_result["segments"],
+        speaker_identified=transcription_result.get("speaker_identified", False),
     )
 
     db.add(transcript)
@@ -190,13 +217,21 @@ def process_transcription(db: Session, meeting_id: int) -> Transcript:
         meeting.status = MeetingStatus.TRANSCRIBING
         db.commit()
 
+        # Collect participant names for speaker identification
+        participants = db.query(Participant).filter(
+            Participant.meeting_id == meeting_id
+        ).all()
+        participant_names = [p.name for p in participants if p.name]
+        if participant_names:
+            logger.info(f"Meeting {meeting_id}: {len(participant_names)} participants for speaker ID")
+
         # Download audio
         logger.info(f"Downloading audio for meeting {meeting_id}")
         local_audio_path = download_audio(meeting.audio_blob_url)
 
-        # Transcribe + diarise via AssemblyAI
+        # Transcribe + diarise via AssemblyAI (with speaker identification if names available)
         logger.info(f"Transcribing meeting {meeting_id} via AssemblyAI")
-        transcription_result = transcribe_audio(local_audio_path)
+        transcription_result = transcribe_audio(local_audio_path, participant_names=participant_names)
 
         # Save results
         transcript = save_transcript(db, meeting_id, transcription_result)
