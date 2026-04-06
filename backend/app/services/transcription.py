@@ -222,6 +222,20 @@ def process_transcription(db: Session, meeting_id: int) -> Transcript:
             Participant.meeting_id == meeting_id
         ).all()
         participant_names = [p.name for p in participants if p.name]
+
+        # Enrich name pool with organizer and current user from identity hints.
+        # These may not be in the Participant table (e.g., admin-recorded meetings),
+        # but giving AssemblyAI more candidate names increases speaker_identified hit rate
+        # and may let us skip the LLM inference step entirely.
+        identity_hints = meeting.identity_hints or {}
+        organizer_name = (identity_hints.get("organizer") or {}).get("name")
+        if organizer_name and organizer_name not in participant_names:
+            participant_names.append(organizer_name)
+
+        current_user_name = (identity_hints.get("current_user") or {}).get("name")
+        if current_user_name and current_user_name not in participant_names:
+            participant_names.append(current_user_name)
+
         if participant_names:
             logger.info(f"Meeting {meeting_id}: {len(participant_names)} participants for speaker ID")
 

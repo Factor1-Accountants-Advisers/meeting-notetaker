@@ -293,6 +293,94 @@ class TestTranscriptionPipeline:
         assert len(transcript.segments) == 2
         assert transcript.segments[0]["speaker"] == "A"
 
+    def test_process_transcription_includes_organizer_and_user_names(
+        self, db_session: Session, test_meeting_with_participants: Meeting, sample_audio_file
+    ):
+        """Should pass organizer and current user names to AssemblyAI."""
+        from app.services.transcription import process_transcription
+
+        with patch("app.services.transcription.download_audio") as mock_download:
+            mock_download.return_value = sample_audio_file
+
+            with patch("app.services.transcription.transcribe_audio") as mock_transcribe:
+                mock_transcribe.return_value = {
+                    "text": "Test",
+                    "segments": [{"speaker": "A", "start": 0.0, "end": 1.0, "text": "Test"}],
+                    "speaker_identified": False,
+                }
+
+                process_transcription(db_session, test_meeting_with_participants.id)
+
+                # Verify name pool includes organizer and current user
+                names = mock_transcribe.call_args.kwargs.get("participant_names", [])
+                assert "Melissa Hall" in names
+                assert "Test User" in names
+
+
+    def test_process_transcription_includes_organizer_and_current_user_from_identity_hints(
+        self, db_session: Session, test_user: User, sample_audio_file
+    ):
+        """Should add organizer and current_user names from identity_hints to the AssemblyAI name pool, even when they are not in the Participant table."""
+        from app.models import Meeting, MeetingStatus, Participant
+        from app.services.transcription import process_transcription
+        from datetime import datetime
+
+        # Create a meeting whose identity_hints reference names that are NOT in the participants table
+        meeting = Meeting(
+            title="Identity Hints Enrichment Test",
+            scheduled_time=datetime.utcnow(),
+            status=MeetingStatus.PROCESSING,
+            audio_blob_url="audio/2026/04/06/identity_hints_test.wav",
+            user_id=test_user.id,
+            identity_hints={
+                "current_user": {
+                    "name": "Outside Recorder",
+                    "email": "recorder@external.example.com",
+                    "is_current_user": True,
+                },
+                "organizer": {
+                    "name": "Outside Organizer",
+                    "email": "organizer@external.example.com",
+                    "is_organizer": True,
+                },
+                "source_event_id": "evt-strong-test",
+            },
+        )
+        db_session.add(meeting)
+        db_session.flush()
+
+        # Add ONE participant who is NEITHER the organizer NOR the current user
+        only_participant = Participant(
+            meeting_id=meeting.id,
+            name="Other Attendee",
+            email="other@example.com",
+            is_organizer=False,
+        )
+        db_session.add(only_participant)
+        db_session.commit()
+        db_session.refresh(meeting)
+
+        with patch("app.services.transcription.download_audio") as mock_download:
+            mock_download.return_value = sample_audio_file
+
+            with patch("app.services.transcription.transcribe_audio") as mock_transcribe:
+                mock_transcribe.return_value = {
+                    "text": "Test",
+                    "segments": [{"speaker": "A", "start": 0.0, "end": 1.0, "text": "Test"}],
+                    "speaker_identified": False,
+                }
+
+                process_transcription(db_session, meeting.id)
+
+                names = mock_transcribe.call_args.kwargs.get("participant_names", [])
+
+                # The participant must still be there
+                assert "Other Attendee" in names, f"Expected 'Other Attendee' in {names}"
+
+                # These can ONLY come from identity_hints enrichment — they are not Participants
+                assert "Outside Organizer" in names, f"Expected 'Outside Organizer' in {names}"
+                assert "Outside Recorder" in names, f"Expected 'Outside Recorder' in {names}"
+
 
 class TestCeleryTask:
     """Tests for Celery task integration."""
