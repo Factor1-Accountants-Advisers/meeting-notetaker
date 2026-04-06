@@ -324,3 +324,37 @@ class TestDiarisationWithSpeakerInference:
 
         for seg in updated.segments:
             assert "raw_speaker" in seg
+
+    def test_keeps_generic_labels_when_candidate_pool_fails(
+        self,
+        db_session: Session,
+        test_meeting_with_participants: Meeting,
+    ):
+        """Should keep generic labels if build_candidate_pool raises (e.g., malformed identity_hints)."""
+        from app.services.diarisation import process_diarisation
+
+        transcript = Transcript(
+            meeting_id=test_meeting_with_participants.id,
+            full_text="Hello. Hi.",
+            segments=[
+                {"speaker": "A", "start": 0.0, "end": 3.0, "text": "Hello."},
+                {"speaker": "B", "start": 3.0, "end": 6.0, "text": "Hi."},
+            ],
+        )
+        db_session.add(transcript)
+        db_session.commit()
+
+        # Patch build_candidate_pool to raise — simulates malformed identity_hints
+        with patch(
+            "app.services.diarisation.build_candidate_pool",
+            side_effect=AttributeError("identity_hints is not a dict"),
+        ):
+            updated = process_diarisation(db_session, test_meeting_with_participants.id)
+
+        # Pipeline survives, segments fall back to generic labels
+        assert updated.segments[0]["speaker"] == "Speaker 1"
+        assert updated.segments[1]["speaker"] == "Speaker 2"
+
+        # Meeting status must NOT be FAILED — defense-in-depth requirement
+        db_session.refresh(test_meeting_with_participants)
+        assert test_meeting_with_participants.status != MeetingStatus.FAILED

@@ -95,10 +95,10 @@ def process_diarisation(db: Session, meeting_id: int) -> Transcript:
                 Participant.meeting_id == meeting_id
             ).all()
 
-            candidates = build_candidate_pool(participants, meeting.identity_hints)
+            try:
+                candidates = build_candidate_pool(participants, meeting.identity_hints)
 
-            if candidates and final_segments:
-                try:
+                if candidates and final_segments:
                     speaker_mapping = infer_speaker_identities(final_segments, candidates)
 
                     if speaker_mapping:
@@ -111,14 +111,14 @@ def process_diarisation(db: Session, meeting_id: int) -> Transcript:
                                 seg["speaker"] = match["display_name"]
                                 seg["matched_email"] = match.get("email")
                                 seg["match_confidence"] = match["confidence"]
-                except Exception as e:
-                    logger.warning(
-                        f"Meeting {meeting_id}: speaker inference failed, "
-                        f"keeping generic labels: {e}"
-                    )
+            except Exception as e:
+                logger.warning(
+                    f"Meeting {meeting_id}: speaker inference skipped, "
+                    f"keeping generic labels: {e}"
+                )
 
         speakers = {seg.get("speaker") for seg in final_segments}
-        logger.info(f"Meeting {meeting_id}: {len(speakers)} speakers: {speakers}")
+        logger.info(f"Meeting {meeting_id}: {len(speakers)} speakers detected")
 
         transcript.segments = final_segments
         db.commit()
