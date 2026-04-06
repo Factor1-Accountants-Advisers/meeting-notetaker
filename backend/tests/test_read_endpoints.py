@@ -396,13 +396,6 @@ class TestPatchActionItem:
         )
         assert resp.status_code == 400
 
-class TestPostActionItem:
-    pass
-*** End of File
-
-class TestPostActionItem:
-    pass
-
 
 # ---------------------------------------------------------------------------
 # POST /api/action-items — create action item

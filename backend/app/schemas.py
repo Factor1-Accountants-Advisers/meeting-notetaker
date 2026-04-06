@@ -52,6 +52,8 @@ class MeetingUploadMetadata(BaseModel):
     meeting_title: str
     attendees: List[ParticipantBase] = Field(..., min_length=1)
     scheduled_time: Optional[datetime] = None
+    organizer: Optional[ParticipantBase] = None
+    source_event_id: Optional[str] = None
 
 
 class MeetingUploadResponse(BaseModel):
@@ -95,6 +97,9 @@ class TranscriptSegment(BaseModel):
     start: float
     end: float
     text: str
+    raw_speaker: Optional[str] = None
+    matched_email: Optional[str] = None
+    match_confidence: Optional[float] = None
 
 
 class TranscriptResponse(BaseModel):

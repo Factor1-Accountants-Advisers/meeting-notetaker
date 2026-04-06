@@ -184,23 +184,50 @@ async def upload_meeting(
 
         logger.info(f"Audio uploaded to: {blob_path}")
 
+        # Build identity hints — always include current_user (the recorder)
+        identity_hints = {
+            "source_event_id": meeting_metadata.source_event_id,
+            "current_user": {
+                "name": current_user.name,
+                "email": current_user.email,
+                "azure_ad_id": current_user.azure_ad_id,
+                "is_current_user": True,
+            },
+            "organizer": (
+                {
+                    "name": meeting_metadata.organizer.name,
+                    "email": meeting_metadata.organizer.email,
+                    "is_organizer": True,
+                }
+                if meeting_metadata.organizer else None
+            ),
+        }
+
         # Create meeting record
         meeting = Meeting(
             title=meeting_metadata.meeting_title,
             scheduled_time=normalize_scheduled_time(meeting_metadata.scheduled_time),
             status=MeetingStatus.PROCESSING,
             audio_blob_url=blob_path,
-            user_id=current_user.id
+            user_id=current_user.id,
+            identity_hints=identity_hints,
         )
         db.add(meeting)
-        await db.flush()  # Get the meeting ID
+        await db.flush()
 
         # Create participant records
         for attendee in meeting_metadata.attendees:
+            is_org = (
+                meeting_metadata.organizer is not None
+                and attendee.email is not None
+                and meeting_metadata.organizer.email is not None
+                and attendee.email.lower() == meeting_metadata.organizer.email.lower()
+            )
             participant = Participant(
                 meeting_id=meeting.id,
                 name=attendee.name,
-                email=attendee.email
+                email=attendee.email,
+                is_organizer=is_org,
             )
             db.add(participant)
 
