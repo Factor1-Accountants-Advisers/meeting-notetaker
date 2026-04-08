@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.orm.attributes import flag_modified
 import json
 
 from app.core.database import get_db
@@ -624,7 +625,6 @@ async def rename_speaker(
 
     # Persist — reassign to trigger SQLAlchemy change detection on JSON column
     transcript.segments = segments
-    from sqlalchemy.orm.attributes import flag_modified
     flag_modified(transcript, "segments")
     await db.commit()
 
