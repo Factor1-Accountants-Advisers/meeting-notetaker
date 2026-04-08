@@ -26,6 +26,7 @@ from app.schemas import (
     MeetingListItem, MeetingListResponse, MeetingDetailResponse,
     ParticipantResponse, TranscriptResponse, SummaryResponse,
     ActionItemResponse,
+    RenameSpeakerRequest, RenameSpeakerResponse,
 )
 from app.services.storage import get_storage
 from app.services.pipeline import enqueue_meeting
@@ -560,3 +561,71 @@ async def delete_meeting(
 
     await db.delete(meeting)
     await db.commit()
+
+
+@router.patch("/{meeting_id}/rename-speaker", response_model=RenameSpeakerResponse)
+async def rename_speaker(
+    meeting_id: int,
+    body: RenameSpeakerRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> RenameSpeakerResponse:
+    """Rename all occurrences of a speaker label in a meeting transcript.
+
+    Replaces every segment where speaker == old_name with new_name.
+    Scoped to the current user's meetings only.
+
+    Args:
+        meeting_id: Meeting to update.
+        body: old_name (current label) and new_name (replacement).
+        current_user: Authenticated user.
+        db: Database session.
+
+    Returns:
+        RenameSpeakerResponse with count of updated segments.
+
+    Raises:
+        HTTPException 404: If meeting or transcript not found, or not owned by user.
+        HTTPException 422: If new_name is blank after stripping whitespace.
+    """
+    new_name = body.new_name.strip()
+    if not new_name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="new_name must not be blank",
+        )
+
+    # Verify meeting ownership
+    result = await db.execute(
+        select(Meeting).where(
+            Meeting.id == meeting_id,
+            Meeting.user_id == current_user.id,
+        )
+    )
+    meeting = result.scalar_one_or_none()
+    if not meeting:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting not found")
+
+    # Fetch transcript
+    t_result = await db.execute(
+        select(Transcript).where(Transcript.meeting_id == meeting_id)
+    )
+    transcript = t_result.scalar_one_or_none()
+    if not transcript:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transcript not found")
+
+    # Replace speaker labels
+    segments = list(transcript.segments or [])
+    updated_count = 0
+    for seg in segments:
+        if seg.get("speaker") == body.old_name:
+            seg["speaker"] = new_name
+            updated_count += 1
+
+    # Persist — reassign to trigger SQLAlchemy change detection on JSON column
+    transcript.segments = segments
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(transcript, "segments")
+    await db.commit()
+
+    return RenameSpeakerResponse(updated_count=updated_count)
