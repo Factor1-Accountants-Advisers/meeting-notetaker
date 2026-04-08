@@ -16,7 +16,7 @@ export default function MeetingActionItemsView({
   onSelectActionItem: (id: number) => void;
 }) {
   return (
-    <section className="flex h-full min-h-0 flex-col rounded-[32px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] shadow-[var(--shadow-panel)]">
+    <section className="flex h-full min-h-0 flex-col bg-[color:var(--surface-elevated)]">
       <div className="border-b border-[color:var(--border-subtle)] px-6 py-5">
         <h2 className="mt-2 text-2xl font-semibold tracking-tight text-[color:var(--text-primary)]">
           {meetingTitle}

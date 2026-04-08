@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.updateTrayDevices = updateTrayDevices;
 exports.setPendingMeeting = setPendingMeeting;
 exports.createTray = createTray;
+exports.handleStartRecording = handleStartRecording;
 const electron_1 = require("electron");
 const path = __importStar(require("path"));
 const recorder_1 = require("./recorder");
@@ -51,7 +52,6 @@ let _onOpenApp = () => { };
 let _recordingOutputDir = '';
 let _micName = '';
 let _loopbackName = '';
-let _currentOutputPath = '';
 let _pendingTitle = '';
 let _pendingAttendees = [];
 let _pendingScheduledTime;
@@ -101,13 +101,19 @@ function handleStartRecording() {
         _onOpenApp();
         return;
     }
-    _currentOutputPath = path.join(_recordingOutputDir, `meeting-${Date.now()}.wav`);
+    const outputPath = path.join(_recordingOutputDir, `meeting-${Date.now()}.wav`);
+    const metadata = {
+        meeting_title: _pendingTitle || `Recording ${new Date().toLocaleString()}`,
+        attendees: _pendingAttendees,
+        scheduled_time: _pendingScheduledTime,
+    };
     try {
         (0, recorder_1.startRecording)({
             micName: _micName,
             loopbackName: _loopbackName,
-            outputPath: _currentOutputPath,
-            meetingTitle: _pendingTitle || undefined,
+            outputPath,
+            meetingTitle: metadata.meeting_title,
+            metadata,
         });
         tray?.setImage(electron_1.nativeImage.createFromPath(RECORDING_ICON));
         tray?.setToolTip('Meeting Note-Taker — Recording...');
@@ -121,19 +127,22 @@ function handleStartRecording() {
     }
 }
 async function handleStopRecording() {
-    (0, recorder_1.stopRecording)();
+    const result = (0, recorder_1.stopRecording)();
     tray?.setImage(electron_1.nativeImage.createFromPath(IDLE_ICON));
     tray?.setToolTip('Meeting Note-Taker — Uploading...');
     rebuildMenu();
     broadcastRecordingStatus();
     try {
-        const token = await (0, auth_1.acquireToken)();
-        const metadata = {
+        if (!result.outputPath) {
+            throw new Error(result.error || 'Recording failed before the audio file could be saved.');
+        }
+        const token = await (0, auth_1.acquireIdToken)();
+        const metadata = result.metadata ?? {
             meeting_title: _pendingTitle || `Recording ${new Date().toLocaleString()}`,
             attendees: _pendingAttendees,
             scheduled_time: _pendingScheduledTime,
         };
-        await (0, uploader_1.uploadRecording)({ filePath: _currentOutputPath, accessToken: token, backendUrl: _backendUrl, metadata });
+        await (0, uploader_1.uploadRecording)({ filePath: result.outputPath, accessToken: token, backendUrl: _backendUrl, metadata });
         tray?.setToolTip('Meeting Note-Taker — Upload complete');
     }
     catch (err) {

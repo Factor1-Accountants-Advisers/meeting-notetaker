@@ -44,7 +44,7 @@ export default function IconSidebar() {
             href={item.href}
             title={item.label}
             aria-label={item.label}
-            className={`flex h-11 w-11 items-center justify-center rounded-2xl border transition-all ${
+            className={`flex h-11 w-11 items-center justify-center rounded-2xl border transition-[background-color,border-color,color,box-shadow] duration-150 ${
               active
                 ? "border-[color:var(--border-strong)] bg-[color:var(--surface-elevated)] text-[color:var(--text-primary)] shadow-[var(--shadow-soft)]"
                 : "border-transparent text-[color:var(--text-muted)] hover:border-[color:var(--border-subtle)] hover:bg-[color:var(--surface)] hover:text-[color:var(--text-primary)]"

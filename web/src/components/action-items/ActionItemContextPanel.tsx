@@ -1,116 +1,236 @@
 "use client";
 
-import { useId } from "react";
+import { useEffect, useId, useState } from "react";
 
-import { formatDueDate } from "./dateFormatting";
+type ActionItemFields = {
+  id: number;
+  description: string;
+  owner_name: string | null;
+  due_date: string | null;
+  status: string;
+};
 
 type ActionItemContextPanelProps = {
   meetingTitle: string;
   meetingSummary: string;
-  actionItem: {
-    id: number;
-    description: string;
-    owner_name: string | null;
-    due_date: string | null;
-    status: string;
-  } | null;
+  actionItem: ActionItemFields | null;
+  onSave?: (id: number, update: Partial<ActionItemFields>) => Promise<void>;
+  onDelete?: (id: number) => Promise<void>;
 };
 
-function formatStatus(value: string): string {
-  if (!value) return "Unknown";
-
-  return value
-    .split(/[_-]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function formatOwnerName(value: string | null): string {
-  if (!value || !value.trim()) return "Unassigned";
-
-  return value;
-}
+const STATUS_OPTIONS = [
+  { value: "open", label: "Open" },
+  { value: "complete", label: "Complete" },
+];
 
 export default function ActionItemContextPanel({
   meetingTitle,
   meetingSummary,
   actionItem,
+  onSave,
+  onDelete,
 }: ActionItemContextPanelProps) {
   const instanceId = useId();
-  const meetingTitleId = `${instanceId}-meeting-title`;
-  const actionItemTitleId = `${instanceId}-action-item-title`;
+  const taskSectionId = `${instanceId}-task`;
+  const meetingSectionId = `${instanceId}-meeting`;
+
+  const [description, setDescription] = useState("");
+  const [ownerName, setOwnerName] = useState("");
+  const [dueDate, setDueDate] = useState("");
+  const [status, setStatus] = useState("open");
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    if (actionItem) {
+      setDescription(actionItem.description);
+      setOwnerName(actionItem.owner_name ?? "");
+      setDueDate(actionItem.due_date ?? "");
+      setStatus(actionItem.status);
+      setDirty(false);
+    }
+  }, [actionItem?.id, actionItem?.description, actionItem?.owner_name, actionItem?.due_date, actionItem?.status]);
+
+  function markDirty() {
+    setDirty(true);
+  }
+
+  function handleReset() {
+    if (!actionItem) return;
+    setDescription(actionItem.description);
+    setOwnerName(actionItem.owner_name ?? "");
+    setDueDate(actionItem.due_date ?? "");
+    setStatus(actionItem.status);
+    setDirty(false);
+  }
+
+  async function handleSave() {
+    if (!actionItem || !onSave) return;
+    setSaving(true);
+    try {
+      await onSave(actionItem.id, {
+        description,
+        owner_name: ownerName || null,
+        due_date: dueDate || null,
+        status,
+      });
+      setDirty(false);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!actionItem || !onDelete) return;
+    setDeleting(true);
+    try {
+      await onDelete(actionItem.id);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  const inputBase =
+    "w-full rounded-2xl border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] px-4 py-3 text-sm text-[color:var(--text-primary)] placeholder:text-[color:var(--text-muted)] transition-[border-color,box-shadow] duration-150 focus:border-[color:var(--accent)] focus:outline-none focus:ring-1 focus:ring-[color:var(--accent)]";
 
   return (
     <aside
       aria-label="Action item context"
-      className="h-full border-t border-[color:var(--border-subtle)] bg-[color:var(--surface-muted)]/65 p-6 xl:border-l xl:border-t-0"
+      className="flex h-full min-h-0 flex-col border-l border-[color:var(--border-subtle)] bg-[color:var(--surface-soft)]/55"
     >
-      <div className="space-y-6 xl:sticky xl:top-8">
-        <section
-          aria-labelledby={meetingTitleId}
-          className="rounded-[28px] border border-[color:var(--border-subtle)] bg-[color:var(--surface)] p-5 shadow-[var(--shadow-soft)]"
-        >
-          <h2
-            id={meetingTitleId}
-            className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[color:var(--text-muted)]"
+      {/* Scrollable body — matches app pattern */}
+      <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto p-5">
+        <div className="space-y-5">
+          {/* ── Task Details ── */}
+          <section aria-labelledby={taskSectionId}>
+            <h2
+              id={taskSectionId}
+              className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[color:var(--text-muted)]"
+            >
+              Task details
+            </h2>
+
+            {actionItem ? (
+              <div className="mt-4 rounded-[24px] border border-[color:var(--border-subtle)] bg-[color:var(--surface)] p-5 shadow-[var(--shadow-soft)]">
+                <div className="space-y-4">
+                  {/* Description */}
+                  <div>
+                    <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--text-muted)]">
+                      Description
+                    </label>
+                    <textarea
+                      value={description}
+                      onChange={(e) => { setDescription(e.target.value); markDirty(); }}
+                      rows={3}
+                      className={`${inputBase} resize-none`}
+                      placeholder="Describe the action item..."
+                    />
+                  </div>
+
+                  {/* Owner + Due Date — side by side */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--text-muted)]">
+                        Owner
+                      </label>
+                      <input
+                        type="text"
+                        value={ownerName}
+                        onChange={(e) => { setOwnerName(e.target.value); markDirty(); }}
+                        className={inputBase}
+                        placeholder="Unassigned"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--text-muted)]">
+                        Due date
+                      </label>
+                      <input
+                        type="date"
+                        value={dueDate}
+                        onChange={(e) => { setDueDate(e.target.value); markDirty(); }}
+                        className={inputBase}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Status */}
+                  <div>
+                    <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--text-muted)]">
+                      Status
+                    </label>
+                    <select
+                      value={status}
+                      onChange={(e) => { setStatus(e.target.value); markDirty(); }}
+                      className={inputBase}
+                    >
+                      {STATUS_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Inline actions — sits inside the card */}
+                <div className="mt-5 flex items-center gap-2 border-t border-[color:var(--border-subtle)] pt-4">
+                  <button
+                    type="button"
+                    onClick={handleSave}
+                    disabled={!dirty || saving}
+                    className="flex-1 rounded-full bg-[color:var(--surface-inverse)] px-5 py-2.5 text-sm font-medium text-[color:var(--text-inverse)] transition-opacity duration-150 hover:opacity-90 disabled:opacity-40"
+                  >
+                    {saving ? "Saving..." : "Save changes"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleReset}
+                    disabled={!dirty}
+                    className="rounded-full border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] px-5 py-2.5 text-sm font-medium text-[color:var(--text-primary)] transition-[border-color,background-color] duration-150 hover:border-[color:var(--border-strong)] hover:bg-white disabled:opacity-40"
+                  >
+                    Reset
+                  </button>
+                </div>
+
+                {onDelete && (
+                  <button
+                    type="button"
+                    onClick={handleDelete}
+                    disabled={deleting}
+                    className="mt-3 w-full rounded-full px-4 py-2 text-sm text-[color:var(--danger)] transition-colors duration-150 hover:bg-[color:var(--danger-soft)] disabled:opacity-40"
+                  >
+                    {deleting ? "Deleting..." : "Delete action item"}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <p className="mt-4 text-sm leading-7 text-[color:var(--text-secondary)]">
+                Select an action item to view and edit its details.
+              </p>
+            )}
+          </section>
+
+          {/* ── Source Meeting ── */}
+          <section
+            aria-labelledby={meetingSectionId}
+            className="rounded-[24px] border border-[color:var(--border-subtle)] bg-[color:var(--surface)] p-5 shadow-[var(--shadow-soft)]"
           >
-            Source meeting
-          </h2>
-          <h3 className="mt-3 text-2xl font-semibold tracking-tight text-[color:var(--text-primary)]">
-            {meetingTitle}
-          </h3>
-          <p className="mt-4 text-sm leading-7 text-[color:var(--text-secondary)]">
-            {meetingSummary}
-          </p>
-        </section>
-
-        <section
-          aria-labelledby={actionItemTitleId}
-          className="rounded-[28px] border border-[color:var(--border-subtle)] bg-[color:var(--surface)] p-5 shadow-[var(--shadow-soft)]"
-        >
-          <h2
-            id={actionItemTitleId}
-            className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[color:var(--text-muted)]"
-          >
-            Selected action item
-          </h2>
-
-          {actionItem ? (
-            <>
-              <h3 className="mt-3 text-xl font-semibold tracking-tight text-[color:var(--text-primary)]">
-                {actionItem.description}
-              </h3>
-
-              <dl className="mt-5 space-y-3 text-sm">
-                <div className="flex items-center justify-between gap-4">
-                  <dt className="text-[color:var(--text-secondary)]">Owner</dt>
-                  <dd className="font-medium text-[color:var(--text-primary)]">
-                    {formatOwnerName(actionItem.owner_name)}
-                  </dd>
-                </div>
-                <div className="flex items-center justify-between gap-4">
-                  <dt className="text-[color:var(--text-secondary)]">
-                    Due date
-                  </dt>
-                  <dd className="font-medium text-[color:var(--text-primary)]">
-                    {formatDueDate(actionItem.due_date)}
-                  </dd>
-                </div>
-                <div className="flex items-center justify-between gap-4">
-                  <dt className="text-[color:var(--text-secondary)]">Status</dt>
-                  <dd className="font-medium text-[color:var(--text-primary)]">
-                    {formatStatus(actionItem.status)}
-                  </dd>
-                </div>
-              </dl>
-            </>
-          ) : (
-            <p className="mt-4 text-sm leading-7 text-[color:var(--text-secondary)]">
-              No action item selected.
+            <h2
+              id={meetingSectionId}
+              className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[color:var(--text-muted)]"
+            >
+              Source meeting
+            </h2>
+            <h3 className="mt-3 text-lg font-semibold tracking-tight text-[color:var(--text-primary)]">
+              {meetingTitle}
+            </h3>
+            <p className="mt-3 text-sm leading-7 text-[color:var(--text-secondary)]">
+              {meetingSummary}
             </p>
-          )}
-        </section>
+          </section>
+        </div>
       </div>
     </aside>
   );

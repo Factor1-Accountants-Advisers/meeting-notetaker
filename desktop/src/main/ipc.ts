@@ -7,11 +7,14 @@ import {
   stopRecording,
   isRecording,
   getRecordingStatus,
+  onRecordingError,
   RecordingOptions,
+  RecordingStopResult,
 } from './recorder';
 import { uploadRecording, MeetingMetadata, UploadResult } from './uploader';
 import { setPendingMeeting } from './tray';
 import { getMainWindow } from './index';
+import { dismissAutoRecord } from './scheduler';
 import ffmpegPath from 'ffmpeg-static';
 import { execFile, spawn } from 'child_process';
 
@@ -23,16 +26,17 @@ const FFMPEG_BINARY: string = (() => {
   return ffmpegPath;
 })();
 
-// In-app recording state (mirrors what tray.ts does for tray-initiated recordings)
-let _ipcOutputPath = '';
-let _ipcMetadata: MeetingMetadata | null = null;
-
 function broadcastRecordingStatus(): void {
   const win = getMainWindow();
   if (win && !win.isDestroyed()) {
     win.webContents.send('recorder:status-changed', getRecordingStatus());
   }
 }
+
+// Broadcast status change when ffmpeg fails asynchronously
+onRecordingError((_errorMsg) => {
+  broadcastRecordingStatus();
+});
 
 export function parseAudioDevicesFromFfmpegOutput(output: string): AudioDeviceInfo[] {
   const devices: AudioDeviceInfo[] = [];
@@ -252,25 +256,27 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('recorder:start', (_e, opts: RecordingOptions & { metadata?: MeetingMetadata }): void => {
     // Generate output path (same approach as tray.ts)
     const outputPath = opts.outputPath || path.join(app.getPath('temp'), `meeting-${Date.now()}.wav`);
-    _ipcOutputPath = outputPath;
-    _ipcMetadata = opts.metadata || null;
 
     startRecording({
       micName: opts.micName,
       loopbackName: opts.loopbackName,
       outputPath,
-      meetingTitle: _ipcMetadata?.meeting_title,
+      meetingTitle: opts.metadata?.meeting_title,
+      metadata: opts.metadata,
     });
     broadcastRecordingStatus();
     console.log(`[ipc] recorder:start — recording to ${outputPath}`);
   });
 
-  ipcMain.handle('recorder:stop', (): string => {
-    stopRecording();
+  ipcMain.handle('recorder:stop', (): RecordingStopResult => {
+    const result = stopRecording();
     broadcastRecordingStatus();
-    const outputPath = _ipcOutputPath;
-    console.log(`[ipc] recorder:stop — file at ${outputPath}`);
-    return outputPath;
+    if (!result.outputPath) {
+      console.warn('[ipc] recorder:stop — no output path (recording may have failed to start)');
+    } else {
+      console.log(`[ipc] recorder:stop — file at ${result.outputPath}`);
+    }
+    return result;
   });
 
   ipcMain.handle('recorder:is-recording', (): boolean => isRecording());
@@ -307,5 +313,9 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('audio:get-default-devices', async (): Promise<{ micName: string; loopbackName: string }> => {
     const devices = await listAudioDevices();
     return await pickDefaultDevices(devices);
+  });
+
+  ipcMain.handle('scheduler:dismiss', (): void => {
+    dismissAutoRecord();
   });
 }

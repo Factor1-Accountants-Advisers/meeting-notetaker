@@ -13,6 +13,23 @@
   }
 }
 
+/* Force GPU compositing for animated elements */
+.animate-\[panelMorph_260ms_cubic-bezier\(0\.22\,1\,0\.36\,1\)\],
+.animate-\[panelMorph_220ms_cubic-bezier\(0\.22\,1\,0\.36\,1\)\] {
+  will-change: opacity, transform;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Momentum scrolling for all overflow containers */
+* {
+  -webkit-overflow-scrolling: touch;
+}
+
 :root {
   --background: #f9f9f7;
   --foreground: #171717;
@@ -69,7 +86,7 @@ body {
   color: var(--foreground);
   background: var(--background);
   font-family: var(--font-geist-sans), sans-serif;
-  transition: background-color 180ms ease, color 180ms ease;
+  transition: background-color 120ms ease-out, color 120ms ease-out;
 }
 
 button,
@@ -98,7 +115,8 @@ textarea {
     background: var(--surface);
     border: 1px solid var(--border-subtle);
     box-shadow: var(--shadow-soft);
-    backdrop-filter: blur(18px);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
   }
   .surface-card {
     background: var(--surface-elevated);

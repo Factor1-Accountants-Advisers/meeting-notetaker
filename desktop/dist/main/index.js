@@ -43,9 +43,9 @@ const electron_updater_1 = require("electron-updater");
 const tray_1 = require("./tray");
 const ipc_1 = require("./ipc");
 const protocol_1 = require("./protocol");
+const scheduler_1 = require("./scheduler");
 if (!electron_1.app.requestSingleInstanceLock())
     electron_1.app.quit();
-electron_1.app.disableHardwareAcceleration();
 let mainWindow = null;
 const backendUrl = process.env.BACKEND_URL ?? 'http://localhost:8000';
 function createMainWindow() {
@@ -111,9 +111,14 @@ electron_1.app.whenReady().then(() => {
     })).catch((err) => console.warn('[startup] Audio device detection failed:', err));
     // Show main window on startup
     mainWindow = createMainWindow();
+    // Start calendar-based auto-record scheduler
+    (0, scheduler_1.startScheduler)();
     if (electron_1.app.isPackaged) {
         void electron_updater_1.autoUpdater.checkForUpdatesAndNotify();
         setInterval(() => void electron_updater_1.autoUpdater.checkForUpdatesAndNotify(), 4 * 3600000);
     }
+});
+electron_1.app.on('will-quit', () => {
+    (0, scheduler_1.stopScheduler)();
 });
 //# sourceMappingURL=index.js.map

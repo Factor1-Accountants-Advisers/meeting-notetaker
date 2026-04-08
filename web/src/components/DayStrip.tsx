@@ -108,7 +108,7 @@ export default function DayStrip({
                 <button
                   key={key}
                   onClick={() => onSelectDate(key)}
-                  className={`flex h-16 w-14 flex-col items-center justify-center gap-0.5 rounded-2xl border text-xs transition-all ${
+                  className={`flex h-16 w-14 flex-col items-center justify-center gap-0.5 rounded-2xl border text-xs transition-[background-color,border-color,color,box-shadow] duration-150 ${
                     isSelected
                       ? "border-[color:var(--border-strong)] bg-[color:var(--surface-inverse)] text-[color:var(--text-inverse)] shadow-[var(--shadow-soft)]"
                       : isToday

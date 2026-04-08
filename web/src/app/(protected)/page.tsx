@@ -21,17 +21,22 @@ function toDateKey(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * Cross-fades between panels without destroying/recreating DOM.
+ * Both children stay mounted; only opacity + pointer-events toggle.
+ */
 function MorphPanel({
-  activeKey,
+  active,
   children,
 }: {
-  activeKey: string;
+  active: boolean;
   children: React.ReactNode;
 }) {
   return (
     <div
-      key={activeKey}
-      className="h-full animate-[panelMorph_260ms_cubic-bezier(0.22,1,0.36,1)]"
+      className={`absolute inset-0 transition-opacity duration-200 ease-out ${
+        active ? "opacity-100" : "pointer-events-none opacity-0"
+      }`}
     >
       {children}
     </div>
@@ -223,9 +228,10 @@ export default function DashboardPage() {
         </section>
       </aside>
 
-      <section className="surface-panel min-h-0 overflow-hidden rounded-[34px]">
-        {detailMeetingId ? (
-          <MorphPanel activeKey={`detail-${detailMeetingId}`}>
+      <section className="surface-panel relative min-h-0 overflow-hidden rounded-[34px]">
+        {/* Detail panel — stays mounted once a meeting has been viewed */}
+        {detailMeetingId !== null && (
+          <MorphPanel active={detailMeetingId !== null}>
             <div className="scrollbar-hidden h-full overflow-y-auto px-8 py-8">
               <MeetingDetailContent
                 meetingId={detailMeetingId}
@@ -233,124 +239,117 @@ export default function DashboardPage() {
               />
             </div>
           </MorphPanel>
-        ) : (
-          <MorphPanel
-            activeKey={
-              recording
-                ? `recording-${selectedCalendarEvent?.id ?? "adhoc"}`
-                : selectedCalendarEvent
-                  ? `selected-${selectedCalendarEvent.id}`
-                  : "idle"
-            }
-          >
-            <div className="scrollbar-hidden relative flex h-full min-h-0 flex-col overflow-y-auto px-8 py-8">
-              <div className="pointer-events-none absolute inset-x-16 top-0 h-44 rounded-b-[56px] bg-[radial-gradient(circle_at_top,rgba(37,99,235,0.09),transparent_58%)]" />
+        )}
 
-              <div className="relative mx-auto flex h-full w-full max-w-4xl flex-col">
-                <div className="flex flex-1 flex-col items-center justify-center pb-12 pt-4">
-                  <div className="w-full max-w-3xl text-center">
-                    <h2 className="text-balance text-4xl font-semibold tracking-tight text-[color:var(--text-primary)] md:text-5xl">
-                      {recording
-                        ? "Your meeting is being captured."
-                        : selectedCalendarEvent
-                          ? "Your meeting is loaded and ready."
-                          : "Capture a meeting"}
-                    </h2>
-                    <p className="mx-auto mt-4 max-w-xl text-base leading-7 text-[color:var(--text-secondary)]">
-                      {recording
-                        ? "Keep Note Taker running while it listens to system audio, then stop when the meeting ends."
-                        : selectedCalendarEvent
-                          ? "The selected meeting from the left rail is ready for recording."
-                          : "Choose a meeting from the left rail or start an ad-hoc recording."}
+        {/* Idle / recording panel */}
+        <MorphPanel active={detailMeetingId === null}>
+          <div className="scrollbar-hidden relative flex h-full min-h-0 flex-col overflow-y-auto px-8 py-8">
+            <div className="pointer-events-none absolute inset-x-16 top-0 h-44 rounded-b-[56px] bg-[radial-gradient(circle_at_top,rgba(37,99,235,0.09),transparent_58%)]" />
+
+            <div className="relative mx-auto flex h-full w-full max-w-4xl flex-col">
+              <div className="flex flex-1 flex-col items-center justify-center pb-12 pt-4">
+                <div className="w-full max-w-3xl text-center">
+                  <h2 className="text-balance text-4xl font-semibold tracking-tight text-[color:var(--text-primary)] md:text-5xl">
+                    {recording
+                      ? "Your meeting is being captured."
+                      : selectedCalendarEvent
+                        ? "Your meeting is loaded and ready."
+                        : "Capture a meeting"}
+                  </h2>
+                  <p className="mx-auto mt-4 max-w-xl text-base leading-7 text-[color:var(--text-secondary)]">
+                    {recording
+                      ? "Keep Note Taker running while it listens to system audio, then stop when the meeting ends."
+                      : selectedCalendarEvent
+                        ? "The selected meeting from the left rail is ready for recording."
+                        : "Choose a meeting from the left rail or start an ad-hoc recording."}
+                  </p>
+                </div>
+
+                <div className="surface-card mt-10 flex min-h-[260px] w-full max-w-3xl flex-col rounded-[36px] px-8 py-8 text-left shadow-[var(--shadow-panel)]">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-2xl font-semibold tracking-tight text-[color:var(--text-primary)]">
+                      {composerTitle}
                     </p>
+
+                    {recording ? (
+                      <div className="mt-4">
+                        <p className="font-mono text-4xl font-semibold text-[color:var(--text-primary)]">
+                          {String(Math.floor(elapsed / 60000)).padStart(2, "0")}:
+                          {String(Math.floor((elapsed % 60000) / 1000)).padStart(2, "0")}
+                        </p>
+                        <p className="mt-3 max-w-lg text-sm leading-7 text-[color:var(--text-secondary)]">
+                          Listening to system audio. Stop when the meeting ends and Note Taker will continue with transcript, summary, and action items.
+                        </p>
+                      </div>
+                    ) : selectedCalendarEvent ? (
+                      <div className="mt-4 space-y-3">
+                        <div className="flex flex-wrap items-center gap-4 text-sm text-[color:var(--text-secondary)]">
+                          <span className="inline-flex items-center gap-2">
+                            <Clock3 className="h-4 w-4 text-[color:var(--text-muted)]" />
+                            {new Date(selectedCalendarEvent.start).toLocaleDateString("en-US", {
+                              weekday: "long",
+                              month: "short",
+                              day: "numeric",
+                            })}{" "}
+                            ·{" "}
+                            {new Date(selectedCalendarEvent.start).toLocaleTimeString("en-US", {
+                              hour: "numeric",
+                              minute: "2-digit",
+                            })}
+                          </span>
+                          <span className="inline-flex items-center gap-2">
+                            <Users className="h-4 w-4 text-[color:var(--text-muted)]" />
+                            {selectedCalendarEvent.attendees.length} attendees
+                          </span>
+                        </div>
+                        <p className="max-w-2xl text-sm leading-7 text-[color:var(--text-secondary)]">
+                          {selectedAttendeeNames}
+                          {selectedCalendarEvent.attendees.length > 4 &&
+                            ` +${selectedCalendarEvent.attendees.length - 4} more`}
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="mt-4 max-w-xl text-sm leading-7 text-[color:var(--text-secondary)]">
+                        Choose a meeting from the left rail, or start a fresh capture session for an unplanned conversation.
+                      </p>
+                    )}
                   </div>
 
-                  <div className="surface-card mt-10 flex min-h-[260px] w-full max-w-3xl flex-col rounded-[36px] px-8 py-8 text-left shadow-[var(--shadow-panel)]">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-2xl font-semibold tracking-tight text-[color:var(--text-primary)]">
-                        {composerTitle}
-                      </p>
+                  <div className="mt-8 border-t border-[color:var(--border-subtle)] pt-5">
+                    <p className="mx-auto max-w-xl text-center text-sm leading-7 text-[color:var(--text-secondary)]">
+                      Note Taker records system audio and turns the meeting into searchable notes, summaries, and follow-up actions.
+                    </p>
 
-                      {recording ? (
-                        <div className="mt-4">
-                          <p className="font-mono text-4xl font-semibold text-[color:var(--text-primary)]">
-                            {String(Math.floor(elapsed / 60000)).padStart(2, "0")}:
-                            {String(Math.floor((elapsed % 60000) / 1000)).padStart(2, "0")}
-                          </p>
-                          <p className="mt-3 max-w-lg text-sm leading-7 text-[color:var(--text-secondary)]">
-                            Listening to system audio. Stop when the meeting ends and Note Taker will continue with transcript, summary, and action items.
-                          </p>
-                        </div>
-                      ) : selectedCalendarEvent ? (
-                        <div className="mt-4 space-y-3">
-                          <div className="flex flex-wrap items-center gap-4 text-sm text-[color:var(--text-secondary)]">
-                            <span className="inline-flex items-center gap-2">
-                              <Clock3 className="h-4 w-4 text-[color:var(--text-muted)]" />
-                              {new Date(selectedCalendarEvent.start).toLocaleDateString("en-US", {
-                                weekday: "long",
-                                month: "short",
-                                day: "numeric",
-                              })}{" "}
-                              ·{" "}
-                              {new Date(selectedCalendarEvent.start).toLocaleTimeString("en-US", {
-                                hour: "numeric",
-                                minute: "2-digit",
-                              })}
-                            </span>
-                            <span className="inline-flex items-center gap-2">
-                              <Users className="h-4 w-4 text-[color:var(--text-muted)]" />
-                              {selectedCalendarEvent.attendees.length} attendees
-                            </span>
-                          </div>
-                          <p className="max-w-2xl text-sm leading-7 text-[color:var(--text-secondary)]">
-                            {selectedAttendeeNames}
-                            {selectedCalendarEvent.attendees.length > 4 &&
-                              ` +${selectedCalendarEvent.attendees.length - 4} more`}
-                          </p>
-                        </div>
-                      ) : (
-                        <p className="mt-4 max-w-xl text-sm leading-7 text-[color:var(--text-secondary)]">
-                          Choose a meeting from the left rail, or start a fresh capture session for an unplanned conversation.
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="mt-8 border-t border-[color:var(--border-subtle)] pt-5">
-                      <p className="mx-auto max-w-xl text-center text-sm leading-7 text-[color:var(--text-secondary)]">
-                        Note Taker records system audio and turns the meeting into searchable notes, summaries, and follow-up actions.
-                      </p>
-
-                      <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
+                    <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
+                      <button
+                        onClick={() => setShowUpload(true)}
+                        disabled={recording}
+                        className="inline-flex h-12 items-center gap-2 rounded-full border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] px-5 text-sm font-medium text-[color:var(--text-primary)] transition-[border-color,background-color] duration-150 hover:border-[color:var(--border-strong)] hover:bg-white disabled:opacity-50"
+                      >
+                        <Upload className="h-4 w-4" />
+                        Upload
+                      </button>
+                      {isElectron && (
                         <button
-                          onClick={() => setShowUpload(true)}
+                          onClick={
+                            selectedCalendarEvent
+                              ? () => setShowRecordingPanel(true)
+                              : handleStartAdHoc
+                          }
                           disabled={recording}
-                          className="inline-flex h-12 items-center gap-2 rounded-full border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] px-5 text-sm font-medium text-[color:var(--text-primary)] transition hover:border-[color:var(--border-strong)] hover:bg-white disabled:opacity-50"
+                          className="inline-flex h-12 items-center gap-2 rounded-full bg-[color:var(--surface-inverse)] px-6 text-sm font-medium text-[color:var(--text-inverse)] transition-opacity duration-150 hover:opacity-90 disabled:opacity-50"
                         >
-                          <Upload className="h-4 w-4" />
-                          Upload
+                          <Mic className="h-4 w-4" />
+                          {selectedCalendarEvent ? "Open capture" : "Record"}
                         </button>
-                        {isElectron && (
-                          <button
-                            onClick={
-                              selectedCalendarEvent
-                                ? () => setShowRecordingPanel(true)
-                                : handleStartAdHoc
-                            }
-                            disabled={recording}
-                            className="inline-flex h-12 items-center gap-2 rounded-full bg-[color:var(--surface-inverse)] px-6 text-sm font-medium text-[color:var(--text-inverse)] transition hover:opacity-90 disabled:opacity-50"
-                          >
-                            <Mic className="h-4 w-4" />
-                            {selectedCalendarEvent ? "Open capture" : "Record"}
-                          </button>
-                        )}
-                      </div>
+                      )}
                     </div>
                   </div>
                 </div>
               </div>
             </div>
-          </MorphPanel>
-        )}
+          </div>
+        </MorphPanel>
       </section>
 
       {showUpload && (

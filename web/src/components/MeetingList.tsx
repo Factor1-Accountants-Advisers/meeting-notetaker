@@ -94,7 +94,7 @@ export default function MeetingList({
                     ? () => onSelectMeeting(m.id)
                     : undefined
                 }
-                className={`relative w-full rounded-[22px] border p-4 text-left transition-all ${
+                className={`relative w-full rounded-[22px] border p-4 text-left transition-[background-color,border-color,box-shadow] duration-150 ${
                   isSelected
                     ? "border-[color:var(--border-strong)] bg-[color:var(--surface-elevated)] shadow-[var(--shadow-soft)]"
                     : "border-[color:var(--border-subtle)] bg-[color:var(--surface)] hover:border-[color:var(--border-strong)] hover:bg-[color:var(--surface-elevated)]"

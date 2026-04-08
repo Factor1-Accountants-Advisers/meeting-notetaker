@@ -6,6 +6,7 @@ const mockPost = axios.post as jest.MockedFunction<typeof axios.post>;
 jest.mock('fs', () => ({
   ...jest.requireActual('fs'),
   createReadStream: jest.fn().mockReturnValue('mock-stream'),
+  existsSync: jest.fn().mockReturnValue(true),
 }));
 
 const baseOptions: UploadOptions = {
@@ -33,8 +34,15 @@ describe('uploader.uploadRecording', () => {
     expect(result).toEqual({ meeting_id: 42, status: 'processing' });
   });
 
-  it('throws on HTTP error', async () => {
-    mockPost.mockRejectedValueOnce(new Error('Request failed with status code 401'));
+  it('throws immediately on 4xx HTTP error (no retry)', async () => {
+    const axiosError = Object.assign(new Error('Request failed with status code 401'), {
+      isAxiosError: true,
+      response: { status: 401 },
+    });
+    // Mock axios.isAxiosError to recognise our error
+    (axios.isAxiosError as unknown as jest.Mock) = jest.fn().mockReturnValue(true);
+    mockPost.mockRejectedValueOnce(axiosError);
     await expect(uploadRecording(baseOptions)).rejects.toThrow('401');
+    expect(mockPost).toHaveBeenCalledTimes(1); // no retries for client errors
   });
 });

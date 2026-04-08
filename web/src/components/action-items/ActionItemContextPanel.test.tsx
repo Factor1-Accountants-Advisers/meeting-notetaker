@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import ActionItemContextPanel from "./ActionItemContextPanel";
@@ -8,151 +8,139 @@ describe("ActionItemContextPanel", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders the named context landmark and labeled sections", () => {
+  const meetingTitle = "Weekly design review";
+  const meetingSummary =
+    "Reviewed the onboarding flow, resolved copy changes, and confirmed the next demo.";
+  const actionItem = {
+    id: 101,
+    description: "Confirm vendor shortlist and next steps",
+    owner_name: "Ava",
+    due_date: "2026-04-03",
+    status: "open",
+  } as const;
+
+  function renderPanel(
+    overrides: Partial<React.ComponentProps<typeof ActionItemContextPanel>> = {}
+  ) {
+    const onDraftChange = vi.fn();
+    const onSave = vi.fn();
+    const onReset = vi.fn();
+    const onDelete = vi.fn();
+
     render(
       <ActionItemContextPanel
-        meetingTitle="Weekly design review"
-        meetingSummary="Reviewed the onboarding flow, resolved copy changes, and confirmed the next demo."
-        actionItem={{
-          id: 101,
-          description: "Confirm vendor shortlist and next steps",
-          owner_name: "Ava",
-          due_date: "2026-04-03",
-          status: "open",
+        meetingTitle={meetingTitle}
+        meetingSummary={meetingSummary}
+        actionItem={actionItem}
+        draft={{
+          description: actionItem.description,
+          owner_name: actionItem.owner_name,
+          due_date: actionItem.due_date,
+          status: actionItem.status,
         }}
+        isDirty={false}
+        isSaving={false}
+        onDraftChange={onDraftChange}
+        onSave={onSave}
+        onReset={onReset}
+        onDelete={onDelete}
+        {...overrides}
       />
     );
+
+    return { onDraftChange, onSave, onReset, onDelete };
+  }
+
+  it("renders editable task fields and disabled pristine actions", () => {
+    renderPanel();
 
     expect(
       screen.getByRole("complementary", { name: "Action item context" })
     ).toBeVisible();
-    expect(
-      screen.getByRole("heading", { name: "Source meeting" })
-    ).toBeVisible();
-    expect(screen.getByText("Weekly design review")).toBeVisible();
-    expect(
-      screen.getByText(
-        "Reviewed the onboarding flow, resolved copy changes, and confirmed the next demo."
-      )
-    ).toBeVisible();
-    expect(
-      screen.getByRole("heading", { name: "Selected action item" })
-    ).toBeVisible();
-    expect(
-      screen.getByText("Confirm vendor shortlist and next steps")
-    ).toBeVisible();
-    expect(screen.getByText("Ava")).toBeVisible();
-    expect(screen.getByText("Apr 3, 2026")).toBeVisible();
-    expect(screen.getByText("Open")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Task details" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Meeting context" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Actions" })).toBeVisible();
+
+    expect(screen.getByLabelText("Task description")).toHaveValue(
+      actionItem.description
+    );
+    expect(screen.getByLabelText("Owner")).toHaveValue(actionItem.owner_name);
+    expect(screen.getByLabelText("Due date")).toHaveValue(actionItem.due_date);
+    expect(screen.getByLabelText("Status")).toHaveValue(actionItem.status);
+
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reset" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete task" })).not.toBeDisabled();
+    expect(screen.getByText(meetingTitle)).toBeVisible();
+    expect(screen.getByText(meetingSummary)).toBeVisible();
   });
 
-  it("formats valid due dates in UTC", () => {
-    const toLocaleDateStringSpy = vi
-      .spyOn(Date.prototype, "toLocaleDateString")
-      .mockReturnValue("Apr 3, 2026");
+  it("emits partial patches when task fields change", () => {
+    const { onDraftChange } = renderPanel();
 
-    render(
-      <ActionItemContextPanel
-        meetingTitle="Weekly design review"
-        meetingSummary="Reviewed the onboarding flow, resolved copy changes, and confirmed the next demo."
-        actionItem={{
-          id: 104,
-          description: "Confirm vendor shortlist and next steps",
-          owner_name: "Ava",
-          due_date: "2026-04-03",
-          status: "open",
-        }}
-      />
-    );
+    fireEvent.change(screen.getByLabelText("Task description"), {
+      target: { value: "Update the vendor shortlist" },
+    });
+    fireEvent.change(screen.getByLabelText("Owner"), {
+      target: { value: "Mia" },
+    });
+    fireEvent.change(screen.getByLabelText("Due date"), {
+      target: { value: "2026-04-10" },
+    });
+    fireEvent.change(screen.getByLabelText("Status"), {
+      target: { value: "complete" },
+    });
 
-    expect(toLocaleDateStringSpy).toHaveBeenCalledWith(
-      "en-US",
-      expect.objectContaining({
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-        timeZone: "UTC",
-      })
-    );
+    expect(onDraftChange).toHaveBeenNthCalledWith(1, {
+      description: "Update the vendor shortlist",
+    });
+    expect(onDraftChange).toHaveBeenNthCalledWith(2, {
+      owner_name: "Mia",
+    });
+    expect(onDraftChange).toHaveBeenNthCalledWith(3, {
+      due_date: "2026-04-10",
+    });
+    expect(onDraftChange).toHaveBeenNthCalledWith(4, {
+      status: "complete",
+    });
   });
 
-  it("falls back safely for invalid due dates and empty owner names", () => {
-    render(
-      <ActionItemContextPanel
-        meetingTitle="Weekly design review"
-        meetingSummary="Reviewed the onboarding flow, resolved copy changes, and confirmed the next demo."
-        actionItem={{
-          id: 102,
-          description: "Confirm vendor shortlist and next steps",
-          owner_name: "",
-          due_date: "not-a-real-date",
-          status: "open",
-        }}
-      />
-    );
+  it("disables save, reset, and delete while saving", () => {
+    renderPanel({
+      isDirty: true,
+      isSaving: true,
+    });
 
-    expect(screen.getByText("Unassigned")).toBeVisible();
-    expect(screen.getByText("No due date")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reset" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete task" })).toBeDisabled();
   });
 
-  it("falls back safely for impossible calendar dates", () => {
+  it("renders the editor safely when no action item is selected", () => {
     render(
       <ActionItemContextPanel
-        meetingTitle="Weekly design review"
-        meetingSummary="Reviewed the onboarding flow, resolved copy changes, and confirmed the next demo."
-        actionItem={{
-          id: 103,
-          description: "Confirm vendor shortlist and next steps",
-          owner_name: "Ava",
-          due_date: "2026-02-30",
-          status: "open",
-        }}
-      />
-    );
-
-    expect(screen.getByText("No due date")).toBeVisible();
-    expect(screen.queryByText("Mar 2, 2026")).not.toBeInTheDocument();
-  });
-
-  it("keeps the meeting context visible when no action item is selected", () => {
-    render(
-      <ActionItemContextPanel
-        meetingTitle="Weekly design review"
-        meetingSummary="Reviewed the onboarding flow, resolved copy changes, and confirmed the next demo."
+        meetingTitle={meetingTitle}
+        meetingSummary={meetingSummary}
         actionItem={null}
+        draft={{
+          description: actionItem.description,
+          owner_name: actionItem.owner_name,
+          due_date: actionItem.due_date,
+          status: actionItem.status,
+        }}
+        isDirty={false}
+        isSaving={false}
+        onDraftChange={vi.fn()}
+        onSave={vi.fn()}
+        onReset={vi.fn()}
+        onDelete={vi.fn()}
       />
     );
 
-    expect(screen.getByText("Weekly design review")).toBeVisible();
-    expect(
-      screen.getByText(
-        "Reviewed the onboarding flow, resolved copy changes, and confirmed the next demo."
-      )
-    ).toBeVisible();
-    expect(screen.getByText("No action item selected.")).toBeVisible();
-  });
-
-  it("uses unique section labels when rendered more than once", () => {
-    const { container } = render(
-      <div>
-        <ActionItemContextPanel
-          meetingTitle="Weekly design review"
-          meetingSummary="Reviewed the onboarding flow, resolved copy changes, and confirmed the next demo."
-          actionItem={null}
-        />
-        <ActionItemContextPanel
-          meetingTitle="Weekly design review"
-          meetingSummary="Reviewed the onboarding flow, resolved copy changes, and confirmed the next demo."
-          actionItem={null}
-        />
-      </div>
-    );
-
-    const sectionLabels = Array.from(
-      container.querySelectorAll("section h2[id]")
-    ).map((node) => node.id);
-
-    expect(sectionLabels).toHaveLength(4);
-    expect(new Set(sectionLabels)).toHaveLength(4);
+    expect(screen.getByLabelText("Task description")).toBeVisible();
+    expect(screen.getByLabelText("Owner")).toBeVisible();
+    expect(screen.getByLabelText("Due date")).toBeVisible();
+    expect(screen.getByLabelText("Status")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Delete task" })).toBeDisabled();
   });
 });

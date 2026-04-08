@@ -6,6 +6,14 @@ export interface ActionItemsPageFilters {
   search: string;
 }
 
+export interface ActionItemDraft {
+  description: string;
+  owner_name: string;
+  owner_email: string;
+  due_date: string;
+  status: "open" | "complete";
+}
+
 export interface MeetingActionItemsGroup {
   meetingId: number;
   title: string;

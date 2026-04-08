@@ -1,7 +1,7 @@
 import { Tray, Menu, app, nativeImage, BrowserWindow } from 'electron';
 import * as path from 'path';
 import { startRecording, stopRecording, isRecording, getRecordingStatus } from './recorder';
-import { acquireToken } from './auth';
+import { acquireIdToken } from './auth';
 import { uploadRecording, AttendeeMetadata, MeetingMetadata } from './uploader';
 import { getMainWindow } from './index';
 
@@ -16,8 +16,6 @@ let _onOpenApp: () => void = () => {};
 let _recordingOutputDir = '';
 let _micName = '';
 let _loopbackName = '';
-let _currentOutputPath = '';
-
 let _pendingTitle = '';
 let _pendingAttendees: AttendeeMetadata[] = [];
 let _pendingScheduledTime: string | undefined;
@@ -75,19 +73,25 @@ function broadcastRecordingStatus(): void {
   }
 }
 
-function handleStartRecording(): void {
+export function handleStartRecording(): void {
   if (!_micName || !_loopbackName) {
     console.error('[tray] Cannot start recording — audio devices not configured. Open the app and go to Settings.');
     _onOpenApp();
     return;
   }
-  _currentOutputPath = path.join(_recordingOutputDir, `meeting-${Date.now()}.wav`);
+  const outputPath = path.join(_recordingOutputDir, `meeting-${Date.now()}.wav`);
+  const metadata: MeetingMetadata = {
+    meeting_title: _pendingTitle || `Recording ${new Date().toLocaleString()}`,
+    attendees: _pendingAttendees,
+    scheduled_time: _pendingScheduledTime,
+  };
   try {
     startRecording({
       micName: _micName,
       loopbackName: _loopbackName,
-      outputPath: _currentOutputPath,
-      meetingTitle: _pendingTitle || undefined,
+      outputPath,
+      meetingTitle: metadata.meeting_title,
+      metadata,
     });
     tray?.setImage(nativeImage.createFromPath(RECORDING_ICON));
     tray?.setToolTip('Meeting Note-Taker — Recording...');
@@ -101,20 +105,24 @@ function handleStartRecording(): void {
 }
 
 async function handleStopRecording(): Promise<void> {
-  stopRecording();
+  const result = stopRecording();
   tray?.setImage(nativeImage.createFromPath(IDLE_ICON));
   tray?.setToolTip('Meeting Note-Taker — Uploading...');
   rebuildMenu();
   broadcastRecordingStatus();
 
   try {
-    const token = await acquireToken();
-    const metadata: MeetingMetadata = {
+    if (!result.outputPath) {
+      throw new Error(result.error || 'Recording failed before the audio file could be saved.');
+    }
+
+    const token = await acquireIdToken();
+    const metadata: MeetingMetadata = result.metadata ?? {
       meeting_title: _pendingTitle || `Recording ${new Date().toLocaleString()}`,
       attendees: _pendingAttendees,
       scheduled_time: _pendingScheduledTime,
     };
-    await uploadRecording({ filePath: _currentOutputPath, accessToken: token, backendUrl: _backendUrl, metadata });
+    await uploadRecording({ filePath: result.outputPath, accessToken: token, backendUrl: _backendUrl, metadata });
     tray?.setToolTip('Meeting Note-Taker — Upload complete');
   } catch (err) {
     console.error('[tray] upload failed:', err);

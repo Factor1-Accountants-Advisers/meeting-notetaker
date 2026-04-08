@@ -6,7 +6,8 @@ import ActionItemContextPanel from "@/components/action-items/ActionItemContextP
 import MeetingActionItemsView from "@/components/action-items/MeetingActionItemsView";
 import MeetingRail from "@/components/action-items/MeetingRail";
 import { buildMeetingGroups, filterActionItems } from "@/components/action-items/selectors";
-import { useActionItems, useMeeting, useMeetings } from "@/lib/api";
+import { useActionItems, useMeeting, useMeetings, updateActionItem } from "@/lib/api";
+import { useSWRConfig } from "swr";
 
 const ACTION_ITEMS_PAGE_SIZE = 250;
 const MEETINGS_PAGE_SIZE = 500;
@@ -26,6 +27,7 @@ function getMeetingSummary(summaryText: string | null | undefined): string {
 }
 
 export default function ActionItemsPage() {
+  const { mutate } = useSWRConfig();
   const [selectedMeetingId, setSelectedMeetingId] = useState<number | null>(null);
   const [selectedActionItemId, setSelectedActionItemId] = useState<number | null>(null);
 
@@ -108,72 +110,92 @@ export default function ActionItemsPage() {
     (group) => !meetingTitles[group.meetingId]
   );
 
+  async function handleSaveActionItem(id: number, update: Record<string, unknown>) {
+    await updateActionItem(id, update);
+    // Revalidate the action items list so the UI updates
+    await mutate(`/api/action-items?page=1&per_page=${ACTION_ITEMS_PAGE_SIZE}`);
+  }
+
   return (
-    <div className="space-y-6">
-      <div>
+    <div className="flex h-full flex-col">
+      <div className="shrink-0 px-6 pt-6">
         <h1 className="text-2xl font-bold text-[color:var(--text-primary)]">Action Items</h1>
       </div>
 
       {actionItemsLoading && !actionItemsData ? (
-        <div
-          role="status"
-          className="rounded-[28px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] px-6 py-10 text-sm text-[color:var(--text-secondary)] shadow-[var(--shadow-soft)]"
-        >
-          Loading action items...
+        <div className="px-6 pt-6">
+          <div
+            role="status"
+            className="rounded-[28px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] px-6 py-10 text-sm text-[color:var(--text-secondary)] shadow-[var(--shadow-soft)]"
+          >
+            Loading action items...
+          </div>
         </div>
       ) : actionItemsError ? (
-        <div
-          role="alert"
-          className="rounded-[28px] border border-red-500/30 bg-red-500/10 px-6 py-10 text-sm text-red-100"
-        >
-          Failed to load action items.
+        <div className="px-6 pt-6">
+          <div
+            role="alert"
+            className="rounded-[28px] border border-red-500/30 bg-red-500/10 px-6 py-10 text-sm text-red-100"
+          >
+            Failed to load action items.
+          </div>
         </div>
       ) : meetingGroups.length === 0 ? (
-        <div
-          role="status"
-          className="rounded-[28px] border border-dashed border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] px-6 py-10 text-sm text-[color:var(--text-secondary)] shadow-[var(--shadow-soft)]"
-        >
-          No action items yet.
+        <div className="px-6 pt-6">
+          <div
+            role="status"
+            className="rounded-[28px] border border-dashed border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] px-6 py-10 text-sm text-[color:var(--text-secondary)] shadow-[var(--shadow-soft)]"
+          >
+            No action items yet.
+          </div>
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="flex min-h-0 flex-1 flex-col pt-4">
           {actionItemsTruncated ? (
-            <div
-              role="status"
-              className="rounded-[24px] border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"
-            >
-              {`Showing the first ${actionItemsData?.items.length ?? 0} of ${actionItemsData?.total ?? 0} action items.`}
+            <div className="px-6 pb-3">
+              <div
+                role="status"
+                className="rounded-[24px] border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"
+              >
+                {`Showing the first ${actionItemsData?.items.length ?? 0} of ${actionItemsData?.total ?? 0} action items.`}
+              </div>
             </div>
           ) : null}
 
           {meetingsLoading && unresolvedMeetingTitleCount > 0 ? (
-            <div
-              role="status"
-              className="rounded-[24px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-soft)] px-4 py-3 text-sm text-[color:var(--text-secondary)]"
-            >
-              Loading meeting titles...
+            <div className="px-6 pb-3">
+              <div
+                role="status"
+                className="rounded-[24px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-soft)] px-4 py-3 text-sm text-[color:var(--text-secondary)]"
+              >
+                Loading meeting titles...
+              </div>
             </div>
           ) : null}
 
           {!meetingsLoading && meetingsError && unresolvedMeetingTitleCount > 0 ? (
-            <div
-              role="status"
-              className="rounded-[24px] border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100"
-            >
-              Meeting titles could not be loaded.
+            <div className="px-6 pb-3">
+              <div
+                role="status"
+                className="rounded-[24px] border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100"
+              >
+                Meeting titles could not be loaded.
+              </div>
             </div>
           ) : null}
 
           {!meetingsLoading && !meetingsError && unresolvedMeetingTitles ? (
-            <div
-              role="status"
-              className="rounded-[24px] border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"
-            >
-              Some visible meetings are using fallback titles because meeting details were not loaded.
+            <div className="px-6 pb-3">
+              <div
+                role="status"
+                className="rounded-[24px] border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"
+              >
+                Some visible meetings are using fallback titles because meeting details were not loaded.
+              </div>
             </div>
           ) : null}
 
-          <div className="overflow-hidden rounded-[32px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] shadow-[var(--shadow-panel)] xl:grid xl:min-h-[calc(100vh-16rem)] xl:grid-cols-[280px_minmax(0,1fr)_360px]">
+          <div className="min-h-0 flex-1 overflow-hidden rounded-t-[32px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] shadow-[var(--shadow-panel)] grid grid-cols-[280px_minmax(0,1fr)_360px]">
             <MeetingRail
               groups={meetingGroups}
               selectedMeetingId={effectiveSelectedMeetingId}
@@ -189,6 +211,7 @@ export default function ActionItemsPage() {
               meetingTitle={selectedMeetingTitle}
               meetingSummary={selectedMeetingSummary}
               actionItem={selectedActionItem}
+              onSave={handleSaveActionItem}
             />
           </div>
         </div>

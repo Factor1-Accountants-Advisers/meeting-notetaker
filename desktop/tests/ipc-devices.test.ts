@@ -24,9 +24,10 @@ jest.mock('../src/main/auth', () => ({
 jest.mock('../src/main/graph', () => ({ getUpcomingMeetings: jest.fn() }));
 jest.mock('../src/main/recorder', () => ({
   startRecording: jest.fn(),
-  stopRecording: jest.fn(),
+  stopRecording: jest.fn().mockReturnValue({ outputPath: '' }),
   isRecording: jest.fn(),
   getRecordingStatus: jest.fn(),
+  onRecordingError: jest.fn(),
 }));
 jest.mock('../src/main/uploader', () => ({ uploadRecording: jest.fn() }));
 jest.mock('../src/main/tray', () => ({ setPendingMeeting: jest.fn() }));

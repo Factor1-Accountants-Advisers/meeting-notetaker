@@ -8,6 +8,15 @@ import type {
   ActionItemUpdate,
 } from "@/types";
 
+export interface ActionItemCreate {
+  meeting_id: number;
+  description: string;
+  owner_name?: string | null;
+  owner_email?: string | null;
+  due_date?: string | null;
+  status?: string;
+}
+
 // --- Token injection ---
 
 let _getIdToken: (() => Promise<string>) | null = null;
@@ -182,4 +191,26 @@ export async function updateActionItem(
   });
   if (!res.ok) throw new Error(`Failed to update action item: ${res.status}`);
   return res.json();
+}
+
+export async function createActionItem(
+  payload: ActionItemCreate
+): Promise<ActionItem> {
+  const headers = await authHeaders();
+  const res = await fetch("/api/action-items", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`Failed to create action item: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteActionItem(id: number): Promise<void> {
+  const headers = await authHeaders();
+  const res = await fetch(`/api/action-items/${id}`, {
+    method: "DELETE",
+    headers,
+  });
+  if (!res.ok) throw new Error(`Failed to delete action item: ${res.status}`);
 }

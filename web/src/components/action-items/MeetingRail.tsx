@@ -16,7 +16,7 @@ export default function MeetingRail({
   onSelectMeeting: (meetingId: number) => void;
 }) {
   return (
-    <aside className="border-b border-[color:var(--border-subtle)] bg-[color:var(--surface-soft)]/55 p-5 xl:border-b-0 xl:border-r">
+    <aside className="border-r border-[color:var(--border-subtle)] bg-[color:var(--surface-soft)]/55 p-5">
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[color:var(--text-muted)]">

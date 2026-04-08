@@ -1,36 +1,58 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Meeting Note-Taker Web UI
 
-## Getting Started
+This folder contains the Next.js frontend used by the desktop app.
 
-First, run the development server:
+## Preferred Development Workflow
+
+In normal local development, you do not start `web` on its own.
+The desktop app starts it for you.
+
+### Terminal 1: Backend
+
+```powershell
+cd C:\Projects\meeting-notetaker\backend
+uvicorn app.main:app --reload --port 8000
+```
+
+### Terminal 2: Desktop + Frontend
+
+```powershell
+cd C:\Projects\meeting-notetaker\desktop
+npm run dev
+```
+
+`desktop/npm run dev` starts the Next.js dev server from `../web` and then launches Electron.
+
+## Running Web Standalone
+
+If you want to run only the web app in a browser:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+This still expects the backend to be running on `http://localhost:8000`.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Notes
 
-## Learn More
+- Docker is not required for normal frontend development
+- The production Action Items redesign lives under `src/app/(protected)/action-items/` and `src/components/action-items/`
 
-To learn more about Next.js, take a look at the following resources:
+Lint:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+npm run lint
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Tests:
 
-## Deploy on Vercel
+```bash
+npm test
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Next.js
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- [Next.js Documentation](https://nextjs.org/docs)
+- [Learn Next.js](https://nextjs.org/learn)

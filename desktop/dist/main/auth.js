@@ -40,7 +40,9 @@ const msal_node_1 = require("@azure/msal-node");
 const electron_1 = require("electron");
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
-const CACHE_FILE = path.join(electron_1.app.getPath('userData'), 'msal-cache.enc');
+function getCacheFile() {
+    return path.join(electron_1.app.getPath('userData'), 'msal-cache.enc');
+}
 const SCOPES = [
     'https://graph.microsoft.com/Calendars.Read',
     'https://graph.microsoft.com/User.Read',
@@ -66,9 +68,9 @@ function getPca() {
 }
 function loadCache(pca) {
     try {
-        if (!fs.existsSync(CACHE_FILE))
+        if (!fs.existsSync(getCacheFile()))
             return;
-        const encrypted = fs.readFileSync(CACHE_FILE);
+        const encrypted = fs.readFileSync(getCacheFile());
         const data = electron_1.safeStorage.decryptString(encrypted);
         pca.getTokenCache().deserialize(data);
     }
@@ -79,7 +81,7 @@ function loadCache(pca) {
 function saveCache(pca) {
     const serialized = pca.getTokenCache().serialize();
     const encrypted = electron_1.safeStorage.encryptString(serialized);
-    fs.writeFileSync(CACHE_FILE, encrypted);
+    fs.writeFileSync(getCacheFile(), encrypted);
 }
 async function acquireToken() {
     const pca = getPca();
@@ -137,7 +139,7 @@ async function acquireIdToken() {
 }
 async function clearTokenCache() {
     try {
-        fs.unlinkSync(CACHE_FILE);
+        fs.unlinkSync(getCacheFile());
     }
     catch { /* ignore */ }
     _pca = null;

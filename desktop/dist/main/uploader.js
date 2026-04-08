@@ -41,19 +41,43 @@ const axios_1 = __importDefault(require("axios"));
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const form_data_1 = __importDefault(require("form-data"));
+const MAX_RETRIES = 3;
+const RETRY_DELAYS = [2000, 5000, 10000]; // ms
 async function uploadRecording(options) {
     const { filePath, accessToken, backendUrl, metadata } = options;
-    const form = new form_data_1.default();
-    form.append('audio_file', fs.createReadStream(filePath), {
-        filename: path.basename(filePath),
-        contentType: 'audio/wav',
-    });
-    form.append('metadata', JSON.stringify(metadata));
-    const response = await axios_1.default.post(`${backendUrl}/api/meetings/upload`, form, {
-        headers: { ...form.getHeaders(), Authorization: `Bearer ${accessToken}` },
-        maxBodyLength: 600 * 1024 * 1024,
-        maxContentLength: 600 * 1024 * 1024,
-    });
-    return response.data;
+    if (!filePath || !fs.existsSync(filePath)) {
+        throw new Error(`Recording file not found: ${filePath}`);
+    }
+    let lastError;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            const form = new form_data_1.default();
+            form.append('audio_file', fs.createReadStream(filePath), {
+                filename: path.basename(filePath),
+                contentType: 'audio/wav',
+            });
+            form.append('metadata', JSON.stringify(metadata));
+            const response = await axios_1.default.post(`${backendUrl}/api/meetings/upload`, form, {
+                headers: { ...form.getHeaders(), Authorization: `Bearer ${accessToken}` },
+                maxBodyLength: 600 * 1024 * 1024,
+                maxContentLength: 600 * 1024 * 1024,
+                timeout: 5 * 60 * 1000, // 5 minute timeout
+            });
+            return response.data;
+        }
+        catch (err) {
+            lastError = err instanceof Error ? err : new Error(String(err));
+            const status = axios_1.default.isAxiosError(err) ? err.response?.status : undefined;
+            // Don't retry client errors (4xx) — they won't succeed on retry
+            if (status && status >= 400 && status < 500) {
+                throw lastError;
+            }
+            if (attempt < MAX_RETRIES) {
+                console.warn(`[uploader] Attempt ${attempt + 1} failed, retrying in ${RETRY_DELAYS[attempt]}ms:`, lastError.message);
+                await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt]));
+            }
+        }
+    }
+    throw lastError;
 }
 //# sourceMappingURL=uploader.js.map

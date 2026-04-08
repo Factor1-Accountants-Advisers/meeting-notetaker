@@ -3,7 +3,7 @@
 import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Mic, Volume2, CircleDot, Square, AlertCircle, Loader2 } from "lucide-react";
-import { getElectronAPIOrNull } from "@/lib/electron-bridge";
+import { getElectronAPIOrNull, type MeetingMetadata } from "@/lib/electron-bridge";
 import { useRecordingStatus } from "@/lib/useRecordingStatus";
 import {
   readAudioSettings,
@@ -62,7 +62,7 @@ export default function RecordingPanel({
 }: RecordingPanelProps) {
   const router = useRouter();
   const electron = getElectronAPIOrNull();
-  const { recording, elapsed } = useRecordingStatus();
+  const { recording, elapsed, error: recorderError } = useRecordingStatus();
 
   const [title, setTitle] = useState("");
   const [attendees, setAttendees] = useState<string[]>([]);
@@ -71,6 +71,7 @@ export default function RecordingPanel({
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [lastFilePath, setLastFilePath] = useState<string | null>(null);
+  const [lastUploadMetadata, setLastUploadMetadata] = useState<MeetingMetadata | null>(null);
 
   const isRecording = recording;
 
@@ -86,7 +87,7 @@ export default function RecordingPanel({
   const audioSettings = readAudioSettings();
   const audioReady = hasCompleteAudioSettings(audioSettings);
 
-  const buildMetadata = () => ({
+  const buildMetadata = (): MeetingMetadata => ({
     meeting_title: meetingTitle || `Recording ${new Date().toLocaleString()}`,
     attendees: selectedMeeting
       ? selectedMeeting.attendees.map((a) => ({ name: a.name, email: a.email }))
@@ -112,6 +113,9 @@ export default function RecordingPanel({
   const handleStart = async () => {
     if (!electron) return;
     setError(null);
+    setUploadError(null);
+    setLastFilePath(null);
+    setLastUploadMetadata(null);
     try {
       let settings = audioSettings;
 
@@ -150,22 +154,25 @@ export default function RecordingPanel({
     }
   };
 
-  const doUpload = async (filePath: string) => {
+  const doUpload = async (filePath: string, metadata: MeetingMetadata) => {
     if (!electron) return;
     setUploading(true);
     setUploadError(null);
     try {
       const result = await electron.uploadRecording({
         filePath,
-        metadata: buildMetadata(),
+        metadata,
       });
       setUploading(false);
+      setLastFilePath(null);
+      setLastUploadMetadata(null);
       if (onMeetingCreated) {
         onMeetingCreated(result.meeting_id);
       }
     } catch (err: unknown) {
       setUploading(false);
       setLastFilePath(filePath);
+      setLastUploadMetadata(metadata);
       setUploadError(
         err instanceof Error
           ? err.message
@@ -178,8 +185,14 @@ export default function RecordingPanel({
     if (!electron) return;
     setUploadError(null);
     try {
-      const filePath = await electron.stopRecording();
-      await doUpload(filePath);
+      const result = await electron.stopRecording();
+      if (!result.outputPath) {
+        setUploadError(
+          result.error || "Recording failed before the audio file could be saved."
+        );
+        return;
+      }
+      await doUpload(result.outputPath, result.metadata ?? buildMetadata());
     } catch (err: unknown) {
       setUploadError(
         err instanceof Error
@@ -190,8 +203,8 @@ export default function RecordingPanel({
   };
 
   const handleRetryUpload = async () => {
-    if (lastFilePath) {
-      await doUpload(lastFilePath);
+    if (lastFilePath && lastUploadMetadata) {
+      await doUpload(lastFilePath, lastUploadMetadata);
     }
   };
 
@@ -281,7 +294,16 @@ export default function RecordingPanel({
   }
 
   return (
-    <div className="rounded-[24px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] p-5">
+      <div className="rounded-[24px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] p-5">
+      {recorderError && (
+        <div className="mb-3 flex items-start gap-2 rounded-2xl border border-[color:var(--danger-soft)] bg-[color:var(--danger-soft)] p-3">
+          <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-[color:var(--danger)]" />
+          <p className="text-xs text-[color:var(--danger)]">
+            Recording stopped unexpectedly: {recorderError}
+          </p>
+        </div>
+      )}
+
       {uploadError && (
         <div className="mb-3 flex items-start gap-2 rounded-2xl border border-[color:var(--danger-soft)] bg-[color:var(--danger-soft)] p-3">
           <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-[color:var(--danger)]" />

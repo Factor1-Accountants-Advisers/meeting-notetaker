@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ReactNode } from "react";
 import { Check } from "lucide-react";
 import type { CalendarEvent } from "@/types";
 
@@ -46,62 +46,16 @@ function InlineReveal({
   isOpen: boolean;
   children: ReactNode;
 }) {
-  const [shouldRender, setShouldRender] = useState(isOpen);
-  const [isVisible, setIsVisible] = useState(isOpen);
-  const [height, setHeight] = useState(isOpen ? "auto" : "0px");
-  const contentRef = useRef<HTMLDivElement>(null);
-
-  useLayoutEffect(() => {
-    if (!shouldRender || !contentRef.current) return;
-
-    const nextHeight = `${contentRef.current.scrollHeight}px`;
-    setHeight(nextHeight);
-  }, [children, shouldRender]);
-
-  useEffect(() => {
-    let timeoutId: number | undefined;
-    let frameId: number | undefined;
-
-    if (isOpen) {
-      setShouldRender(true);
-      frameId = window.requestAnimationFrame(() => {
-        if (contentRef.current) {
-          setHeight(`${contentRef.current.scrollHeight}px`);
-        }
-        setIsVisible(true);
-      });
-    } else if (shouldRender) {
-      if (contentRef.current) {
-        setHeight(`${contentRef.current.scrollHeight}px`);
-      }
-      frameId = window.requestAnimationFrame(() => {
-        setHeight("0px");
-        setIsVisible(false);
-      });
-      timeoutId = window.setTimeout(() => {
-        setShouldRender(false);
-      }, 320);
-    }
-
-    return () => {
-      if (frameId) window.cancelAnimationFrame(frameId);
-      if (timeoutId) window.clearTimeout(timeoutId);
-    };
-  }, [isOpen, shouldRender]);
-
-  if (!shouldRender) return null;
-
+  // CSS grid 0fr/1fr approach — no JS height measurement, fully GPU-compositable
   return (
     <div
-      className={`overflow-hidden transition-[max-height,opacity,transform,margin] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-        isVisible
-          ? "mt-3 translate-y-0 opacity-100"
-          : "mt-1 -translate-y-2 opacity-0"
-      }`}
-      style={{ maxHeight: height }}
+      className="grid transition-[grid-template-rows,opacity] duration-250 ease-[cubic-bezier(0.22,1,0.36,1)]"
+      style={{ gridTemplateRows: isOpen ? "1fr" : "0fr" , opacity: isOpen ? 1 : 0 }}
     >
-      <div ref={contentRef} className="px-1 pb-1">
-        {children}
+      <div className="overflow-hidden">
+        <div className={`px-1 pb-1 ${isOpen ? "mt-3" : ""}`}>
+          {children}
+        </div>
       </div>
     </div>
   );
@@ -137,7 +91,7 @@ export default function DayMeetingList({
                 <div key={meeting.id}>
                   <button
                     onClick={() => onSelectMeeting(meeting)}
-                    className={`w-full border-l-4 p-4 text-left transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${accent} ${
+                    className={`w-full border-l-4 p-4 text-left transition-[background-color,border-color,box-shadow] duration-200 ease-out ${accent} ${
                       isSelected
                         ? `border border-[color:var(--border-strong)] bg-[color:var(--surface-elevated)] shadow-[var(--shadow-soft)] ${
                             isExpanded ? "rounded-t-lg rounded-b-md" : "rounded-lg"

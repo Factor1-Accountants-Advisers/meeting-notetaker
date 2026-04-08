@@ -45,6 +45,9 @@ tmp/
 temp/
 *.tmp
 
+# Local dev data (SQLite DB + audio files)
+data/
+
 # Audio test files
 *.wav
 *.mp3

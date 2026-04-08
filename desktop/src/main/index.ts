@@ -8,10 +8,9 @@ import { autoUpdater } from 'electron-updater';
 import { createTray, updateTrayDevices } from './tray';
 import { registerIpcHandlers, listAudioDevices, pickDefaultDevices } from './ipc';
 import { registerAppProtocol } from './protocol';
+import { startScheduler, stopScheduler } from './scheduler';
 
 if (!app.requestSingleInstanceLock()) app.quit();
-
-app.disableHardwareAcceleration();
 
 let mainWindow: BrowserWindow | null = null;
 const backendUrl = process.env.BACKEND_URL ?? 'http://localhost:8000';
@@ -91,8 +90,15 @@ app.whenReady().then(() => {
   // Show main window on startup
   mainWindow = createMainWindow();
 
+  // Start calendar-based auto-record scheduler
+  startScheduler();
+
   if (app.isPackaged) {
     void autoUpdater.checkForUpdatesAndNotify();
     setInterval(() => void autoUpdater.checkForUpdatesAndNotify(), 4 * 3600000);
   }
+});
+
+app.on('will-quit', () => {
+  stopScheduler();
 });

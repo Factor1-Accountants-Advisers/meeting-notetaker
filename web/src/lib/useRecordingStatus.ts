@@ -7,6 +7,7 @@ interface RecordingState {
   recording: boolean;
   meetingTitle?: string;
   elapsed: number;
+  error?: string;
 }
 
 /**
@@ -18,6 +19,7 @@ export function useRecordingStatus(): RecordingState {
   const [recording, setRecording] = useState(false);
   const [meetingTitle, setMeetingTitle] = useState<string | undefined>();
   const [elapsed, setElapsed] = useState(0);
+  const [error, setError] = useState<string | undefined>();
   const startTimeRef = useRef<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -29,16 +31,20 @@ export function useRecordingStatus(): RecordingState {
     api.getRecordingStatus().then((status) => {
       setRecording(status.recording);
       setMeetingTitle(status.meetingTitle);
+      setError(status.error);
       if (status.recording && status.startedAt) {
         startTimeRef.current = status.startedAt;
       } else {
         startTimeRef.current = null;
       }
+    }).catch((err) => {
+      console.error('[useRecordingStatus] Failed to get initial status:', err);
     });
 
     const unsub = api.onRecordingStatus((status) => {
       setRecording(status.recording);
       setMeetingTitle(status.meetingTitle);
+      setError(status.error);
       if (status.recording && status.startedAt) {
         startTimeRef.current = status.startedAt;
       } else {
@@ -65,5 +71,5 @@ export function useRecordingStatus(): RecordingState {
     };
   }, [recording]);
 
-  return { recording, meetingTitle, elapsed };
+  return { recording, meetingTitle, elapsed, error };
 }

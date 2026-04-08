@@ -49,6 +49,7 @@ const recorder_1 = require("./recorder");
 const uploader_1 = require("./uploader");
 const tray_1 = require("./tray");
 const index_1 = require("./index");
+const scheduler_1 = require("./scheduler");
 const ffmpeg_static_1 = __importDefault(require("ffmpeg-static"));
 const child_process_1 = require("child_process");
 const FFMPEG_BINARY = (() => {
@@ -56,15 +57,16 @@ const FFMPEG_BINARY = (() => {
         throw new Error('ffmpeg-static did not resolve a binary for this platform');
     return ffmpeg_static_1.default;
 })();
-// In-app recording state (mirrors what tray.ts does for tray-initiated recordings)
-let _ipcOutputPath = '';
-let _ipcMetadata = null;
 function broadcastRecordingStatus() {
     const win = (0, index_1.getMainWindow)();
     if (win && !win.isDestroyed()) {
         win.webContents.send('recorder:status-changed', (0, recorder_1.getRecordingStatus)());
     }
 }
+// Broadcast status change when ffmpeg fails asynchronously
+(0, recorder_1.onRecordingError)((_errorMsg) => {
+    broadcastRecordingStatus();
+});
 function parseAudioDevicesFromFfmpegOutput(output) {
     const devices = [];
     const lines = output.split(/\r?\n/);
@@ -246,23 +248,26 @@ function registerIpcHandlers() {
     electron_1.ipcMain.handle('recorder:start', (_e, opts) => {
         // Generate output path (same approach as tray.ts)
         const outputPath = opts.outputPath || path.join(electron_1.app.getPath('temp'), `meeting-${Date.now()}.wav`);
-        _ipcOutputPath = outputPath;
-        _ipcMetadata = opts.metadata || null;
         (0, recorder_1.startRecording)({
             micName: opts.micName,
             loopbackName: opts.loopbackName,
             outputPath,
-            meetingTitle: _ipcMetadata?.meeting_title,
+            meetingTitle: opts.metadata?.meeting_title,
+            metadata: opts.metadata,
         });
         broadcastRecordingStatus();
         console.log(`[ipc] recorder:start — recording to ${outputPath}`);
     });
     electron_1.ipcMain.handle('recorder:stop', () => {
-        (0, recorder_1.stopRecording)();
+        const result = (0, recorder_1.stopRecording)();
         broadcastRecordingStatus();
-        const outputPath = _ipcOutputPath;
-        console.log(`[ipc] recorder:stop — file at ${outputPath}`);
-        return outputPath;
+        if (!result.outputPath) {
+            console.warn('[ipc] recorder:stop — no output path (recording may have failed to start)');
+        }
+        else {
+            console.log(`[ipc] recorder:stop — file at ${result.outputPath}`);
+        }
+        return result;
     });
     electron_1.ipcMain.handle('recorder:is-recording', () => (0, recorder_1.isRecording)());
     electron_1.ipcMain.handle('recorder:get-status', () => (0, recorder_1.getRecordingStatus)());
@@ -288,6 +293,9 @@ function registerIpcHandlers() {
     electron_1.ipcMain.handle('audio:get-default-devices', async () => {
         const devices = await listAudioDevices();
         return await pickDefaultDevices(devices);
+    });
+    electron_1.ipcMain.handle('scheduler:dismiss', () => {
+        (0, scheduler_1.dismissAutoRecord)();
     });
 }
 //# sourceMappingURL=ipc.js.map

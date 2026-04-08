@@ -14,6 +14,13 @@ export interface RecordingStatus {
   recording: boolean;
   meetingTitle?: string;
   startedAt?: number;
+  error?: string;
+}
+
+export interface RecordingStopResult {
+  outputPath: string;
+  metadata?: MeetingMetadata;
+  error?: string;
 }
 
 export interface AudioDevice {
@@ -52,7 +59,7 @@ export interface ElectronAPI {
 
   // Recording
   startRecording: (opts: RecordingOptions) => Promise<void>;
-  stopRecording: () => Promise<string>;
+  stopRecording: () => Promise<RecordingStopResult>;
   isRecording: () => Promise<boolean>;
   getRecordingStatus: () => Promise<RecordingStatus>;
   onRecordingStatus: (cb: (status: RecordingStatus) => void) => () => void;

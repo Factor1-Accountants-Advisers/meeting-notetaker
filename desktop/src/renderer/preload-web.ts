@@ -19,11 +19,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     meetingTitle?: string;
     metadata?: { meeting_title: string; attendees: { name: string; email?: string }[]; scheduled_time?: string };
   }) => ipcRenderer.invoke('recorder:start', opts),
-  stopRecording: (): Promise<string> => ipcRenderer.invoke('recorder:stop'),
+  stopRecording: (): Promise<{
+    outputPath: string;
+    metadata?: { meeting_title: string; attendees: { name: string; email?: string }[]; scheduled_time?: string };
+    error?: string;
+  }> => ipcRenderer.invoke('recorder:stop'),
   isRecording: () => ipcRenderer.invoke('recorder:is-recording'),
   getRecordingStatus: () => ipcRenderer.invoke('recorder:get-status'),
-  onRecordingStatus: (cb: (status: { recording: boolean; meetingTitle?: string; startedAt?: number }) => void) => {
-    const handler = (_e: Electron.IpcRendererEvent, status: { recording: boolean; meetingTitle?: string; startedAt?: number }) => cb(status);
+  onRecordingStatus: (cb: (status: { recording: boolean; meetingTitle?: string; startedAt?: number; error?: string }) => void) => {
+    const handler = (_e: Electron.IpcRendererEvent, status: { recording: boolean; meetingTitle?: string; startedAt?: number; error?: string }) => cb(status);
     ipcRenderer.on('recorder:status-changed', handler);
     return () => { ipcRenderer.removeListener('recorder:status-changed', handler); };
   },

@@ -60,14 +60,29 @@ describe('recorder', () => {
     expect(mockSave).toHaveBeenCalledWith('out.wav');
   });
 
-  it('stopRecording calls kill(SIGINT)', () => {
-    startRecording({ micName: 'Mic', loopbackName: 'Loop', outputPath: 'out.wav' });
-    stopRecording();
+  it('stopRecording calls kill(SIGINT) and returns the active session details', () => {
+    const metadata = {
+      meeting_title: 'AI Mission Catch Up',
+      attendees: [{ name: 'Alice', email: 'alice@example.com' }],
+      scheduled_time: '2026-03-30T03:00:00Z',
+    };
+
+    startRecording({
+      micName: 'Mic',
+      loopbackName: 'Loop',
+      outputPath: 'out.wav',
+      metadata,
+    });
+
+    expect(stopRecording()).toEqual({
+      outputPath: 'out.wav',
+      metadata,
+    });
     expect(mockKill).toHaveBeenCalledWith('SIGINT');
   });
 
   it('stopRecording is a no-op when not recording', () => {
-    expect(() => stopRecording()).not.toThrow();
+    expect(stopRecording()).toEqual({ outputPath: '' });
     expect(mockKill).not.toHaveBeenCalled();
   });
 
@@ -94,5 +109,19 @@ describe('recorder', () => {
     });
 
     nowSpy.mockRestore();
+  });
+
+  it('preserves the ffmpeg error in recording status after an async failure', () => {
+    startRecording({ micName: 'Mic', loopbackName: 'Loop', outputPath: 'out.wav' });
+
+    const errorHandler = mockOn.mock.calls.find(([event]) => event === 'error')?.[1];
+    expect(errorHandler).toBeDefined();
+
+    errorHandler?.(new Error('device disconnected'));
+
+    expect(getRecordingStatus()).toEqual({
+      recording: false,
+      error: 'device disconnected',
+    });
   });
 });

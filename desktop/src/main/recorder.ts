@@ -1,5 +1,6 @@
 import ffmpeg, { FfmpegCommand } from 'fluent-ffmpeg';
 import ffmpegPath from 'ffmpeg-static';
+import type { MeetingMetadata } from './uploader';
 
 if (!ffmpegPath) throw new Error('ffmpeg-static did not resolve a binary for this platform');
 ffmpeg.setFfmpegPath(ffmpegPath);
@@ -9,18 +10,56 @@ export interface RecordingOptions {
   loopbackName: string;
   outputPath: string;
   meetingTitle?: string;
+  metadata?: MeetingMetadata;
 }
 
 export interface RecordingStatusSnapshot {
   recording: boolean;
   meetingTitle?: string;
   startedAt?: number;
+  outputPath?: string;
+  error?: string;
 }
+
+export interface RecordingStopResult {
+  outputPath: string;
+  metadata?: MeetingMetadata;
+  error?: string;
+}
+
+export type RecordingErrorCallback = (error: string) => void;
 
 let activeProcess: FfmpegCommand | null = null;
 let recordingActive = false;
 let recordingStartedAt: number | null = null;
 let activeMeetingTitle: string | undefined;
+let activeOutputPath: string | undefined;
+let activeMetadata: MeetingMetadata | undefined;
+let lastError: string | undefined;
+let errorCallback: RecordingErrorCallback | null = null;
+
+export function onRecordingError(cb: RecordingErrorCallback | null): void {
+  errorCallback = cb;
+}
+
+function clearRecordingState(): void {
+  activeProcess = null;
+  recordingActive = false;
+  recordingStartedAt = null;
+  activeMeetingTitle = undefined;
+  activeOutputPath = undefined;
+  activeMetadata = undefined;
+}
+
+function handleFfmpegError(err: Error): void {
+  const isGracefulStop = err.message.includes('SIGINT');
+  if (!isGracefulStop) {
+    console.error('[recorder] error:', err.message);
+    lastError = err.message;
+    if (errorCallback) errorCallback(err.message);
+  }
+  clearRecordingState();
+}
 
 export function startRecording(options: RecordingOptions): void {
   if (recordingActive || activeProcess) {
@@ -29,7 +68,10 @@ export function startRecording(options: RecordingOptions): void {
 
   recordingActive = true;
   recordingStartedAt = Date.now();
-  activeMeetingTitle = options.meetingTitle;
+  activeMeetingTitle = options.meetingTitle ?? options.metadata?.meeting_title;
+  activeOutputPath = options.outputPath;
+  activeMetadata = options.metadata;
+  lastError = undefined;
 
   activeProcess = ffmpeg()
     .input(`audio=${options.micName}`)
@@ -42,34 +84,39 @@ export function startRecording(options: RecordingOptions): void {
     .audioCodec('pcm_s16le')
     .outputOptions(['-y'])
     .on('start', (cmd) => console.log('[recorder] started:', cmd))
-    .on('error', (err) => {
-      if (!err.message.includes('SIGINT')) console.error('[recorder] error:', err.message);
-      activeProcess = null;
-      recordingActive = false;
-      recordingStartedAt = null;
-      activeMeetingTitle = undefined;
-    })
+    .on('error', handleFfmpegError)
     .on('end', () => {
-      activeProcess = null;
-      recordingActive = false;
-      recordingStartedAt = null;
-      activeMeetingTitle = undefined;
+      clearRecordingState();
     })
     .save(options.outputPath);
 }
 
-export function stopRecording(): void {
+/**
+ * Stop the active recording and return the active recording session details.
+ */
+export function stopRecording(): RecordingStopResult {
+  const stopResult: RecordingStopResult = {
+    outputPath: activeOutputPath || '',
+    metadata: activeMetadata,
+    ...(lastError ? { error: lastError } : {}),
+  };
+
   if (!activeProcess) {
     recordingActive = false;
     recordingStartedAt = null;
     activeMeetingTitle = undefined;
-    return;
+    activeOutputPath = undefined;
+    activeMetadata = undefined;
+    return stopResult;
   }
   recordingActive = false;
   recordingStartedAt = null;
   activeMeetingTitle = undefined;
+  activeOutputPath = undefined;
+  activeMetadata = undefined;
   activeProcess.kill('SIGINT');
   // activeProcess is reset by the 'end' or 'error' event handler
+  return stopResult;
 }
 
 export function isRecording(): boolean {
@@ -78,7 +125,7 @@ export function isRecording(): boolean {
 
 export function getRecordingStatus(): RecordingStatusSnapshot {
   if (!recordingActive) {
-    return { recording: false };
+    return { recording: false, error: lastError };
   }
 
   return {
