@@ -49,6 +49,7 @@ interface SpeakerLabelProps {
 
 Behaviour:
 - `isEditing` boolean state, defaults `false`
+- `isSubmitting` ref (not state) guards against double-fire: `onKeyDown` Enter sets `isSubmitting.current = true` before saving; `onBlur` checks this ref and skips the save call if already submitting, then resets it.
 - When not editing: renders `<span className={colorClass}>` with `onClick` → `setIsEditing(true)`
 - When editing: renders `<input>` with `defaultValue={name}`, `autoFocus`, `onKeyDown` (Enter → save, Escape → cancel), `onBlur` → save
 - Save calls `renameSpeaker(meetingId, oldName, newName)` API helper (see below)
@@ -56,8 +57,9 @@ Behaviour:
 #### Modified: `MeetingDetailContent.tsx`
 
 - Replace the speaker `<span>` in the segment row (line 221) with `<SpeakerLabel>`.
-- Add local `speakerAliases: Record<string, string>` state — a map of original → current display name. Initialised from the transcript data.
-- `onRenamed` callback updates `speakerAliases` and triggers SWR `mutate` to refresh transcript data from server.
+- Drop the `speakerAliases` intermediate state. Instead, use SWR's `mutate(updatedData, false)` (optimistic local cache update, no revalidation) to update the `segments` array directly in the SWR cache. The `name` prop passed to `<SpeakerLabel>` always comes from the SWR-cached segments, so there is a single source of truth.
+- `onRenamed(oldName, newName)` callback: constructs the updated meeting data by mapping segments and replacing matching speaker strings, then calls `mutate(updatedMeetingData, false)`. If the PATCH fails, calls `mutate(originalMeetingData, false)` to roll back.
+- Speaker keys in the rename map are always the current segment value (as stored in the SWR cache), so re-renames work correctly: renaming "John" → "Jon" will find "John" as the current stored label.
 
 ### API
 
@@ -81,10 +83,11 @@ Response 200:
 
 **Backend logic (`backend/app/routers/meetings.py`):**
 1. Fetch `Transcript` for `meeting_id`, verify meeting belongs to current user.
-2. Load `segments` JSON array.
-3. Iterate segments; for each where `segment["speaker"] == old_name`, set `segment["speaker"] = new_name`.
-4. Save updated segments back to the `Transcript` record.
-5. Return `{ "updated_count": N }`.
+2. Validate: `new_name` must be non-empty after strip and at most 100 characters; return HTTP 422 otherwise.
+3. Load `segments` JSON array.
+4. Iterate segments; for each where `segment["speaker"] == old_name`, set `segment["speaker"] = new_name`.
+5. Save updated segments back to the `Transcript` record.
+6. Return `{ "updated_count": N }`.
 
 #### New frontend API helper
 **File:** `web/src/lib/api.ts` (add to existing file)
@@ -133,9 +136,10 @@ interface AudioPlayerProps {
 **Internals:**
 - `containerRef` points to a `<div>` where Wavesurfer mounts.
 - `wavesurferRef` holds the WaveSurfer instance.
+- `AudioPlayer` must be a `'use client'` component. Wavesurfer.js references `window` at module level and will SSR-crash if imported at the top level. Import it via dynamic import inside a `useEffect` (or use `next/dynamic` with `ssr: false` at the call site in `MeetingDetailContent`). The recommended approach is a dynamic import inside a `useEffect` within `AudioPlayer.tsx` itself, keeping the component self-contained.
 - On mount: `WaveSurfer.create({ container, url: src, waveColor, progressColor, height, barWidth, barRadius })`. Theme-aware colours via CSS custom properties read at init time.
 - On `timeupdate` event: call `onTimeUpdate(wavesurfer.getCurrentTime())`.
-- `seekTo(seconds)`: `wavesurfer.seekTo(seconds / wavesurfer.getDuration())`.
+- `seekTo(seconds)`: guard against decode-before-ready — check `wavesurfer.getDuration() > 0` before computing the normalised position. If audio is not yet ready, store the requested time in a `pendingSeek` ref and apply it on Wavesurfer's `ready` event. Formula: `wavesurfer.seekTo(seconds / wavesurfer.getDuration())`.
 - Cleanup: `wavesurfer.destroy()` on unmount.
 - Render custom play/pause button (or use Wavesurfer's built-in controls via `interact: true`).
 
@@ -165,7 +169,7 @@ Add to `web/package.json`:
 "wavesurfer.js": "^7.x"
 ```
 
-(WaveSurfer v7 is ESM-compatible and works with Next.js App Router without additional config.)
+(WaveSurfer v7 is ESM-compatible. It references `window` at module level so it must be loaded client-side only — handled by the dynamic import in `AudioPlayer.tsx` as described above.)
 
 ### Error Handling
 
