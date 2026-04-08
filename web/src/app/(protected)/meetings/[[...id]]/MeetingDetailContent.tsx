@@ -15,6 +15,7 @@ import ActionItemsTable from "@/components/ActionItemsTable";
 import ExportMenu from "@/components/ExportMenu";
 import StatusBadge from "@/components/StatusBadge";
 import ProcessingProgress from "@/components/ProcessingProgress";
+import SpeakerLabel from "@/components/SpeakerLabel";
 
 const SPEAKER_COLORS = [
   "text-blue-400",
@@ -63,7 +64,7 @@ export default function MeetingDetailContent({
   const numericId = meetingIdProp ?? (paramId ? Number(paramId) : undefined);
 
   const [pollInterval, setPollInterval] = useState(3000);
-  const { data: m, error, isLoading } = useMeeting(numericId, {
+  const { data: m, error, isLoading, mutate } = useMeeting(numericId, {
     refreshInterval: pollInterval,
   });
 
@@ -91,6 +92,20 @@ export default function MeetingDetailContent({
   uniqueSpeakers.forEach((speaker, i) => {
     speakerColors[speaker] = SPEAKER_COLORS[i % SPEAKER_COLORS.length];
   });
+
+  function handleSpeakerRenamed(oldName: string, newName: string) {
+    if (!m) return;
+    const updatedSegments = (m.transcript?.segments ?? []).map((seg) =>
+      seg.speaker === oldName ? { ...seg, speaker: newName } : seg
+    );
+    const updatedMeeting = {
+      ...m,
+      transcript: m.transcript
+        ? { ...m.transcript, segments: updatedSegments }
+        : null,
+    };
+    mutate(updatedMeeting, false);
+  }
 
   const isProcessing = m.status !== "complete" && m.status !== "failed";
 
@@ -218,9 +233,12 @@ export default function MeetingDetailContent({
             {visibleSegments.map((seg, i) => (
               <div key={i} className="flex gap-4 rounded-[22px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-muted)] px-4 py-4">
                 <div className="w-24 flex-shrink-0">
-                  <span className={`text-sm font-semibold ${speakerColors[seg.speaker] || "text-[color:var(--text-secondary)]"}`}>
-                    {seg.speaker}
-                  </span>
+                  <SpeakerLabel
+                    name={seg.speaker}
+                    colorClass={speakerColors[seg.speaker] || "text-[color:var(--text-secondary)]"}
+                    meetingId={m.id}
+                    onRenamed={handleSpeakerRenamed}
+                  />
                   <button
                     onClick={() => audioRef.current?.seekTo(seg.start)}
                     className="mt-1 block text-xs text-[color:var(--text-muted)] transition-colors hover:text-[color:var(--accent-text)]"
