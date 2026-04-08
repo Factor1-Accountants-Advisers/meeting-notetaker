@@ -62,6 +62,17 @@ class MeetingUploadResponse(BaseModel):
     status: str
 
 
+class RenameSpeakerRequest(BaseModel):
+    """Request body for PATCH /api/meetings/{id}/rename-speaker."""
+    old_name: str = Field(..., min_length=1, max_length=100)
+    new_name: str = Field(..., min_length=1, max_length=100)
+
+
+class RenameSpeakerResponse(BaseModel):
+    """Response from PATCH /api/meetings/{id}/rename-speaker."""
+    updated_count: int
+
+
 class MeetingListItem(BaseModel):
     """Meeting item in list view."""
     id: int
