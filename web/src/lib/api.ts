@@ -214,3 +214,21 @@ export async function deleteActionItem(id: number): Promise<void> {
   });
   if (!res.ok) throw new Error(`Failed to delete action item: ${res.status}`);
 }
+
+export async function renameSpeaker(
+  meetingId: number,
+  oldName: string,
+  newName: string,
+): Promise<{ updated_count: number }> {
+  const headers = await authHeaders();
+  const res = await fetch(`/api/meetings/${meetingId}/rename-speaker`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify({ old_name: oldName, new_name: newName }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail || `Rename failed: ${res.status}`);
+  }
+  return res.json();
+}
