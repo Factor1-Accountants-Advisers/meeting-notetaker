@@ -122,7 +122,10 @@ export default function ActionItemsTable({
                 />
               </td>
               <td className={`px-4 py-3 text-sm leading-7 ${item.status === "complete" ? "line-through text-[color:var(--text-muted)]" : "text-[color:var(--text-primary)]"}`}>
-                {item.description}
+                <EditableCell
+                  value={item.description}
+                  onSave={(v) => saveField(item, "description", v)}
+                />
               </td>
               <td className="px-4 py-3 text-sm text-[color:var(--text-secondary)]">
                 <EditableCell

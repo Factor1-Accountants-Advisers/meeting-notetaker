@@ -224,6 +224,33 @@ class TestGetMeetings:
         assert m1["has_summary"] is True
         assert m2["has_summary"] is False
 
+    @pytest.mark.asyncio
+    async def test_filter_by_date_from(self, client: AsyncClient):
+        # m1 is scheduled 2026-03-19 09:00, m2 is 2026-03-19 10:00
+        # date_from filters on created_at; both meetings were created in the same
+        # session so use a far-future cutoff to verify the filter excludes all.
+        resp = await client.get("/api/meetings?date_from=2099-01-01T00:00:00")
+        data = resp.json()
+        assert data["total"] == 0
+        assert data["items"] == []
+
+    @pytest.mark.asyncio
+    async def test_filter_by_date_to(self, client: AsyncClient):
+        # A date_to in the past should exclude all meetings.
+        resp = await client.get("/api/meetings?date_to=2000-01-01T00:00:00")
+        data = resp.json()
+        assert data["total"] == 0
+        assert data["items"] == []
+
+    @pytest.mark.asyncio
+    async def test_filter_by_date_range_returns_all(self, client: AsyncClient):
+        # A wide range should return all meetings.
+        resp = await client.get(
+            "/api/meetings?date_from=2000-01-01T00:00:00&date_to=2099-01-01T00:00:00"
+        )
+        data = resp.json()
+        assert data["total"] == 2
+
 
 # ---------------------------------------------------------------------------
 # GET /api/meetings/{id} — full detail
@@ -379,6 +406,15 @@ class TestPatchActionItem:
         )
         assert resp.status_code == 200
         assert resp.json()["due_date"] == "2026-04-15"
+
+    @pytest.mark.asyncio
+    async def test_update_description(self, client: AsyncClient):
+        resp = await client.patch(
+            "/api/action-items/1",
+            json={"description": "Updated budget report description"}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["description"] == "Updated budget report description"
 
     @pytest.mark.asyncio
     async def test_update_not_found(self, client: AsyncClient):
