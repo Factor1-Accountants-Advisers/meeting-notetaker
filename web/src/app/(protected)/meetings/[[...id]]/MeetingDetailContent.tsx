@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -77,6 +77,16 @@ export default function MeetingDetailContent({
 
   const audioRef = useRef<AudioPlayerHandle>(null);
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
+  const [activeSegmentIndex, setActiveSegmentIndex] = useState<number | null>(null);
+  const segmentRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  useEffect(() => {
+    if (activeSegmentIndex === null) return;
+    segmentRefs.current[activeSegmentIndex]?.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest",
+    });
+  }, [activeSegmentIndex]);
 
   if (!numericId) return <div className="text-[color:var(--text-secondary)]">No meeting selected.</div>;
   if (isLoading) return <div className="text-[color:var(--text-secondary)]">Loading meeting...</div>;
@@ -106,6 +116,28 @@ export default function MeetingDetailContent({
     };
     mutate(updatedMeeting, false);
   }
+
+  const handleTimeUpdate = useCallback(
+    (currentTime: number) => {
+      let lo = 0;
+      let hi = segments.length - 1;
+      let found: number | null = null;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const seg = segments[mid];
+        if (currentTime < seg.start) {
+          hi = mid - 1;
+        } else if (currentTime >= seg.end) {
+          lo = mid + 1;
+        } else {
+          found = mid;
+          break;
+        }
+      }
+      setActiveSegmentIndex(found);
+    },
+    [segments],
+  );
 
   const isProcessing = m.status !== "complete" && m.status !== "failed";
 
@@ -152,7 +184,7 @@ export default function MeetingDetailContent({
 
       {/* Audio player */}
       {m.audio_url ? (
-        <AudioPlayer ref={audioRef} src={m.audio_url} />
+        <AudioPlayer ref={audioRef} src={m.audio_url} onTimeUpdate={handleTimeUpdate} />
       ) : (
         <div className="mb-6 rounded-[20px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-soft)] px-4 py-3 text-sm text-[color:var(--text-secondary)]">
           Audio unavailable
@@ -231,7 +263,15 @@ export default function MeetingDetailContent({
         {segments.length > 0 ? (
           <div className="space-y-5">
             {visibleSegments.map((seg, i) => (
-              <div key={i} className="flex gap-4 rounded-[22px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-muted)] px-4 py-4">
+              <div
+                key={i}
+                ref={(el) => { segmentRefs.current[i] = el; }}
+                className={`flex gap-4 rounded-[22px] border px-4 py-4 transition-colors duration-200 ${
+                  activeSegmentIndex === i
+                    ? "border-[color:var(--accent-text)] bg-[color:var(--surface-soft)]"
+                    : "border-[color:var(--border-subtle)] bg-[color:var(--surface-muted)]"
+                }`}
+              >
                 <div className="w-24 flex-shrink-0">
                   <SpeakerLabel
                     name={seg.speaker}
