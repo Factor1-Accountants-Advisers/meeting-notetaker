@@ -48,29 +48,34 @@ def build_candidate_pool(
     if current_user and current_user.get("name"):
         email = (current_user.get("email") or "").lower()
         if email and email in seen_emails:
+            # Already a participant — just flag them as the recorder
             for c in candidates:
                 if (c.get("email") or "").lower() == email:
                     c["is_recorder"] = True
-        elif email:
+        else:
+            # Not already present (either no email, or email not seen) — add them
             candidates.append({
                 "display_name": current_user["name"],
                 "email": current_user.get("email"),
                 "is_organizer": False,
                 "is_recorder": True,
             })
-            seen_emails.add(email)
+            if email:
+                seen_emails.add(email)
 
-    # Organizer — add if missing
+    # Organizer — add if not already in the participant list
     organizer = hints.get("organizer")
     if organizer and organizer.get("name"):
         email = (organizer.get("email") or "").lower()
-        if email and email not in seen_emails:
+        if not email or email not in seen_emails:
             candidates.append({
                 "display_name": organizer["name"],
                 "email": organizer.get("email"),
                 "is_organizer": True,
                 "is_recorder": False,
             })
+            if email:
+                seen_emails.add(email)
 
     return candidates
 
@@ -193,8 +198,9 @@ def infer_speaker_identities(
                     "reasoning": entry.get("reasoning", ""),
                 }
             else:
-                logger.info(
-                    f"Speaker '{label}' not mapped: confidence={confidence}, name={name}"
+                logger.debug(
+                    "Speaker '%s' not mapped: confidence=%.2f, name_present=%s",
+                    label, confidence, name is not None,
                 )
 
         return mapping

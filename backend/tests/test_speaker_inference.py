@@ -82,6 +82,49 @@ class TestBuildCandidatePool:
         org = [c for c in pool if c.get("is_organizer")]
         assert org[0]["display_name"] == "Melissa Hall"
 
+    def test_adds_current_user_with_no_email(self):
+        """Recorder with no email must still be added to the pool."""
+        from app.services.speaker_inference import build_candidate_pool
+
+        participants = [
+            SimpleNamespace(name="Alice Smith", email="alice@example.com", is_organizer=False),
+        ]
+        hints = {
+            "current_user": {
+                "name": "External Recorder",
+                "email": None,
+                "is_current_user": True,
+            },
+        }
+
+        pool = build_candidate_pool(participants, identity_hints=hints)
+
+        assert len(pool) == 2
+        recorder = [c for c in pool if c.get("is_recorder")]
+        assert len(recorder) == 1
+        assert recorder[0]["display_name"] == "External Recorder"
+
+    def test_adds_organizer_with_no_email(self):
+        """Organizer with no email must still be added to the pool."""
+        from app.services.speaker_inference import build_candidate_pool
+
+        participants = [
+            SimpleNamespace(name="Alice Smith", email="alice@example.com", is_organizer=False),
+        ]
+        hints = {
+            "organizer": {
+                "name": "External Organizer",
+                "email": None,
+            },
+        }
+
+        pool = build_candidate_pool(participants, identity_hints=hints)
+
+        assert len(pool) == 2
+        org = [c for c in pool if c.get("is_organizer")]
+        assert len(org) == 1
+        assert org[0]["display_name"] == "External Organizer"
+
     def test_returns_empty_pool_for_empty_inputs(self):
         from app.services.speaker_inference import build_candidate_pool
 
