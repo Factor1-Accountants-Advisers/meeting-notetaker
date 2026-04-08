@@ -95,6 +95,23 @@ class TestMigration002IdentityHintsAndIsOrganizer:
             "participants.is_organizer is missing — migration 002 not applied"
         )
 
+class TestMigration003SpeakerIdentified:
+    """Verify speaker_identified column added in migration 003."""
+
+    @pytest.mark.asyncio
+    async def test_transcripts_has_speaker_identified_column(self, inspected_engine):
+        async with inspected_engine.connect() as conn:
+            columns = await conn.run_sync(
+                lambda c: [col["name"] for col in inspect(c).get_columns("transcripts")]
+            )
+        assert "speaker_identified" in columns, (
+            "transcripts.speaker_identified is missing — migration 003 not applied"
+        )
+
+
+class TestMigration002IdentityHintsAndIsOrganizer:
+    """Verify columns added in migration 002 are present."""
+
     @pytest.mark.asyncio
     async def test_is_organizer_defaults_to_false(self, inspected_engine):
         """is_organizer column default should be False when not explicitly set."""
