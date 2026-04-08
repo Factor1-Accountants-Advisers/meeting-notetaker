@@ -74,4 +74,18 @@ describe("SpeakerLabel", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     expect(renameSpeaker).not.toHaveBeenCalled();
   });
+
+  it("shows error state and does not call onRenamed when API fails", async () => {
+    const { renameSpeaker } = await import("@/lib/api");
+    vi.mocked(renameSpeaker).mockRejectedValueOnce(new Error("Server error"));
+    render(<SpeakerLabel {...defaultProps} />);
+    fireEvent.click(screen.getByText("Speaker A"));
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "John Smith" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => {
+      expect(renameSpeaker).toHaveBeenCalled();
+      expect(defaultProps.onRenamed).not.toHaveBeenCalled();
+    });
+  });
 });
