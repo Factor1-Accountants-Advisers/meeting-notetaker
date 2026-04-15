@@ -5,10 +5,12 @@ Runs the processing steps in a background thread:
 2. Speaker label renaming
 3. AI summarisation (OpenAI)
 
-No Celery or Redis required — uses asyncio.to_thread() for background processing.
+The runtime path is thread-based via ``enqueue_meeting()``. Celery task wrappers
+remain exported as a compatibility layer for legacy tests and integrations.
 """
 import asyncio
 import logging
+import os
 from typing import Optional
 
 from sqlalchemy import create_engine
@@ -96,3 +98,88 @@ def enqueue_meeting(meeting_id: int) -> None:
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, _run_pipeline_sync, meeting_id)
     logger.info(f"Pipeline enqueued (background thread) for meeting {meeting_id}")
+
+
+def _run_transcription_task(meeting_id: int) -> dict:
+    from app.services.transcription import process_transcription
+
+    with SyncSessionLocal() as session:
+        transcript = process_transcription(session, meeting_id)
+        return {
+            "meeting_id": meeting_id,
+            "status": "transcribed",
+            "segment_count": len(transcript.segments or []),
+        }
+
+
+def _run_diarisation_task(meeting_id: int) -> dict:
+    from app.services.diarisation import process_diarisation
+
+    with SyncSessionLocal() as session:
+        transcript = process_diarisation(session, meeting_id)
+        speakers = {
+            seg.get("speaker")
+            for seg in (transcript.segments or [])
+            if seg.get("speaker")
+        }
+        return {
+            "meeting_id": meeting_id,
+            "status": "diarised",
+            "speaker_count": len(speakers),
+        }
+
+
+def _run_summarisation_task(meeting_id: int) -> dict:
+    from app.services.summarisation import process_summarisation
+
+    with SyncSessionLocal() as session:
+        summary, action_items = process_summarisation(session, meeting_id)
+        return {
+            "meeting_id": meeting_id,
+            "status": "summarised",
+            "key_points_count": len(summary.key_points or []),
+            "action_items_count": len(action_items),
+        }
+
+
+def _cleanup_temp_files_impl(file_paths: list[str]) -> dict:
+    removed = 0
+    for path in file_paths:
+        if not path:
+            continue
+        try:
+            os.unlink(path)
+            removed += 1
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            logger.warning(f"Failed to delete temp file {path}: {exc}")
+    return {"status": "cleaned", "removed_count": removed}
+
+
+from app.celery_app import celery_app
+
+
+@celery_app.task(name="app.services.pipeline.process_meeting")
+def process_meeting(meeting_id: int) -> dict:
+    return _run_pipeline_sync(meeting_id)
+
+
+@celery_app.task(name="app.services.pipeline.transcribe_meeting")
+def transcribe_meeting(meeting_id: int) -> dict:
+    return _run_transcription_task(meeting_id)
+
+
+@celery_app.task(name="app.services.pipeline.diarize_meeting")
+def diarize_meeting(meeting_id: int) -> dict:
+    return _run_diarisation_task(meeting_id)
+
+
+@celery_app.task(name="app.services.pipeline.summarise_meeting")
+def summarise_meeting(meeting_id: int) -> dict:
+    return _run_summarisation_task(meeting_id)
+
+
+@celery_app.task(name="app.services.pipeline.cleanup_temp_files")
+def cleanup_temp_files(file_paths: Optional[list[str]] = None) -> dict:
+    return _cleanup_temp_files_impl(file_paths or [])

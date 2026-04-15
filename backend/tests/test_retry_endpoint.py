@@ -1,6 +1,6 @@
 """Tests for retry endpoint and attendees validation."""
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy import JSON, event
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
@@ -74,14 +74,13 @@ async def test_retry_requeues_failed_meeting(client: AsyncClient, async_db: Asyn
     await async_db.commit()
     await async_db.refresh(meeting)
 
-    with patch("app.routers.meetings.process_meeting") as mock_task:
-        mock_task.delay.return_value = MagicMock(id="mock-task-id")
+    with patch("app.routers.meetings.enqueue_meeting") as mock_enqueue:
         response = await client.post(f"/api/meetings/{meeting.id}/retry")
 
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "processing"
-    mock_task.delay.assert_called_once_with(meeting.id)
+    mock_enqueue.assert_called_once_with(meeting.id)
 
 
 @pytest.mark.asyncio

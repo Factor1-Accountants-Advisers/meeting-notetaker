@@ -54,13 +54,10 @@ async def upload_client(async_db: AsyncSession, monkeypatch: pytest.MonkeyPatch)
         async def upload_file(self, file, filename: str, content_type: str) -> str:
             return f"audio/test/{filename}"
 
-    class FakeTask:
-        id = "fake-task-id"
+    enqueued_meetings: list[int] = []
 
-    class FakeProcessMeeting:
-        @staticmethod
-        def delay(meeting_id: int):
-            return FakeTask()
+    def fake_enqueue_meeting(meeting_id: int) -> None:
+        enqueued_meetings.append(meeting_id)
 
     async def override_get_db():
         yield async_db
@@ -69,21 +66,21 @@ async def upload_client(async_db: AsyncSession, monkeypatch: pytest.MonkeyPatch)
         return user
 
     monkeypatch.setattr("app.routers.meetings.get_storage", lambda: FakeStorage())
-    monkeypatch.setattr("app.routers.meetings.process_meeting", FakeProcessMeeting())
+    monkeypatch.setattr("app.routers.meetings.enqueue_meeting", fake_enqueue_meeting)
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_current_user] = override_get_current_user
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client, async_db
+        yield client, async_db, enqueued_meetings
 
     app.dependency_overrides.clear()
 
 
 @pytest.mark.asyncio
 async def test_upload_accepts_timezone_aware_scheduled_time(upload_client):
-    client, db = upload_client
+    client, db, enqueued_meetings = upload_client
 
     metadata = {
         "meeting_title": "AI Mission Catch Up",
@@ -105,6 +102,7 @@ async def test_upload_accepts_timezone_aware_scheduled_time(upload_client):
 
     meeting = await db.get(Meeting, payload["meeting_id"])
     assert meeting is not None
+    assert enqueued_meetings == [meeting.id]
     assert meeting.scheduled_time is not None
     assert meeting.scheduled_time.tzinfo is None
     assert meeting.scheduled_time.isoformat() == "2026-03-30T03:00:00"
