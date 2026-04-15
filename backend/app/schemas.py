@@ -149,6 +149,11 @@ class ActionItemBase(BaseModel):
     status: str = "open"
 
 
+class ActionItemCreate(ActionItemBase):
+    """Action item creation request."""
+    meeting_id: int
+
+
 class ActionItemResponse(ActionItemBase):
     """Action item response."""
     id: int
