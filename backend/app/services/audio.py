@@ -9,7 +9,13 @@ import tempfile
 import os
 from pathlib import Path
 
+from app.core.config import settings
+
 logger = logging.getLogger(__name__)
+
+
+def _resolve_ffmpeg_binary() -> str:
+    return settings.ffmpeg_path or "ffmpeg"
 
 
 def extract_audio_from_video(input_path: str) -> str:
@@ -32,7 +38,7 @@ def extract_audio_from_video(input_path: str) -> str:
     )
 
     cmd = [
-        "ffmpeg", "-y",
+        _resolve_ffmpeg_binary(), "-y",
         "-i", input_path,
         "-vn",                # Strip video
         "-acodec", "pcm_s16le",  # 16-bit PCM
@@ -58,4 +64,8 @@ def extract_audio_from_video(input_path: str) -> str:
     except subprocess.TimeoutExpired:
         raise RuntimeError("Audio extraction timed out (>5 minutes)")
     except FileNotFoundError:
+        if settings.ffmpeg_path:
+            raise RuntimeError(
+                "Bundled FFmpeg not found — reinstall the app or contact support"
+            )
         raise RuntimeError("FFmpeg not found — install FFmpeg to process video files")
