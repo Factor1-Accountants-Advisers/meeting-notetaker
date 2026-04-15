@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # Database (SQLite default for dev, PostgreSQL for production)
     database_url: str = "sqlite+aiosqlite:///./data/meetings.db"
 
+    # Legacy Celery/Redis compatibility
+    redis_url: str = "redis://localhost:6379/0"
+
     # Storage backend: "local" (default), "minio", or auto-detect Azure
     storage_backend: str = "local"
     local_storage_dir: str = ""  # defaults to ./data/audio
