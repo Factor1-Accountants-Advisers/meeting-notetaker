@@ -496,6 +496,18 @@ class TestPostActionItem:
         )
         assert resp.status_code == 404
 
+    @pytest.mark.asyncio
+    async def test_create_action_item_invalid_status(self, client: AsyncClient):
+        resp = await client.post(
+            "/api/action-items",
+            json={
+                "meeting_id": 1,
+                "description": "Draft follow-up notes",
+                "status": "invalid_status",
+            },
+        )
+        assert resp.status_code == 400
+
 
 # ---------------------------------------------------------------------------
 # DELETE /api/action-items/{id} — delete action item
@@ -514,38 +526,8 @@ class TestDeleteActionItem:
         resp = await client.delete("/api/action-items/999")
         assert resp.status_code == 404
 
-
-# ---------------------------------------------------------------------------
-# POST /api/action-items — create action item
-# ---------------------------------------------------------------------------
-
-class TestPostActionItem:
-    """Tests for creating action items."""
-
     @pytest.mark.asyncio
-    async def test_create_action_item(self, client: AsyncClient):
-        resp = await client.post(
-            "/api/action-items",
-            json={
-                "meeting_id": 1,
-                "description": "Draft follow-up notes",
-                "owner_name": "Test User",
-                "owner_email": "test@example.com",
-                "due_date": "2026-04-15",
-                "status": "open",
-            },
-        )
-        assert resp.status_code == 201
-        data = resp.json()
-        assert data["meeting_id"] == 1
-        assert data["description"] == "Draft follow-up notes"
-        assert data["owner_name"] == "Test User"
-        assert data["owner_email"] == "test@example.com"
-        assert data["due_date"] == "2026-04-15"
-        assert data["status"] == "open"
-
-    @pytest.mark.asyncio
-    async def test_create_action_item_other_users_meeting_not_found(
+    async def test_delete_other_users_action_item_not_found(
         self,
         client: AsyncClient,
         async_db: AsyncSession,
@@ -567,31 +549,15 @@ class TestPostActionItem:
             user_id=other_user.id,
         )
         async_db.add(other_meeting)
+        await async_db.flush()
+
+        other_action_item = ActionItem(
+            meeting_id=other_meeting.id,
+            description="Should not be deleted",
+            status=ActionItemStatus.OPEN,
+        )
+        async_db.add(other_action_item)
         await async_db.commit()
 
-        resp = await client.post(
-            "/api/action-items",
-            json={
-                "meeting_id": other_meeting.id,
-                "description": "Should not be created",
-            },
-        )
-        assert resp.status_code == 404
-
-
-# ---------------------------------------------------------------------------
-# DELETE /api/action-items/{id} — delete action item
-# ---------------------------------------------------------------------------
-
-class TestDeleteActionItem:
-    """Tests for deleting action items."""
-
-    @pytest.mark.asyncio
-    async def test_delete_action_item(self, client: AsyncClient):
-        resp = await client.delete("/api/action-items/1")
-        assert resp.status_code == 204
-
-    @pytest.mark.asyncio
-    async def test_delete_action_item_not_found(self, client: AsyncClient):
-        resp = await client.delete("/api/action-items/999")
+        resp = await client.delete(f"/api/action-items/{other_action_item.id}")
         assert resp.status_code == 404

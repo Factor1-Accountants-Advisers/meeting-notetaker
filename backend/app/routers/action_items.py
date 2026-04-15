@@ -1,6 +1,6 @@
 """Action item endpoints.
 
-Handles listing and updating action items across all meetings.
+Handles listing, creating, updating, and deleting action items across meetings.
 """
 import logging
 from typing import Optional
