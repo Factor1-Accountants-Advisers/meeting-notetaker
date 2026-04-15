@@ -52,7 +52,7 @@ class Settings(BaseSettings):
         env_file=(".env", ".env.local"),
         env_file_encoding="utf-8",
         case_sensitive=False,
-        extra="ignore",  # Ignore legacy env vars (REDIS_URL, etc.)
+        extra="ignore",  # Ignore unrelated legacy env vars.
     )
 
 
