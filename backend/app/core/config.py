@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     # Legacy Celery/Redis compatibility
     redis_url: str = "redis://localhost:6379/0"
 
+    # Packaged backend runtime settings
+    backend_host: str = "127.0.0.1"
+    backend_port: int = 38741
+    ffmpeg_path: str = ""
+
     # Storage backend: "local" (default), "minio", or auto-detect Azure
     storage_backend: str = "local"
     local_storage_dir: str = ""  # defaults to ./data/audio
