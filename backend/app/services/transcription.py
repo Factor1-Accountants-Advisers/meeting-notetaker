@@ -99,11 +99,18 @@ def transcribe_audio(
 
     # When we know participant names, enable Speaker Identification
     # so AssemblyAI returns real names instead of generic A/B/C labels.
-    names = [n.strip() for n in (participant_names or []) if n.strip()]
+    # AssemblyAI limits known_values to 10 — filter noise (emails, "Everyone",
+    # distribution lists) and cap before sending.
+    _ASSEMBLYAI_MAX_KNOWN_VALUES = 10
+    raw_names = [n.strip() for n in (participant_names or []) if n.strip()]
+    names = [
+        n for n in raw_names
+        if "@" not in n and n.lower() != "everyone" and len(n) > 1
+    ][:_ASSEMBLYAI_MAX_KNOWN_VALUES]
     speaker_identified = False
 
     if names:
-        logger.info(f"Speaker identification enabled with {len(names)} names: {names}")
+        logger.info(f"Speaker identification enabled with {len(names)} names (filtered from {len(raw_names)}): {names}")
         config_kwargs["speech_understanding"] = aai.SpeechUnderstandingRequest(
             request=aai.SpeechUnderstandingFeatureRequests(
                 speaker_identification=aai.SpeakerIdentificationRequest(
