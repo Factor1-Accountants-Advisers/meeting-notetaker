@@ -1,9 +1,14 @@
-import ffmpeg, { FfmpegCommand } from 'fluent-ffmpeg';
-import ffmpegPath from 'ffmpeg-static';
 import type { MeetingMetadata } from './uploader';
+import { startWasapiCapture, stopWasapiCapture, isWasapiRecording } from './wasapi-capture';
 
-if (!ffmpegPath) throw new Error('ffmpeg-static did not resolve a binary for this platform');
-ffmpeg.setFfmpegPath(ffmpegPath);
+/**
+ * Recording facade. Internally delegates to Electron's WASAPI loopback capture
+ * via a hidden renderer (see wasapi-capture.ts). The public API is unchanged
+ * so ipc.ts and tray.ts continue to work without modification.
+ *
+ * Fields micName and loopbackName on RecordingOptions are accepted but ignored
+ * — WASAPI always uses the Windows default playback + default input devices.
+ */
 
 export interface RecordingOptions {
   micName: string;
@@ -29,8 +34,6 @@ export interface RecordingStopResult {
 
 export type RecordingErrorCallback = (error: string) => void;
 
-let activeProcess: FfmpegCommand | null = null;
-let recordingActive = false;
 let recordingStartedAt: number | null = null;
 let activeMeetingTitle: string | undefined;
 let activeOutputPath: string | undefined;
@@ -43,88 +46,72 @@ export function onRecordingError(cb: RecordingErrorCallback | null): void {
 }
 
 function clearRecordingState(): void {
-  activeProcess = null;
-  recordingActive = false;
   recordingStartedAt = null;
   activeMeetingTitle = undefined;
   activeOutputPath = undefined;
   activeMetadata = undefined;
 }
 
-function handleFfmpegError(err: Error): void {
-  const isGracefulStop = err.message.includes('SIGINT');
-  if (!isGracefulStop) {
-    console.error('[recorder] error:', err.message);
-    lastError = err.message;
-    if (errorCallback) errorCallback(err.message);
-  }
+function handleError(message: string): void {
+  console.error('[recorder] error:', message);
+  lastError = message;
+  if (errorCallback) errorCallback(message);
   clearRecordingState();
 }
 
 export function startRecording(options: RecordingOptions): void {
-  if (recordingActive || activeProcess) {
+  if (isWasapiRecording()) {
     throw new Error('Already recording. Call stopRecording() first.');
   }
 
-  recordingActive = true;
   recordingStartedAt = Date.now();
   activeMeetingTitle = options.meetingTitle ?? options.metadata?.meeting_title;
   activeOutputPath = options.outputPath;
   activeMetadata = options.metadata;
   lastError = undefined;
 
-  activeProcess = ffmpeg()
-    .input(`audio=${options.micName}`)
-    .inputOptions(['-f', 'dshow'])
-    .input(`audio=${options.loopbackName}`)
-    .inputOptions(['-f', 'dshow'])
-    .complexFilter('amix=inputs=2:duration=longest:dropout_transition=0')
-    .audioFrequency(16000)
-    .audioChannels(1)
-    .audioCodec('pcm_s16le')
-    .outputOptions(['-y'])
-    .on('start', (cmd) => console.log('[recorder] started:', cmd))
-    .on('error', handleFfmpegError)
-    .on('end', () => {
-      clearRecordingState();
+  startWasapiCapture(options.outputPath)
+    .then(() => {
+      console.log(`[recorder] WASAPI capture started → ${options.outputPath}`);
     })
-    .save(options.outputPath);
+    .catch((err: Error) => {
+      handleError(err.message);
+    });
 }
 
 /**
- * Stop the active recording and return the active recording session details.
+ * Stop the active recording. Returns a promise that resolves once the webm
+ * chunks have been flushed and transcoded to wav. The wav path is returned
+ * in RecordingStopResult.outputPath.
  */
-export function stopRecording(): RecordingStopResult {
-  const stopResult: RecordingStopResult = {
+export async function stopRecording(): Promise<RecordingStopResult> {
+  const snapshot: RecordingStopResult = {
     outputPath: activeOutputPath || '',
     metadata: activeMetadata,
-    ...(lastError ? { error: lastError } : {}),
   };
 
-  if (!activeProcess) {
-    recordingActive = false;
-    recordingStartedAt = null;
-    activeMeetingTitle = undefined;
-    activeOutputPath = undefined;
-    activeMetadata = undefined;
-    return stopResult;
+  if (!isWasapiRecording()) {
+    clearRecordingState();
+    return { ...snapshot, ...(lastError ? { error: lastError } : {}) };
   }
-  recordingActive = false;
-  recordingStartedAt = null;
-  activeMeetingTitle = undefined;
-  activeOutputPath = undefined;
-  activeMetadata = undefined;
-  activeProcess.kill('SIGINT');
-  // activeProcess is reset by the 'end' or 'error' event handler
-  return stopResult;
+
+  try {
+    const wavPath = await stopWasapiCapture();
+    clearRecordingState();
+    return { outputPath: wavPath, metadata: snapshot.metadata };
+  } catch (err) {
+    const message = (err as Error).message;
+    handleError(message);
+    return { ...snapshot, error: message };
+  }
 }
 
 export function isRecording(): boolean {
-  return recordingActive;
+  return isWasapiRecording();
 }
 
 export function getRecordingStatus(): RecordingStatusSnapshot {
-  if (!recordingActive) {
+  if (!isWasapiRecording()) {
     return { recording: false, error: lastError };
   }
 

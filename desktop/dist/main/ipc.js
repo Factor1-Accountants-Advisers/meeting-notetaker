@@ -45,6 +45,7 @@ const electron_1 = require("electron");
 const path = __importStar(require("path"));
 const auth_1 = require("./auth");
 const graph_1 = require("./graph");
+const runtime_paths_1 = require("./runtime-paths");
 const recorder_1 = require("./recorder");
 const uploader_1 = require("./uploader");
 const tray_1 = require("./tray");
@@ -55,15 +56,21 @@ const child_process_1 = require("child_process");
 const FFMPEG_BINARY = (() => {
     if (!ffmpeg_static_1.default)
         throw new Error('ffmpeg-static did not resolve a binary for this platform');
-    return ffmpeg_static_1.default;
+    // Native binaries cannot execute from inside app.asar — electron-builder unpacks
+    // ffmpeg-static into app.asar.unpacked, so we rewrite the resolved path at runtime.
+    return ffmpeg_static_1.default.replace('app.asar', 'app.asar.unpacked');
 })();
 function broadcastRecordingStatus() {
     const win = (0, index_1.getMainWindow)();
     if (win && !win.isDestroyed()) {
         win.webContents.send('recorder:status-changed', (0, recorder_1.getRecordingStatus)());
     }
+    // Keep the tray's icon + menu in lockstep with renderer state. Without this,
+    // UI-initiated recordings leave the tray menu stale (e.g. "Stop Recording"
+    // greyed out while the app shows a live timer).
+    (0, tray_1.syncTrayToRecordingState)();
 }
-// Broadcast status change when ffmpeg fails asynchronously
+// Broadcast status change when the recorder fails asynchronously
 (0, recorder_1.onRecordingError)((_errorMsg) => {
     broadcastRecordingStatus();
 });
@@ -236,6 +243,7 @@ async function pickDefaultDevices(devices) {
 }
 function registerIpcHandlers() {
     electron_1.ipcMain.handle('auth:get-token', () => (0, auth_1.acquireToken)());
+    electron_1.ipcMain.handle('auth:sign-in', () => (0, auth_1.signIn)());
     electron_1.ipcMain.handle('auth:sign-out', () => (0, auth_1.clearTokenCache)());
     electron_1.ipcMain.handle('graph:get-calendar', async () => {
         console.log('[ipc] graph:get-calendar — acquiring token...');
@@ -246,6 +254,15 @@ function registerIpcHandlers() {
         return events;
     });
     electron_1.ipcMain.handle('recorder:start', (_e, opts) => {
+        // If the UI didn't reflect an in-progress recording yet, a user might click
+        // Record a second time. Treat the duplicate as a no-op and re-broadcast
+        // status so the renderer can catch up — surfacing "Already recording" as
+        // a scary red error was confusing to non-technical demo users.
+        if ((0, recorder_1.isRecording)()) {
+            console.warn('[ipc] recorder:start — already recording, re-broadcasting status');
+            broadcastRecordingStatus();
+            return;
+        }
         // Generate output path (same approach as tray.ts)
         const outputPath = opts.outputPath || path.join(electron_1.app.getPath('temp'), `meeting-${Date.now()}.wav`);
         (0, recorder_1.startRecording)({
@@ -258,8 +275,8 @@ function registerIpcHandlers() {
         broadcastRecordingStatus();
         console.log(`[ipc] recorder:start — recording to ${outputPath}`);
     });
-    electron_1.ipcMain.handle('recorder:stop', () => {
-        const result = (0, recorder_1.stopRecording)();
+    electron_1.ipcMain.handle('recorder:stop', async () => {
+        const result = await (0, recorder_1.stopRecording)();
         broadcastRecordingStatus();
         if (!result.outputPath) {
             console.warn('[ipc] recorder:stop — no output path (recording may have failed to start)');
@@ -273,8 +290,7 @@ function registerIpcHandlers() {
     electron_1.ipcMain.handle('recorder:get-status', () => (0, recorder_1.getRecordingStatus)());
     electron_1.ipcMain.handle('uploader:upload', async (_e, args) => {
         const token = await (0, auth_1.acquireIdToken)();
-        const backendUrl = process.env.BACKEND_URL ?? 'http://localhost:8000';
-        return (0, uploader_1.uploadRecording)({ filePath: args.filePath, accessToken: token, backendUrl, metadata: args.metadata });
+        return (0, uploader_1.uploadRecording)({ filePath: args.filePath, accessToken: token, backendUrl: (0, runtime_paths_1.getBackendUrl)(), metadata: args.metadata });
     });
     electron_1.ipcMain.handle('shell:open-web-app', (_e, url) => electron_1.shell.openExternal(url));
     electron_1.ipcMain.handle('meeting-selector:select', (_e, event) => {
@@ -285,7 +301,7 @@ function registerIpcHandlers() {
         electron_1.BrowserWindow.fromWebContents(e.sender)?.close();
     });
     electron_1.ipcMain.handle('auth:get-id-token', () => (0, auth_1.acquireIdToken)());
-    electron_1.ipcMain.handle('app:get-backend-url', () => process.env.BACKEND_URL ?? 'http://localhost:8000');
+    electron_1.ipcMain.handle('app:get-backend-url', () => (0, runtime_paths_1.getBackendUrl)());
     electron_1.ipcMain.on('app:get-version', (e) => { e.returnValue = electron_1.app.getVersion(); });
     electron_1.ipcMain.handle('audio:get-devices', async () => {
         return listAudioDevices();

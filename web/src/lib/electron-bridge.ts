@@ -49,6 +49,7 @@ export interface UploadResult {
 export interface ElectronAPI {
   // Auth (existing)
   getToken: () => Promise<string>;
+  signIn: () => Promise<string>;
   signOut: () => Promise<void>;
   getBackendUrl: () => Promise<string>;
   getAppVersion: () => string;

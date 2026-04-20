@@ -1,4 +1,4 @@
-appId: com.yourfirm.meetingnotetaker
+appId: com.factor1.meetingnotetaker
 productName: Meeting Note-Taker
 directories:
   output: release
@@ -8,14 +8,30 @@ files:
   - assets/**/*
   - node_modules/**/*
   - package.json
+asarUnpack:
+  - node_modules/ffmpeg-static/**
+extraResources:
+  - from: ../backend
+    to: backend
+    filter:
+      - "**/*"
+      - "!__pycache__/**"
+      - "!.pytest_cache/**"
+      - "!data/**"
+  - from: python-runtime
+    to: python
+  - from: .env.production
+    to: .env.production
 win:
   target:
     - target: msi
       arch: [x64]
-  icon: assets/icon-idle.png
+  icon: assets/icon-installer.png
 msi:
   oneClick: false
   perMachine: true
-publish:
-  provider: generic
-  url: https://YOUR_UPDATE_SERVER/releases/
+  additionalWixArgs:
+    - -ext
+    - WixUtilExtension
+msiProjectCreated: scripts/msi-project-created.cjs
+publish: null

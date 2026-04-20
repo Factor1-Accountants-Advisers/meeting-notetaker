@@ -17,6 +17,7 @@ const mockedUseActionItems = vi.mocked(useActionItems);
 const mockedUseMeetings = vi.mocked(useMeetings);
 const mockedUseMeeting = vi.mocked(useMeeting);
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (reason?: unknown) => void;

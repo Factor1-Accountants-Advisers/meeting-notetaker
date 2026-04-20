@@ -1,19 +1,72 @@
-import * as dotenv from 'dotenv';
 import * as path from 'path';
-
-dotenv.config({ path: path.join(process.cwd(), '.env.local') });
-
-import { app, BrowserWindow } from 'electron';
+import * as fs from 'fs';
+import { app, BrowserWindow, protocol } from 'electron';
 import { autoUpdater } from 'electron-updater';
-import { createTray, updateTrayDevices } from './tray';
+import { createTray, destroyTray, updateTrayDevices } from './tray';
 import { registerIpcHandlers, listAudioDevices, pickDefaultDevices } from './ipc';
 import { registerAppProtocol } from './protocol';
 import { startScheduler, stopScheduler } from './scheduler';
+import { getBackendUrl, loadEnv } from './runtime-paths';
+import { startBackend, stopBackend } from './backend-runtime';
+import { initializeWasapiCapture, destroyCaptureWindow } from './wasapi-capture';
+
+// Load environment — must happen before anything reads process.env
+loadEnv();
+
+// Mirror console output to a file in packaged mode. On Windows, console.log
+// in a packaged Electron app goes nowhere visible, which makes diagnosing
+// install-time failures (backend spawn, WASAPI renderer hangs) impossible.
+// Log file lives at %APPDATA%\meeting-notetaker-desktop\logs\main.log.
+if (app.isPackaged) {
+  try {
+    const logDir = path.join(app.getPath('userData'), 'logs');
+    fs.mkdirSync(logDir, { recursive: true });
+    const stream = fs.createWriteStream(path.join(logDir, 'main.log'), { flags: 'a' });
+    const fmt = (args: unknown[]): string => args.map((a) => {
+      if (a instanceof Error) return `${a.message}\n${a.stack ?? ''}`;
+      return typeof a === 'string' ? a : JSON.stringify(a);
+    }).join(' ');
+    const origLog = console.log;
+    const origWarn = console.warn;
+    const origError = console.error;
+    console.log = (...args: unknown[]): void => {
+      stream.write(`[${new Date().toISOString()}] ${fmt(args)}\n`);
+      origLog(...args);
+    };
+    console.warn = (...args: unknown[]): void => {
+      stream.write(`[${new Date().toISOString()}] WARN ${fmt(args)}\n`);
+      origWarn(...args);
+    };
+    console.error = (...args: unknown[]): void => {
+      stream.write(`[${new Date().toISOString()}] ERROR ${fmt(args)}\n`);
+      origError(...args);
+    };
+    stream.write(`\n=== App started ${new Date().toISOString()} ===\n`);
+  } catch {
+    // Logging setup failed — not fatal. Carry on with default console behavior.
+  }
+}
+
+// Must be called BEFORE app.whenReady(). Without this the app:// scheme is
+// treated as opaque/non-secure, which breaks ES modules, fetch, and
+// localStorage — causing Next.js to throw a client-side exception on mount.
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'app',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true,
+    },
+  },
+]);
 
 if (!app.requestSingleInstanceLock()) app.quit();
 
 let mainWindow: BrowserWindow | null = null;
-const backendUrl = process.env.BACKEND_URL ?? 'http://localhost:8000';
+let isQuitting = false;
 
 function createMainWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -28,17 +81,34 @@ function createMainWindow(): BrowserWindow {
   });
 
   if (!app.isPackaged && process.env.WEB_DEV_URL) {
-    // Dev mode: load from Next.js dev server
     win.loadURL(process.env.WEB_DEV_URL);
   } else {
-    // Production: load from static export via custom protocol
     win.loadURL('app://renderer/index.html');
   }
 
+  // Surface renderer failures into the main-process log so the packaged app
+  // isn't silent if something goes wrong during hydration.
+  win.webContents.on('render-process-gone', (_e, details) => {
+    console.error('[renderer] render-process-gone:', details);
+  });
+  win.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    console.error(`[renderer] did-fail-load ${code} ${desc} for ${url}`);
+  });
+  win.webContents.on('console-message', (_e, level, message, line, source) => {
+    if (level >= 2) {
+      console.log(`[renderer:console] ${source}:${line} ${message}`);
+    }
+  });
+
+  if (process.env.OPEN_DEVTOOLS === '1') {
+    win.webContents.openDevTools({ mode: 'detach' });
+  }
+
   win.on('close', (e) => {
-    // Hide instead of quit — tray keeps running
-    e.preventDefault();
-    win.hide();
+    if (!isQuitting) {
+      e.preventDefault();
+      win.hide();
+    }
   });
 
   return win;
@@ -57,10 +127,37 @@ export function getMainWindow(): BrowserWindow | null {
   return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
 }
 
-app.on('window-all-closed', (e: Event) => e.preventDefault());
+// Restore window when user launches the app again
+app.on('second-instance', () => {
+  showMainWindow();
+});
 
-app.whenReady().then(() => {
+app.on('window-all-closed', (e: Event) => {
+  if (!isQuitting) e.preventDefault();
+});
+
+app.on('before-quit', () => {
+  isQuitting = true;
+});
+
+app.whenReady().then(async () => {
   registerIpcHandlers();
+
+  // Initialize WASAPI capture (hidden renderer window + permission handlers).
+  // Must run after app is ready so session.defaultSession is available.
+  initializeWasapiCapture();
+
+  // Start the bundled backend (packaged) or assume external (dev)
+  const backendUrl = getBackendUrl();
+  if (app.isPackaged) {
+    try {
+      console.log('[startup] Starting bundled backend...');
+      await startBackend();
+      console.log('[startup] Backend is ready.');
+    } catch (err) {
+      console.error('[startup] Backend failed to start:', err);
+    }
+  }
 
   // Register protocol once, before any window is created
   if (app.isPackaged || !process.env.WEB_DEV_URL) {
@@ -68,7 +165,6 @@ app.whenReady().then(() => {
     registerAppProtocol(staticDir, backendUrl);
   }
 
-  // Pass showMainWindow into tray to avoid circular dependency
   createTray({
     backendUrl,
     recordingOutputDir: app.getPath('temp'),
@@ -87,13 +183,14 @@ app.whenReady().then(() => {
     })
   ).catch((err) => console.warn('[startup] Audio device detection failed:', err));
 
-  // Show main window on startup
   mainWindow = createMainWindow();
 
-  // Start calendar-based auto-record scheduler
   startScheduler();
 
   if (app.isPackaged) {
+    autoUpdater.on('error', (err) => {
+      console.warn('[updater] Auto-update check failed (non-fatal):', err.message);
+    });
     void autoUpdater.checkForUpdatesAndNotify();
     setInterval(() => void autoUpdater.checkForUpdatesAndNotify(), 4 * 3600000);
   }
@@ -101,4 +198,7 @@ app.whenReady().then(() => {
 
 app.on('will-quit', () => {
   stopScheduler();
+  destroyTray();
+  destroyCaptureWindow();
+  stopBackend();
 });

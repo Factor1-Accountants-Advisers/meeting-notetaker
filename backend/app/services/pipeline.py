@@ -157,29 +157,28 @@ def _cleanup_temp_files_impl(file_paths: list[str]) -> dict:
     return {"status": "cleaned", "removed_count": removed}
 
 
-from app.celery_app import celery_app
+# Legacy Celery task wrappers — only loaded when celery is installed
+try:
+    from app.celery_app import celery_app
 
+    @celery_app.task(name="app.services.pipeline.process_meeting")
+    def process_meeting(meeting_id: int) -> dict:
+        return _run_pipeline_sync(meeting_id)
 
-@celery_app.task(name="app.services.pipeline.process_meeting")
-def process_meeting(meeting_id: int) -> dict:
-    return _run_pipeline_sync(meeting_id)
+    @celery_app.task(name="app.services.pipeline.transcribe_meeting")
+    def transcribe_meeting(meeting_id: int) -> dict:
+        return _run_transcription_task(meeting_id)
 
+    @celery_app.task(name="app.services.pipeline.diarize_meeting")
+    def diarize_meeting(meeting_id: int) -> dict:
+        return _run_diarisation_task(meeting_id)
 
-@celery_app.task(name="app.services.pipeline.transcribe_meeting")
-def transcribe_meeting(meeting_id: int) -> dict:
-    return _run_transcription_task(meeting_id)
+    @celery_app.task(name="app.services.pipeline.summarise_meeting")
+    def summarise_meeting(meeting_id: int) -> dict:
+        return _run_summarisation_task(meeting_id)
 
-
-@celery_app.task(name="app.services.pipeline.diarize_meeting")
-def diarize_meeting(meeting_id: int) -> dict:
-    return _run_diarisation_task(meeting_id)
-
-
-@celery_app.task(name="app.services.pipeline.summarise_meeting")
-def summarise_meeting(meeting_id: int) -> dict:
-    return _run_summarisation_task(meeting_id)
-
-
-@celery_app.task(name="app.services.pipeline.cleanup_temp_files")
-def cleanup_temp_files(file_paths: Optional[list[str]] = None) -> dict:
-    return _cleanup_temp_files_impl(file_paths or [])
+    @celery_app.task(name="app.services.pipeline.cleanup_temp_files")
+    def cleanup_temp_files(file_paths: Optional[list[str]] = None) -> dict:
+        return _cleanup_temp_files_impl(file_paths or [])
+except ImportError:
+    pass

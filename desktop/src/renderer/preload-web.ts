@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 contextBridge.exposeInMainWorld('electronAPI', {
   // Auth (existing)
   getToken: (): Promise<string> => ipcRenderer.invoke('auth:get-id-token'),
+  signIn: (): Promise<string> => ipcRenderer.invoke('auth:sign-in'),
   signOut: (): Promise<void> => ipcRenderer.invoke('auth:sign-out'),
   getBackendUrl: (): Promise<string> => ipcRenderer.invoke('app:get-backend-url'),
   getAppVersion: (): string => ipcRenderer.sendSync('app:get-version'),

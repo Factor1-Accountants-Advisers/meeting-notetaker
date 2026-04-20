@@ -28,6 +28,13 @@ export interface TrayConfig {
   onOpenApp: () => void;
 }
 
+export function destroyTray(): void {
+  if (tray && !tray.isDestroyed()) {
+    tray.destroy();
+  }
+  tray = null;
+}
+
 export function updateTrayDevices(micName: string, loopbackName: string): void {
   _micName = micName;
   _loopbackName = loopbackName;
@@ -64,6 +71,19 @@ function rebuildMenu(): void {
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
   ]));
+}
+
+/**
+ * Reconcile the tray icon, tooltip, and menu with the current recording state.
+ * Call this from any code path that starts or stops a recording — including
+ * UI-initiated ones via IPC — so the tray UI never drifts out of sync.
+ */
+export function syncTrayToRecordingState(): void {
+  if (!tray) return;
+  const recording = isRecording();
+  tray.setImage(nativeImage.createFromPath(recording ? RECORDING_ICON : IDLE_ICON));
+  tray.setToolTip(recording ? 'Meeting Note-Taker — Recording...' : 'Meeting Note-Taker');
+  rebuildMenu();
 }
 
 function broadcastRecordingStatus(): void {
@@ -105,11 +125,13 @@ export function handleStartRecording(): void {
 }
 
 async function handleStopRecording(): Promise<void> {
-  const result = stopRecording();
   tray?.setImage(nativeImage.createFromPath(IDLE_ICON));
-  tray?.setToolTip('Meeting Note-Taker — Uploading...');
+  tray?.setToolTip('Meeting Note-Taker — Finalising...');
   rebuildMenu();
   broadcastRecordingStatus();
+
+  const result = await stopRecording();
+  tray?.setToolTip('Meeting Note-Taker — Uploading...');
 
   try {
     if (!result.outputPath) {

@@ -4,6 +4,7 @@ const electron_1 = require("electron");
 electron_1.contextBridge.exposeInMainWorld('electronAPI', {
     // Auth (existing)
     getToken: () => electron_1.ipcRenderer.invoke('auth:get-id-token'),
+    signIn: () => electron_1.ipcRenderer.invoke('auth:sign-in'),
     signOut: () => electron_1.ipcRenderer.invoke('auth:sign-out'),
     getBackendUrl: () => electron_1.ipcRenderer.invoke('app:get-backend-url'),
     getAppVersion: () => electron_1.ipcRenderer.sendSync('app:get-version'),

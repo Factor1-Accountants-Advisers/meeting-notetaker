@@ -1,20 +1,11 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.onRecordingError = onRecordingError;
 exports.startRecording = startRecording;
 exports.stopRecording = stopRecording;
 exports.isRecording = isRecording;
 exports.getRecordingStatus = getRecordingStatus;
-const fluent_ffmpeg_1 = __importDefault(require("fluent-ffmpeg"));
-const ffmpeg_static_1 = __importDefault(require("ffmpeg-static"));
-if (!ffmpeg_static_1.default)
-    throw new Error('ffmpeg-static did not resolve a binary for this platform');
-fluent_ffmpeg_1.default.setFfmpegPath(ffmpeg_static_1.default);
-let activeProcess = null;
-let recordingActive = false;
+const wasapi_capture_1 = require("./wasapi-capture");
 let recordingStartedAt = null;
 let activeMeetingTitle;
 let activeOutputPath;
@@ -25,81 +16,65 @@ function onRecordingError(cb) {
     errorCallback = cb;
 }
 function clearRecordingState() {
-    activeProcess = null;
-    recordingActive = false;
     recordingStartedAt = null;
     activeMeetingTitle = undefined;
     activeOutputPath = undefined;
     activeMetadata = undefined;
 }
-function handleFfmpegError(err) {
-    const isGracefulStop = err.message.includes('SIGINT');
-    if (!isGracefulStop) {
-        console.error('[recorder] error:', err.message);
-        lastError = err.message;
-        if (errorCallback)
-            errorCallback(err.message);
-    }
+function handleError(message) {
+    console.error('[recorder] error:', message);
+    lastError = message;
+    if (errorCallback)
+        errorCallback(message);
     clearRecordingState();
 }
 function startRecording(options) {
-    if (recordingActive || activeProcess) {
+    if ((0, wasapi_capture_1.isWasapiRecording)()) {
         throw new Error('Already recording. Call stopRecording() first.');
     }
-    recordingActive = true;
     recordingStartedAt = Date.now();
     activeMeetingTitle = options.meetingTitle ?? options.metadata?.meeting_title;
     activeOutputPath = options.outputPath;
     activeMetadata = options.metadata;
     lastError = undefined;
-    activeProcess = (0, fluent_ffmpeg_1.default)()
-        .input(`audio=${options.micName}`)
-        .inputOptions(['-f', 'dshow'])
-        .input(`audio=${options.loopbackName}`)
-        .inputOptions(['-f', 'dshow'])
-        .complexFilter('amix=inputs=2:duration=longest:dropout_transition=0')
-        .audioFrequency(16000)
-        .audioChannels(1)
-        .audioCodec('pcm_s16le')
-        .outputOptions(['-y'])
-        .on('start', (cmd) => console.log('[recorder] started:', cmd))
-        .on('error', handleFfmpegError)
-        .on('end', () => {
-        clearRecordingState();
+    (0, wasapi_capture_1.startWasapiCapture)(options.outputPath)
+        .then(() => {
+        console.log(`[recorder] WASAPI capture started → ${options.outputPath}`);
     })
-        .save(options.outputPath);
+        .catch((err) => {
+        handleError(err.message);
+    });
 }
 /**
- * Stop the active recording and return the active recording session details.
+ * Stop the active recording. Returns a promise that resolves once the webm
+ * chunks have been flushed and transcoded to wav. The wav path is returned
+ * in RecordingStopResult.outputPath.
  */
-function stopRecording() {
-    const stopResult = {
+async function stopRecording() {
+    const snapshot = {
         outputPath: activeOutputPath || '',
         metadata: activeMetadata,
-        ...(lastError ? { error: lastError } : {}),
     };
-    if (!activeProcess) {
-        recordingActive = false;
-        recordingStartedAt = null;
-        activeMeetingTitle = undefined;
-        activeOutputPath = undefined;
-        activeMetadata = undefined;
-        return stopResult;
+    if (!(0, wasapi_capture_1.isWasapiRecording)()) {
+        clearRecordingState();
+        return { ...snapshot, ...(lastError ? { error: lastError } : {}) };
     }
-    recordingActive = false;
-    recordingStartedAt = null;
-    activeMeetingTitle = undefined;
-    activeOutputPath = undefined;
-    activeMetadata = undefined;
-    activeProcess.kill('SIGINT');
-    // activeProcess is reset by the 'end' or 'error' event handler
-    return stopResult;
+    try {
+        const wavPath = await (0, wasapi_capture_1.stopWasapiCapture)();
+        clearRecordingState();
+        return { outputPath: wavPath, metadata: snapshot.metadata };
+    }
+    catch (err) {
+        const message = err.message;
+        handleError(message);
+        return { ...snapshot, error: message };
+    }
 }
 function isRecording() {
-    return recordingActive;
+    return (0, wasapi_capture_1.isWasapiRecording)();
 }
 function getRecordingStatus() {
-    if (!recordingActive) {
+    if (!(0, wasapi_capture_1.isWasapiRecording)()) {
         return { recording: false, error: lastError };
     }
     return {

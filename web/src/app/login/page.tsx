@@ -54,7 +54,7 @@ export default function LoginPage() {
           </div>
           {signingIn && (
             <p className="mx-auto mt-4 max-w-md text-sm leading-6 text-[color:var(--text-secondary)]">
-              A device code prompt will appear separately. Follow the sign-in steps, then return to Note Taker.
+              Opening your browser to sign in with Microsoft. Complete the sign-in, then return here.
             </p>
           )}
         </div>

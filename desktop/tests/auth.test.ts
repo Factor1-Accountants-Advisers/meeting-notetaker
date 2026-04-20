@@ -1,7 +1,7 @@
-import { acquireToken, clearTokenCache } from '../src/main/auth';
+import { acquireToken, acquireIdToken, signIn, clearTokenCache } from '../src/main/auth';
 
 const mockAcquireTokenSilent = jest.fn();
-const mockAcquireTokenByDeviceCode = jest.fn();
+const mockAcquireTokenInteractive = jest.fn();
 const mockSerialize = jest.fn().mockReturnValue('serialized-cache');
 const mockDeserialize = jest.fn();
 const mockGetAllAccounts = jest.fn().mockResolvedValue([{ homeAccountId: 'acc1' }]);
@@ -9,7 +9,7 @@ const mockGetAllAccounts = jest.fn().mockResolvedValue([{ homeAccountId: 'acc1' 
 jest.mock('@azure/msal-node', () => ({
   PublicClientApplication: jest.fn().mockImplementation(() => ({
     acquireTokenSilent: mockAcquireTokenSilent,
-    acquireTokenByDeviceCode: mockAcquireTokenByDeviceCode,
+    acquireTokenInteractive: mockAcquireTokenInteractive,
     getTokenCache: jest.fn().mockReturnValue({
       serialize: mockSerialize,
       deserialize: mockDeserialize,
@@ -35,22 +35,56 @@ describe('auth.acquireToken', () => {
   it('returns access token on silent success', async () => {
     mockAcquireTokenSilent.mockResolvedValueOnce({ accessToken: 'token-abc' });
     expect(await acquireToken()).toBe('token-abc');
-    expect(mockAcquireTokenByDeviceCode).not.toHaveBeenCalled();
+    expect(mockAcquireTokenInteractive).not.toHaveBeenCalled();
   });
 
-  it('falls back to device code when silent throws', async () => {
-    mockAcquireTokenSilent.mockRejectedValueOnce(new Error('no_account'));
-    mockAcquireTokenByDeviceCode.mockImplementation(async ({ deviceCodeCallback }: any) => {
-      deviceCodeCallback({ message: 'Go to https://microsoft.com/devicelogin' });
-      return { accessToken: 'token-device' };
-    });
-    expect(await acquireToken()).toBe('token-device');
+  it('throws when no cached accounts exist', async () => {
+    mockGetAllAccounts.mockResolvedValueOnce([]);
+    await expect(acquireToken()).rejects.toThrow('No cached accounts');
+  });
+});
+
+describe('auth.acquireIdToken', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns id token on silent success', async () => {
+    mockAcquireTokenSilent.mockResolvedValueOnce({ idToken: 'id-token-abc' });
+    expect(await acquireIdToken()).toBe('id-token-abc');
   });
 
-  it('throws when device code also fails', async () => {
-    mockAcquireTokenSilent.mockRejectedValueOnce(new Error('silent_fail'));
-    mockAcquireTokenByDeviceCode.mockRejectedValueOnce(new Error('device_fail'));
-    await expect(acquireToken()).rejects.toThrow('device_fail');
+  it('throws when no cached accounts exist', async () => {
+    mockGetAllAccounts.mockResolvedValueOnce([]);
+    await expect(acquireIdToken()).rejects.toThrow('No cached accounts');
+  });
+});
+
+describe('auth.signIn', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('returns cached id token silently if available', async () => {
+    mockAcquireTokenSilent.mockResolvedValueOnce({ idToken: 'cached-id' });
+    expect(await signIn()).toBe('cached-id');
+    expect(mockAcquireTokenInteractive).not.toHaveBeenCalled();
+  });
+
+  it('falls back to interactive when silent fails', async () => {
+    mockGetAllAccounts.mockResolvedValueOnce([]);
+    mockAcquireTokenInteractive.mockResolvedValueOnce({ idToken: 'interactive-id' });
+    expect(await signIn()).toBe('interactive-id');
+    expect(mockAcquireTokenInteractive).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scopes: expect.arrayContaining(['openid', 'profile', 'offline_access']),
+        openBrowser: expect.any(Function),
+        successTemplate: expect.stringContaining('Sign-in successful'),
+        errorTemplate: expect.stringContaining('Sign-in failed'),
+      }),
+    );
+  });
+
+  it('throws when interactive also fails', async () => {
+    mockGetAllAccounts.mockResolvedValueOnce([]);
+    mockAcquireTokenInteractive.mockRejectedValueOnce(new Error('user_cancelled'));
+    await expect(signIn()).rejects.toThrow('user_cancelled');
   });
 });
 

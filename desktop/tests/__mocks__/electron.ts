@@ -32,6 +32,8 @@ export const Tray = jest.fn().mockImplementation(() => ({
   setContextMenu: jest.fn(),
   setImage: jest.fn(),
   on: jest.fn(),
+  destroy: jest.fn(),
+  isDestroyed: jest.fn(() => false),
 }));
 
 export const Menu = { buildFromTemplate: jest.fn() };

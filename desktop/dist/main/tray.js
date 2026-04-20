@@ -33,9 +33,11 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.destroyTray = destroyTray;
 exports.updateTrayDevices = updateTrayDevices;
 exports.setPendingMeeting = setPendingMeeting;
 exports.createTray = createTray;
+exports.syncTrayToRecordingState = syncTrayToRecordingState;
 exports.handleStartRecording = handleStartRecording;
 const electron_1 = require("electron");
 const path = __importStar(require("path"));
@@ -55,6 +57,12 @@ let _loopbackName = '';
 let _pendingTitle = '';
 let _pendingAttendees = [];
 let _pendingScheduledTime;
+function destroyTray() {
+    if (tray && !tray.isDestroyed()) {
+        tray.destroy();
+    }
+    tray = null;
+}
 function updateTrayDevices(micName, loopbackName) {
     _micName = micName;
     _loopbackName = loopbackName;
@@ -88,6 +96,19 @@ function rebuildMenu() {
         { type: 'separator' },
         { label: 'Quit', click: () => electron_1.app.quit() },
     ]));
+}
+/**
+ * Reconcile the tray icon, tooltip, and menu with the current recording state.
+ * Call this from any code path that starts or stops a recording — including
+ * UI-initiated ones via IPC — so the tray UI never drifts out of sync.
+ */
+function syncTrayToRecordingState() {
+    if (!tray)
+        return;
+    const recording = (0, recorder_1.isRecording)();
+    tray.setImage(electron_1.nativeImage.createFromPath(recording ? RECORDING_ICON : IDLE_ICON));
+    tray.setToolTip(recording ? 'Meeting Note-Taker — Recording...' : 'Meeting Note-Taker');
+    rebuildMenu();
 }
 function broadcastRecordingStatus() {
     const win = (0, index_1.getMainWindow)();
@@ -127,11 +148,12 @@ function handleStartRecording() {
     }
 }
 async function handleStopRecording() {
-    const result = (0, recorder_1.stopRecording)();
     tray?.setImage(electron_1.nativeImage.createFromPath(IDLE_ICON));
-    tray?.setToolTip('Meeting Note-Taker — Uploading...');
+    tray?.setToolTip('Meeting Note-Taker — Finalising...');
     rebuildMenu();
     broadcastRecordingStatus();
+    const result = await (0, recorder_1.stopRecording)();
+    tray?.setToolTip('Meeting Note-Taker — Uploading...');
     try {
         if (!result.outputPath) {
             throw new Error(result.error || 'Recording failed before the audio file could be saved.');

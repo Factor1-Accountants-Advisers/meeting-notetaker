@@ -35,6 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.acquireToken = acquireToken;
 exports.acquireIdToken = acquireIdToken;
+exports.signIn = signIn;
 exports.clearTokenCache = clearTokenCache;
 const msal_node_1 = require("@azure/msal-node");
 const electron_1 = require("electron");
@@ -43,11 +44,20 @@ const path = __importStar(require("path"));
 function getCacheFile() {
     return path.join(electron_1.app.getPath('userData'), 'msal-cache.enc');
 }
-const SCOPES = [
+// Graph API scopes for calendar access
+const GRAPH_SCOPES = [
     'https://graph.microsoft.com/Calendars.Read',
     'https://graph.microsoft.com/User.Read',
 ];
+// ID token scopes for web app authentication
 const ID_SCOPES = ['openid', 'profile', 'User.Read'];
+// All scopes requested together during sign-in so subsequent silent
+// acquisitions for either scope set work from the same refresh token
+const ALL_SCOPES = [
+    'openid', 'profile', 'offline_access',
+    'https://graph.microsoft.com/Calendars.Read',
+    'https://graph.microsoft.com/User.Read',
+];
 function buildPca() {
     const clientId = process.env.AZURE_AD_CLIENT_ID;
     const tenantId = process.env.AZURE_AD_TENANT_ID;
@@ -66,8 +76,18 @@ function getPca() {
         _pca = buildPca();
     return _pca;
 }
+function canEncrypt() {
+    try {
+        return electron_1.safeStorage.isEncryptionAvailable();
+    }
+    catch {
+        return false;
+    }
+}
 function loadCache(pca) {
     try {
+        if (!canEncrypt())
+            return;
         if (!fs.existsSync(getCacheFile()))
             return;
         const encrypted = fs.readFileSync(getCacheFile());
@@ -79,44 +99,60 @@ function loadCache(pca) {
     }
 }
 function saveCache(pca) {
-    const serialized = pca.getTokenCache().serialize();
-    const encrypted = electron_1.safeStorage.encryptString(serialized);
-    fs.writeFileSync(getCacheFile(), encrypted);
+    try {
+        if (!canEncrypt())
+            return;
+        const serialized = pca.getTokenCache().serialize();
+        const encrypted = electron_1.safeStorage.encryptString(serialized);
+        fs.writeFileSync(getCacheFile(), encrypted);
+    }
+    catch (err) {
+        console.warn('[auth] Failed to persist token cache:', err);
+    }
 }
+/**
+ * Silent-only Graph API token. Throws immediately if no accounts are cached.
+ * Used by the scheduler and calendar IPC — never blocks on interactive flow.
+ */
 async function acquireToken() {
     const pca = getPca();
     loadCache(pca);
     const accounts = await pca.getTokenCache().getAllAccounts();
-    if (accounts.length > 0) {
-        try {
-            const result = await pca.acquireTokenSilent({ account: accounts[0], scopes: SCOPES });
-            if (result?.accessToken) {
-                saveCache(pca);
-                return result.accessToken;
-            }
-            console.warn('[auth] silent token resolved but returned no accessToken; falling back to device code');
-        }
-        catch (err) {
-            console.warn('[auth] silent acquisition failed, falling back to device code:', err);
-        }
-    }
-    console.log('[auth] Silent acquisition failed — starting device code flow for Graph API scopes...');
-    const result = await pca.acquireTokenByDeviceCode({
-        scopes: SCOPES,
-        deviceCodeCallback: (r) => {
-            console.log('='.repeat(60));
-            console.log('[auth] DEVICE CODE:', r.message);
-            console.log('='.repeat(60));
-        },
-    });
+    if (accounts.length === 0)
+        throw new Error('[auth] No cached accounts — sign in first');
+    const result = await pca.acquireTokenSilent({ account: accounts[0], scopes: GRAPH_SCOPES });
     if (!result?.accessToken)
-        throw new Error('Token acquisition failed');
+        throw new Error('[auth] Silent token returned no accessToken');
     saveCache(pca);
     return result.accessToken;
 }
+/**
+ * Silent-only ID token. Throws immediately if no accounts are cached.
+ * Used for the initial auth check on app load — never blocks on interactive flow.
+ */
 async function acquireIdToken() {
     const pca = getPca();
     loadCache(pca);
+    const accounts = await pca.getTokenCache().getAllAccounts();
+    if (accounts.length === 0)
+        throw new Error('[auth] No cached accounts — sign in first');
+    const result = await pca.acquireTokenSilent({ account: accounts[0], scopes: ID_SCOPES });
+    if (!result?.idToken)
+        throw new Error('[auth] Silent token returned no idToken');
+    saveCache(pca);
+    return result.idToken;
+}
+/**
+ * Interactive sign-in via the system browser.
+ * MSAL spins up a localhost loopback server, opens the browser to the Azure AD
+ * authorize endpoint, and waits for the redirect with the auth code.
+ * Requests all scopes at once so both acquireToken() and acquireIdToken()
+ * can be satisfied silently afterward from the same refresh token.
+ */
+async function signIn() {
+    const pca = getPca();
+    loadCache(pca);
+    // Try silent first in case tokens are already cached
     const accounts = await pca.getTokenCache().getAllAccounts();
     if (accounts.length > 0) {
         try {
@@ -126,14 +162,19 @@ async function acquireIdToken() {
                 return result.idToken;
             }
         }
-        catch { /* fall through */ }
+        catch { /* fall through to interactive */ }
     }
-    const result = await pca.acquireTokenByDeviceCode({
-        scopes: ID_SCOPES,
-        deviceCodeCallback: (r) => console.log(r.message),
+    const result = await pca.acquireTokenInteractive({
+        scopes: ALL_SCOPES,
+        openBrowser: async (url) => {
+            console.log('[auth] Opening system browser for sign-in...');
+            await electron_1.shell.openExternal(url);
+        },
+        successTemplate: '<html><body><h1>Sign-in successful</h1><p>You can close this tab and return to Meeting Note-Taker.</p></body></html>',
+        errorTemplate: '<html><body><h1>Sign-in failed</h1><p>Error: {{error}}. Close this tab and try again from the app.</p></body></html>',
     });
     if (!result?.idToken)
-        throw new Error('Id token acquisition failed');
+        throw new Error('[auth] Sign-in failed — no idToken returned');
     saveCache(pca);
     return result.idToken;
 }

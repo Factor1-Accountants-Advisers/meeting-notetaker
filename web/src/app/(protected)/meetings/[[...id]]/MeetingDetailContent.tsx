@@ -88,11 +88,35 @@ export default function MeetingDetailContent({
     });
   }, [activeSegmentIndex]);
 
+  // Must be above early returns — hooks cannot be called conditionally
+  const segments = m?.transcript?.segments ?? [];
+
+  const handleTimeUpdate = useCallback(
+    (currentTime: number) => {
+      let lo = 0;
+      let hi = segments.length - 1;
+      let found: number | null = null;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const seg = segments[mid];
+        if (currentTime < seg.start) {
+          hi = mid - 1;
+        } else if (currentTime >= seg.end) {
+          lo = mid + 1;
+        } else {
+          found = mid;
+          break;
+        }
+      }
+      setActiveSegmentIndex(found);
+    },
+    [segments],
+  );
+
   if (!numericId) return <div className="text-[color:var(--text-secondary)]">No meeting selected.</div>;
   if (isLoading) return <div className="text-[color:var(--text-secondary)]">Loading meeting...</div>;
   if (error || !m) return <div className="text-[color:var(--danger)]">Meeting not found.</div>;
 
-  const segments = m.transcript?.segments ?? [];
   const visibleSegments = transcriptExpanded
     ? segments
     : segments.slice(0, INITIAL_SEGMENTS);
@@ -116,28 +140,6 @@ export default function MeetingDetailContent({
     };
     mutate(updatedMeeting, false);
   }
-
-  const handleTimeUpdate = useCallback(
-    (currentTime: number) => {
-      let lo = 0;
-      let hi = segments.length - 1;
-      let found: number | null = null;
-      while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        const seg = segments[mid];
-        if (currentTime < seg.start) {
-          hi = mid - 1;
-        } else if (currentTime >= seg.end) {
-          lo = mid + 1;
-        } else {
-          found = mid;
-          break;
-        }
-      }
-      setActiveSegmentIndex(found);
-    },
-    [segments],
-  );
 
   const isProcessing = m.status !== "complete" && m.status !== "failed";
 

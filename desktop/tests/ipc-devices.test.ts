@@ -34,11 +34,16 @@ jest.mock('../src/main/tray', () => ({ setPendingMeeting: jest.fn() }));
 jest.mock('ffmpeg-static', () => 'C:\\ffmpeg\\ffmpeg.exe');
 jest.mock('electron-updater', () => ({ autoUpdater: { checkForUpdatesAndNotify: jest.fn() } }));
 jest.mock('../src/main/protocol', () => ({ registerAppProtocol: jest.fn() }));
+jest.mock('../src/main/runtime-paths', () => ({
+  getBackendUrl: jest.fn(() => 'http://localhost:8000'),
+  loadEnv: jest.fn(),
+}));
 
 import { ipcMain } from 'electron';
 import { acquireIdToken } from '../src/main/auth';
 import { uploadRecording } from '../src/main/uploader';
 import { getRecordingStatus } from '../src/main/recorder';
+import { getBackendUrl } from '../src/main/runtime-paths';
 
 describe('audio:get-devices IPC handler', () => {
   beforeEach(() => {
@@ -58,7 +63,7 @@ describe('uploader:upload IPC handler', () => {
     jest.clearAllMocks();
   });
 
-  it('uses the ID token for backend uploads', async () => {
+  it('uses the runtime backend URL and ID token for backend uploads', async () => {
     (acquireIdToken as jest.Mock).mockResolvedValue('id-token-123');
     (uploadRecording as jest.Mock).mockResolvedValue({ meeting_id: 7, status: 'processing' });
 
@@ -78,9 +83,24 @@ describe('uploader:upload IPC handler', () => {
       expect.objectContaining({
         filePath: 'C:/tmp/test.wav',
         accessToken: 'id-token-123',
+        backendUrl: getBackendUrl(),
         metadata,
       })
     );
+  });
+});
+
+describe('app:get-backend-url IPC handler', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('returns the runtime backend URL', () => {
+    require('../src/main/ipc').registerIpcHandlers();
+    const handleCalls = (ipcMain.handle as jest.Mock).mock.calls;
+    const backendUrlHandler = handleCalls.find((c: [string, Function]) => c[0] === 'app:get-backend-url')?.[1];
+
+    expect(backendUrlHandler()).toBe('http://localhost:8000');
   });
 });
 

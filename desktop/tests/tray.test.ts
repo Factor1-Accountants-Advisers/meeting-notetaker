@@ -48,6 +48,8 @@ import { acquireIdToken } from '../src/main/auth';
 import { startRecording, stopRecording } from '../src/main/recorder';
 import { uploadRecording } from '../src/main/uploader';
 
+const TEST_BACKEND_URL = 'http://localhost:8000';
+
 describe('tray recording flow', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -101,7 +103,7 @@ describe('tray recording flow', () => {
     expect(uploadRecording).toHaveBeenCalledWith({
       filePath: 'C:/tmp/meeting.wav',
       accessToken: 'id-token-123',
-      backendUrl: 'http://localhost:8000',
+      backendUrl: TEST_BACKEND_URL,
       metadata: {
         meeting_title: 'Original Meeting',
         attendees: [{ name: 'Alice', email: 'alice@example.com' }],

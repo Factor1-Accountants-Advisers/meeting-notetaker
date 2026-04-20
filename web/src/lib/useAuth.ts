@@ -42,7 +42,7 @@ export function useAuth() {
     if (!isElectron()) return;
     const api = getElectronAPI();
     try {
-      const token = await api.getToken();
+      const token = await api.signIn();
       const payload = JSON.parse(atob(token.split('.')[1]));
       setUser({ name: payload.name ?? '', email: payload.preferred_username ?? payload.upn ?? '' });
       setIsAuthenticated(true);
