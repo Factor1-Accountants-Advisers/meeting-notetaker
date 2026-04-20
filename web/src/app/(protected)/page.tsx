@@ -18,7 +18,13 @@ import MeetingDetailContent from "./meetings/[[...id]]/MeetingDetailContent";
 import type { CalendarEvent } from "@/types";
 
 function toDateKey(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  // Local date, not UTC. Must match DayStrip's toDateKey so tab keys and
+  // meeting-bucket keys agree — a UTC-vs-local mismatch silently drops
+  // meetings onto the wrong day tab for users east of UTC.
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 /**
@@ -96,7 +102,7 @@ export default function DashboardPage() {
   const dayMeetings = useMemo(
     () =>
       calendarEvents.filter(
-        (m) => new Date(m.start).toISOString().slice(0, 10) === selectedDate
+        (m) => toDateKey(new Date(m.start)) === selectedDate
       ),
     [calendarEvents, selectedDate]
   );

@@ -15,7 +15,14 @@ interface DayStripProps {
 }
 
 function toDateKey(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  // Local date, not UTC. Using toISOString() here would bucket events by UTC
+  // day — which silently shifts meetings onto the wrong day tab for users
+  // east of UTC (e.g. AEST users before 10am local see all their meetings
+  // land on the following day's tab).
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 function getDayLabel(d: Date, today: Date): string {
@@ -50,7 +57,7 @@ export default function DayStrip({
   const meetingCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const m of meetings) {
-      const key = new Date(m.start).toISOString().slice(0, 10);
+      const key = toDateKey(new Date(m.start));
       counts[key] = (counts[key] || 0) + 1;
     }
     return counts;
