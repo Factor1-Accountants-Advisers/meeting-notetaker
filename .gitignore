@@ -26,6 +26,10 @@ coverage/
 
 # Claude Code
 .claude/
+.superpowers/
+
+# Packaged installer artifacts (MSI + unpacked Electron bundle — hundreds of MB)
+desktop/release/
 
 # IDE
 .idea/
