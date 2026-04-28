@@ -46,11 +46,15 @@ module.exports = async function msiProjectCreated(projectFile) {
   }
 
   // --- 3. Inject cleanup of %LOCALAPPDATA% user data on uninstall ---
-  // The userData folder contains msal-cache.enc, backend-data/, and Electron state.
-  // This is intentional for the demo build — users expect full removal.
+  // Cleans Electron state and MSAL token cache on explicit uninstall.
+  // The NOT UPGRADINGPRODUCTCODE condition prevents this from firing during
+  // auto-upgrades, so users don't have to re-login after every version update.
+  // Note: meeting data (SQLite DB + audio) lives in %APPDATA%\Meeting Note-Taker
+  // and is intentionally NOT touched here.
   const cleanupXml = `
-    <!-- Remove user data directory on uninstall -->
+    <!-- Remove Electron state + MSAL cache on explicit uninstall only (not on upgrade) -->
     <Component Id="CleanupUserData" Guid="*" Directory="APPLICATIONFOLDER">
+      <Condition>NOT UPGRADINGPRODUCTCODE</Condition>
       <RegistryValue Root="HKCU" Key="Software\\MeetingNoteTaker" Name="cleanup" Type="integer" Value="1" KeyPath="yes" />
       <util:RemoveFolderEx On="uninstall" Property="LOCALAPPDATAFOLDER" />
     </Component>

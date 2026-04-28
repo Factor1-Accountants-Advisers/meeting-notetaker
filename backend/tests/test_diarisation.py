@@ -358,3 +358,188 @@ class TestDiarisationWithSpeakerInference:
         # Meeting status must NOT be FAILED — defense-in-depth requirement
         db_session.refresh(test_meeting_with_participants)
         assert test_meeting_with_participants.status != MeetingStatus.FAILED
+
+
+class TestDiarisationReconciliation:
+    """Tests for AssemblyAI + LLM signal reconciliation (Option A+).
+
+    The LLM must always run as a verifier, even when AssemblyAI returned
+    real names. AssemblyAI names win on conflict (deterministic > probabilistic);
+    LLM fills gaps when AssemblyAI fell back to a cluster ID.
+    """
+
+    def test_llm_runs_even_when_assemblyai_returned_real_names(
+        self,
+        db_session: Session,
+        test_meeting_with_participants: Meeting,
+    ):
+        """The bug fix: LLM must run even when input segments already have names."""
+        from app.services.diarisation import process_diarisation
+
+        transcript = Transcript(
+            meeting_id=test_meeting_with_participants.id,
+            full_text="Thanks Melissa. No worries.",
+            segments=[
+                {"speaker": "Test User", "start": 0.0, "end": 3.0, "text": "Thanks Melissa."},
+                {"speaker": "Melissa Hall", "start": 3.0, "end": 6.0, "text": "No worries."},
+            ],
+        )
+        db_session.add(transcript)
+        db_session.commit()
+
+        # LLM confirms AssemblyAI's choices
+        mock_mapping = {
+            "Speaker 1": {
+                "display_name": "Test User",
+                "email": "test@example.com",
+                "confidence": 0.9,
+                "reasoning": "Speaker 2 addressed as Melissa",
+            },
+            "Speaker 2": {
+                "display_name": "Melissa Hall",
+                "email": "melissa@example.com",
+                "confidence": 0.95,
+                "reasoning": "Addressed as Melissa",
+            },
+        }
+
+        with patch(
+            "app.services.diarisation.infer_speaker_identities",
+            return_value=mock_mapping,
+        ) as mock_llm:
+            updated = process_diarisation(db_session, test_meeting_with_participants.id)
+
+        # The LLM was actually invoked (the bug fix)
+        assert mock_llm.called, "LLM inference should ALWAYS run when candidates exist"
+
+        # AssemblyAI's names retained (both signals agree)
+        assert updated.segments[0]["speaker"] == "Test User"
+        assert updated.segments[1]["speaker"] == "Melissa Hall"
+
+        # Raw labels preserved
+        assert updated.segments[0]["raw_speaker"] == "Test User"
+        assert updated.segments[1]["raw_speaker"] == "Melissa Hall"
+
+    def test_assemblyai_name_wins_when_llm_disagrees(
+        self,
+        db_session: Session,
+        test_meeting_with_participants: Meeting,
+    ):
+        """AssemblyAI's deterministic acoustic match beats LLM's text guess."""
+        from app.services.diarisation import process_diarisation
+
+        transcript = Transcript(
+            meeting_id=test_meeting_with_participants.id,
+            full_text="One thing on the audit.",
+            segments=[
+                {"speaker": "Melissa Hall", "start": 0.0, "end": 3.0, "text": "One thing on the audit."},
+            ],
+        )
+        db_session.add(transcript)
+        db_session.commit()
+
+        # LLM confidently says it's Test User instead — AssemblyAI should still win
+        mock_mapping = {
+            "Speaker 1": {
+                "display_name": "Test User",
+                "email": "test@example.com",
+                "confidence": 0.95,
+                "reasoning": "Discusses the audit (LLM is wrong here)",
+            },
+        }
+
+        with patch(
+            "app.services.diarisation.infer_speaker_identities",
+            return_value=mock_mapping,
+        ):
+            updated = process_diarisation(db_session, test_meeting_with_participants.id)
+
+        # AssemblyAI wins on conflict
+        assert updated.segments[0]["speaker"] == "Melissa Hall"
+        assert updated.segments[0]["raw_speaker"] == "Melissa Hall"
+
+    def test_llm_fills_gap_when_assemblyai_partial_success(
+        self,
+        db_session: Session,
+        test_meeting_with_participants: Meeting,
+    ):
+        """The original bug case: AssemblyAI named one speaker, fell back to 'B' for the other.
+
+        Before the fix: 'B' would pass through unchanged because speaker_identified=True
+                        skipped the LLM step entirely.
+        After the fix:  LLM runs, identifies 'B' as Melissa, fills the gap.
+        """
+        from app.services.diarisation import process_diarisation
+
+        transcript = Transcript(
+            meeting_id=test_meeting_with_participants.id,
+            full_text="Thanks Melissa. No worries.",
+            segments=[
+                {"speaker": "Test User", "start": 0.0, "end": 3.0, "text": "Thanks Melissa, I agree."},
+                {"speaker": "B", "start": 3.0, "end": 6.0, "text": "No worries Joseph, happy to help."},
+            ],
+        )
+        db_session.add(transcript)
+        db_session.commit()
+
+        mock_mapping = {
+            "Speaker 1": {
+                "display_name": "Test User",
+                "email": "test@example.com",
+                "confidence": 0.9,
+                "reasoning": "Addresses Melissa",
+            },
+            "Speaker 2": {
+                "display_name": "Melissa Hall",
+                "email": "melissa@example.com",
+                "confidence": 0.95,
+                "reasoning": "Addressed as Melissa by Speaker 1",
+            },
+        }
+
+        with patch(
+            "app.services.diarisation.infer_speaker_identities",
+            return_value=mock_mapping,
+        ):
+            updated = process_diarisation(db_session, test_meeting_with_participants.id)
+
+        # Test User retained (AssemblyAI got it right)
+        assert updated.segments[0]["speaker"] == "Test User"
+        # Melissa filled in by LLM (AssemblyAI fell back to 'B')
+        assert updated.segments[1]["speaker"] == "Melissa Hall"
+        # LLM-derived speaker carries confidence + email metadata
+        assert updated.segments[1].get("matched_email") == "melissa@example.com"
+        assert updated.segments[1].get("match_confidence") == 0.95
+        # AssemblyAI-derived speaker does NOT carry LLM metadata
+        assert "match_confidence" not in updated.segments[0]
+
+    def test_unknown_label_falls_back_to_generic_when_llm_unsure(
+        self,
+        db_session: Session,
+        test_meeting_with_participants: Meeting,
+    ):
+        """If neither AssemblyAI nor the LLM can name a speaker, keep generic 'Speaker N'."""
+        from app.services.diarisation import process_diarisation
+
+        transcript = Transcript(
+            meeting_id=test_meeting_with_participants.id,
+            full_text="Hi. Hello.",
+            segments=[
+                {"speaker": "A", "start": 0.0, "end": 3.0, "text": "Hi."},
+                {"speaker": "B", "start": 3.0, "end": 6.0, "text": "Hello."},
+            ],
+        )
+        db_session.add(transcript)
+        db_session.commit()
+
+        # LLM returns no confident matches
+        with patch(
+            "app.services.diarisation.infer_speaker_identities",
+            return_value={},
+        ):
+            updated = process_diarisation(db_session, test_meeting_with_participants.id)
+
+        assert updated.segments[0]["speaker"] == "Speaker 1"
+        assert updated.segments[1]["speaker"] == "Speaker 2"
+        assert updated.segments[0]["raw_speaker"] == "A"
+        assert updated.segments[1]["raw_speaker"] == "B"

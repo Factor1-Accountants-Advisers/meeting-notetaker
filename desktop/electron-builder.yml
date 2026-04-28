@@ -34,4 +34,9 @@ msi:
     - -ext
     - WixUtilExtension
 msiProjectCreated: scripts/msi-project-created.cjs
-publish: null
+publish:
+  provider: github
+  owner: guerrerojoseph
+  repo: meeting-notetaker
+  private: true
+  releaseType: release
