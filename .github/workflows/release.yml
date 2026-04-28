@@ -32,74 +32,101 @@ jobs:
         working-directory: desktop
 
       # ── Python runtime ─────────────────────────────────────────────────────
-      # Build a self-contained embedded Python runtime so the MSI needs no
-      # Python pre-installed on the user's machine.
+      # Builds a self-contained embedded Python runtime so the MSI needs no
+      # Python pre-installed on testers' machines.
+      # $ErrorActionPreference = 'Stop' makes every failure exit the step
+      # immediately — no more silent failures.
       - name: Set up embedded Python runtime
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+
+          $repoRoot   = $env:GITHUB_WORKSPACE
+          $runtimeDir = Join-Path $repoRoot "desktop" "python-runtime"
+          $pythonExe  = Join-Path $runtimeDir "python.exe"
+          $reqFile    = Join-Path $repoRoot "backend" "requirements-base.txt"
+
+          # ── 1. Download embeddable Python ──────────────────────────────────
           $pythonVersion = "3.11.9"
-          $zipUrl = "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-embed-amd64.zip"
-          $zipPath = "python-embed.zip"
+          $zipUrl  = "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-embed-amd64.zip"
+          $zipPath = Join-Path $repoRoot "python-embed.zip"
 
           Write-Host "Downloading Python $pythonVersion embeddable..."
-          Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath
-          Expand-Archive -Path $zipPath -DestinationPath "desktop/python-runtime" -Force
+          Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+          Write-Host "Extracting to $runtimeDir ..."
+          Expand-Archive -Path $zipPath -DestinationPath $runtimeDir -Force
 
-          # Enable site-packages so pip-installed packages are importable
-          $pthFile = Get-ChildItem -Path "desktop/python-runtime" -Filter "*._pth" | Select-Object -First 1
-          if ($pthFile) {
-            $content = Get-Content $pthFile.FullName -Raw
-            $content = $content -replace "#import site", "import site"
-            Set-Content -Path $pthFile.FullName -Value $content -NoNewline
-            Write-Host "Enabled site-packages in $($pthFile.Name)"
+          if (-not (Test-Path $pythonExe)) {
+            throw "python.exe not found at $pythonExe after extraction — aborting."
           }
+          Write-Host "python.exe confirmed at $pythonExe"
 
-          # Bootstrap pip into the embeddable runtime
+          # ── 2. Enable site-packages ────────────────────────────────────────
+          # The embeddable zip ships with 'import site' commented out, so
+          # pip-installed packages aren't importable until we uncomment it.
+          $pthFile = Get-ChildItem -Path $runtimeDir -Filter "*._pth" | Select-Object -First 1
+          if (-not $pthFile) { throw "No ._pth file found in Python runtime — aborting." }
+
+          $pthLines = Get-Content $pthFile.FullName
+          $pthLines = $pthLines | ForEach-Object { $_ -replace '^#import site', 'import site' }
+          $pthLines | Set-Content $pthFile.FullName -Encoding UTF8
+          Write-Host "Enabled site-packages in $($pthFile.Name)"
+
+          # ── 3. Bootstrap pip ──────────────────────────────────────────────
+          $getPipPath = Join-Path $repoRoot "get-pip.py"
           Write-Host "Installing pip..."
-          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "get-pip.py"
-          ./desktop/python-runtime/python.exe get-pip.py --no-warn-script-location
+          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile $getPipPath -UseBasicParsing
+          & $pythonExe $getPipPath --no-warn-script-location
+          if ($LASTEXITCODE -ne 0) { throw "pip bootstrap failed (exit $LASTEXITCODE)." }
 
-          # Install backend dependencies
-          Write-Host "Installing backend requirements..."
-          ./desktop/python-runtime/python.exe -m pip install `
-            -r backend/requirements-base.txt `
+          # ── 4. Install backend requirements ───────────────────────────────
+          Write-Host "Installing backend requirements from $reqFile ..."
+          & $pythonExe -m pip install `
+            -r $reqFile `
             --no-warn-script-location `
             --no-compile
+          if ($LASTEXITCODE -ne 0) { throw "pip install requirements failed (exit $LASTEXITCODE)." }
 
+          # ── 5. Verify ─────────────────────────────────────────────────────
+          Write-Host "`nPython runtime summary:"
+          Write-Host "  python.exe : $(Test-Path $pythonExe)"
+          Write-Host "  packages   : $((Get-ChildItem (Join-Path $runtimeDir 'Lib\site-packages') -Directory -ErrorAction SilentlyContinue).Count) installed"
           Write-Host "Python runtime ready."
 
       # ── Production environment ─────────────────────────────────────────────
-      # Creates the .env.production file that gets bundled inside the MSI.
-      # GH_TOKEN here is a long-lived fine-grained PAT (stored as UPDATER_TOKEN
-      # secret) that allows the installed app to download future update MSIs
-      # from private GitHub Releases.
       - name: Create .env.production
         shell: pwsh
         run: |
-          @"
-          ENVIRONMENT=production
-          AZURE_AD_TENANT_ID=${{ secrets.AZURE_AD_TENANT_ID }}
-          AZURE_AD_CLIENT_ID=${{ secrets.AZURE_AD_CLIENT_ID }}
-          AZURE_AD_CLIENT_SECRET=${{ secrets.AZURE_AD_CLIENT_SECRET }}
-          OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
-          ASSEMBLYAI_API_KEY=${{ secrets.ASSEMBLYAI_API_KEY }}
-          GH_TOKEN=${{ secrets.UPDATER_TOKEN }}
-          "@ | Set-Content desktop/.env.production
-        # Note: UPDATER_TOKEN must be a GitHub fine-grained PAT with:
-        #   - Repository: guerrerojoseph/meeting-notetaker
-        #   - Permission: Contents → Read-only
-        # Create it at: https://github.com/settings/tokens?type=beta
+          $ErrorActionPreference = 'Stop'
+          $lines = @(
+            "ENVIRONMENT=production",
+            "AZURE_AD_TENANT_ID=${{ secrets.AZURE_AD_TENANT_ID }}",
+            "AZURE_AD_CLIENT_ID=${{ secrets.AZURE_AD_CLIENT_ID }}",
+            "AZURE_AD_CLIENT_SECRET=${{ secrets.AZURE_AD_CLIENT_SECRET }}",
+            "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}",
+            "ASSEMBLYAI_API_KEY=${{ secrets.ASSEMBLYAI_API_KEY }}",
+            "GH_TOKEN=${{ secrets.UPDATER_TOKEN }}"
+          )
+          $lines | Set-Content (Join-Path $env:GITHUB_WORKSPACE "desktop" ".env.production") -Encoding UTF8
+          Write-Host ".env.production written."
 
       # ── Build ──────────────────────────────────────────────────────────────
-      # npm run build runs: build:web (Next.js static export → desktop/web-out)
-      #                     build:electron (TypeScript compilation)
-      - name: Build app
+      - name: Build app (web + electron)
         run: npm run build
         working-directory: desktop
 
+      # ── Verify python-runtime is in place before packaging ────────────────
+      - name: Verify python-runtime exists before packaging
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pythonExe = Join-Path $env:GITHUB_WORKSPACE "desktop" "python-runtime" "python.exe"
+          if (-not (Test-Path $pythonExe)) {
+            throw "python-runtime/python.exe missing — MSI would be broken. Aborting."
+          }
+          Write-Host "python-runtime/python.exe confirmed — safe to package."
+
       # ── Package and publish ────────────────────────────────────────────────
-      # GH_TOKEN (GITHUB_TOKEN) is the short-lived Actions token used by
-      # electron-builder to create the GitHub Release and upload assets.
       - name: Build MSI and publish to GitHub Releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
