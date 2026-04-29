@@ -43,12 +43,17 @@ jobs:
       # ── Python runtime cache (speeds up retries) ───────────────────────────
       # Cache key is bound to requirements-base.txt — bumps automatically when
       # backend dependencies change.
+      #
+      # IMPORTANT: bump the trailing -vN suffix any time you change the setup
+      # logic. Earlier runs (pre-v3) silently cached partial/broken runtimes
+      # because $ErrorActionPreference was 'Continue' and pip failures didn't
+      # halt the build. Those poisoned caches kept producing 149 MB MSIs.
       - name: Cache python-runtime
         id: python-cache
         uses: actions/cache@v4
         with:
           path: desktop/python-runtime
-          key: python-runtime-${{ env.PYTHON_VERSION }}-${{ hashFiles('backend/requirements-base.txt') }}-v2
+          key: python-runtime-${{ env.PYTHON_VERSION }}-${{ hashFiles('backend/requirements-base.txt') }}-v3
 
       # ── Python runtime setup ───────────────────────────────────────────────
       - name: Set up embedded Python runtime
@@ -214,12 +219,15 @@ jobs:
           }
 
       # ── Verify cached or freshly-built runtime is usable ──────────────────
+      # This runs UNCONDITIONALLY (no cache-hit guard) and includes the same
+      # smoke test as the setup step, so a poisoned cache cannot sneak through.
       - name: Verify python-runtime
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $runtimeDir = Join-Path $env:GITHUB_WORKSPACE "desktop" "python-runtime"
-          $pythonExe  = Join-Path $runtimeDir "python.exe"
+          $runtimeDir   = Join-Path $env:GITHUB_WORKSPACE "desktop" "python-runtime"
+          $pythonExe    = Join-Path $runtimeDir "python.exe"
+          $sitePackages = Join-Path $runtimeDir "Lib" "site-packages"
 
           Write-Host "── Verifying python-runtime ──"
           Write-Host "  Cache hit: ${{ steps.python-cache.outputs.cache-hit }}"
@@ -228,17 +236,37 @@ jobs:
             throw "python.exe missing at $pythonExe — runtime invalid"
           }
 
-          $totalSize = (Get-ChildItem $runtimeDir -Recurse -File | Measure-Object -Property Length -Sum).Sum
-          $sizeMB    = [Math]::Round($totalSize / 1MB, 2)
-          $fileCount = (Get-ChildItem $runtimeDir -Recurse -File).Count
-
-          Write-Host "  Total size : $sizeMB MB"
-          Write-Host "  File count : $fileCount"
-
-          if ($sizeMB -lt 50) {
-            throw "python-runtime is only $sizeMB MB — far too small, packages didn't install"
+          # site-packages must exist — this is the bit that's most likely to be
+          # incomplete in a poisoned cache.
+          if (-not (Test-Path $sitePackages)) {
+            throw "Lib/site-packages missing — runtime is incomplete (broken cache?)"
           }
-          Write-Host "✓ python-runtime looks healthy"
+
+          $totalSize  = (Get-ChildItem $runtimeDir -Recurse -File | Measure-Object Length -Sum).Sum
+          $sizeMB     = [Math]::Round($totalSize / 1MB, 2)
+          $fileCount  = (Get-ChildItem $runtimeDir -Recurse -File).Count
+          $pkgCount   = (Get-ChildItem $sitePackages -Directory -ErrorAction SilentlyContinue).Count
+
+          Write-Host "  Total size       : $sizeMB MB"
+          Write-Host "  File count       : $fileCount"
+          Write-Host "  Site-packages dirs: $pkgCount"
+
+          # A healthy runtime is ~110 MB after installing requirements-base.txt.
+          # 80 MB is a generous floor; anything below means packages are missing.
+          if ($sizeMB -lt 80) {
+            throw "python-runtime is only $sizeMB MB — packages didn't install fully (expected ~110 MB)"
+          }
+
+          # The real test: can we actually import every backend package?
+          # This catches partial installs that pass the size check.
+          Write-Host ""
+          Write-Host "── Smoke test: import key packages ──"
+          $importTest = & $pythonExe -c "import fastapi, assemblyai, openai, sqlalchemy, alembic, aiosqlite; print('OK')" 2>&1
+          Write-Host "  Result: $importTest"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Smoke test failed — runtime cannot import required packages (likely a poisoned cache; bump the cache key suffix in this workflow)"
+          }
+          Write-Host "✓ python-runtime is healthy"
 
       # ── Production environment ─────────────────────────────────────────────
       - name: Create .env.production
@@ -359,16 +387,39 @@ jobs:
             throw "MSI is missing required components — aborting before publish"
           }
 
-          # Find the actual MSI file
+          # Find the actual MSI file and HARD-FAIL if it's suspiciously small.
+          # A complete MSI with Electron + Python runtime + backend is ~220 MB.
+          # 149 MB has historically meant Python silently failed to bundle.
           $msi = Get-ChildItem (Join-Path $env:GITHUB_WORKSPACE "desktop" "release") -Filter "*.msi" | Select-Object -First 1
-          if ($msi) {
-            $msiSize = [Math]::Round($msi.Length / 1MB, 2)
-            Write-Host ""
-            Write-Host "  MSI: $($msi.Name) — $msiSize MB"
-            if ($msiSize -lt 200) {
-              Write-Host "  ⚠️  WARNING: MSI is only $msiSize MB — Python may not be bundled"
-            }
+          if (-not $msi) {
+            throw "No .msi file found in release/ — electron-builder did not produce an installer"
           }
+
+          $msiSize = [Math]::Round($msi.Length / 1MB, 2)
+          Write-Host ""
+          Write-Host "  MSI: $($msi.Name) — $msiSize MB"
+
+          # Verify which extraResources the MSI actually carries by listing the
+          # in-MSI file table. lessmsi isn't preinstalled, so use the WiX
+          # cabinet inside the MSI via a quick dir listing of resources/.
+          $resourcesSizeMB = [Math]::Round(
+            (Get-ChildItem $resourcesDir -Recurse -File | Measure-Object Length -Sum).Sum / 1MB,
+            2
+          )
+          $pythonSizeMB = if (Test-Path (Join-Path $resourcesDir "python")) {
+            [Math]::Round((Get-ChildItem (Join-Path $resourcesDir "python") -Recurse -File | Measure-Object Length -Sum).Sum / 1MB, 2)
+          } else { 0 }
+          Write-Host "  resources/ total   : $resourcesSizeMB MB"
+          Write-Host "  resources/python/  : $pythonSizeMB MB"
+
+          if ($pythonSizeMB -lt 80) {
+            throw "resources/python/ is only $pythonSizeMB MB in win-unpacked — Python runtime is incomplete"
+          }
+
+          if ($msiSize -lt 200) {
+            throw "MSI is only $msiSize MB (expected ~220 MB) — bundling regression. Refusing to publish."
+          }
+          Write-Host "✓ MSI size looks correct"
 
       # ── Publish to GitHub Releases ─────────────────────────────────────────
       # Only runs if the inspection above passed.
@@ -377,3 +428,35 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --win --publish always --prepackaged release/win-unpacked
         working-directory: desktop
+
+      # ── Post-publish sanity check ──────────────────────────────────────────
+      # The --prepackaged step rebuilds the MSI from win-unpacked. Verify the
+      # NEWLY-PRODUCED .msi on disk before declaring victory.
+      - name: Verify published MSI size
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msi = Get-ChildItem (Join-Path $env:GITHUB_WORKSPACE "desktop" "release") -Filter "*.msi" |
+                 Select-Object -First 1
+          if (-not $msi) { throw "No MSI found after publish step" }
+          $msiSize = [Math]::Round($msi.Length / 1MB, 2)
+          Write-Host "Final MSI: $($msi.Name) — $msiSize MB"
+          if ($msiSize -lt 200) {
+            throw "Published MSI is only $msiSize MB — bundling regression somehow slipped through"
+          }
+          Write-Host "✓ Published MSI is the expected size"
+
+      # ── Upload diagnostic artifacts ────────────────────────────────────────
+      # Always run (even on failure) so we can debug bundling issues without
+      # needing another CI round trip.
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-diagnostics
+          path: |
+            desktop/release/*.msi
+            desktop/release/*.yml
+            desktop/release/*.blockmap
+          if-no-files-found: warn
+          retention-days: 7
