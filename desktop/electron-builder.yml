@@ -15,8 +15,10 @@ extraResources:
     to: backend
     filter:
       - "**/*"
-      - "!__pycache__/**"
+      - "!**/__pycache__/**"
+      - "!**/*.pyc"
       - "!.pytest_cache/**"
+      - "!tests/**"
       - "!data/**"
   - from: python-runtime
     to: python
