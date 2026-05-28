@@ -1,17 +1,14 @@
 /**
  * Calendar-based auto-record scheduler.
  *
- * Polls the user's Outlook calendar and sets timers for upcoming meetings.
- * At meeting start time, shows a 30-second grace period notification.
- * If the user doesn't dismiss it, recording starts automatically.
+ * Polls the user's Outlook calendar and shows a notification when a meeting starts.
+ * The scheduler does not auto-start recording or open the app from the background.
  */
 import { Notification } from 'electron';
 import { acquireToken } from './auth';
 import { getUpcomingMeetings, CalendarEvent } from './graph';
-import { setPendingMeeting, handleStartRecording } from './tray';
 import { isRecording } from './recorder';
 
-const GRACE_PERIOD_MS = 30_000;
 const POLL_INTERVAL_MS = 5 * 60_000; // Refresh calendar every 5 minutes
 const SCHEDULE_HORIZON_MS = 10 * 60_000; // Only set timers for meetings within 10 minutes
 
@@ -21,7 +18,6 @@ const pendingTimers = new Map<string, NodeJS.Timeout>();
 const handledEvents = new Set<string>();
 
 let pollTimer: NodeJS.Timeout | null = null;
-let graceTimer: NodeJS.Timeout | null = null;
 let activeNotification: Notification | null = null;
 
 export function startScheduler(): void {
@@ -79,8 +75,8 @@ function scheduleUpcoming(events: CalendarEvent[]): void {
 
     // Meeting already started (app launched mid-meeting) — trigger immediately
     if (delayMs <= 0) {
-      console.log(`[scheduler] Meeting "${event.subject}" already started — triggering now`);
-      triggerGracePeriod(event);
+      console.log(`[scheduler] Meeting "${event.subject}" already started — notifying now`);
+      notifyMeetingStarting(event);
       continue;
     }
 
@@ -90,80 +86,46 @@ function scheduleUpcoming(events: CalendarEvent[]): void {
     console.log(`[scheduler] Scheduling "${event.subject}" in ${Math.round(delayMs / 1000)}s`);
     const timer = setTimeout(() => {
       pendingTimers.delete(event.id);
-      triggerGracePeriod(event);
+      notifyMeetingStarting(event);
     }, delayMs);
     pendingTimers.set(event.id, timer);
   }
 }
 
-function triggerGracePeriod(event: CalendarEvent): void {
+function notifyMeetingStarting(event: CalendarEvent): void {
   if (handledEvents.has(event.id)) return;
   handledEvents.add(event.id);
 
-  // Don't auto-record if already recording
   if (isRecording()) {
-    console.log(`[scheduler] Already recording — skipping auto-record for "${event.subject}"`);
+    console.log(`[scheduler] Already recording — skipping meeting notification for "${event.subject}"`);
     return;
   }
 
-  console.log(`[scheduler] Grace period started for "${event.subject}" (${GRACE_PERIOD_MS / 1000}s)`);
+  console.log(`[scheduler] Notifying user that "${event.subject}" is starting; auto-record is disabled`);
 
-  // Show notification
+  activeNotification?.close();
   activeNotification = new Notification({
-    title: 'Auto-Record Starting',
-    body: `"${event.subject}" — recording will begin in 30 seconds. Click to dismiss.`,
+    title: 'Meeting Starting',
+    body: `"${event.subject}" is starting. Open Notetaker from the tray if you want to record.`,
     silent: false,
   });
 
   activeNotification.on('click', () => {
-    console.log(`[scheduler] User dismissed auto-record for "${event.subject}"`);
+    console.log(`[scheduler] User dismissed meeting notification for "${event.subject}"`);
     cancelGracePeriod();
   });
 
   activeNotification.show();
-
-  // Set grace period timer
-  graceTimer = setTimeout(() => {
-    graceTimer = null;
-    activeNotification?.close();
-    activeNotification = null;
-    autoStartRecording(event);
-  }, GRACE_PERIOD_MS);
 }
 
-/** Dismiss the current grace period notification (callable from renderer via IPC). */
+/** Dismiss the current scheduler notification (callable from renderer via IPC). */
 export function dismissAutoRecord(): void {
-  if (graceTimer) {
-    console.log('[scheduler] Auto-record dismissed via IPC');
-    cancelGracePeriod();
-  }
+  cancelGracePeriod();
 }
 
 function cancelGracePeriod(): void {
-  if (graceTimer) {
-    clearTimeout(graceTimer);
-    graceTimer = null;
-  }
   if (activeNotification) {
     activeNotification.close();
     activeNotification = null;
   }
-}
-
-function autoStartRecording(event: CalendarEvent): void {
-  if (isRecording()) {
-    console.log(`[scheduler] Already recording — skipping auto-start for "${event.subject}"`);
-    return;
-  }
-
-  console.log(`[scheduler] Auto-starting recording for "${event.subject}"`);
-
-  // Set meeting metadata so the tray's start handler uses it
-  setPendingMeeting(
-    event.subject,
-    event.attendees,
-    event.start,
-  );
-
-  handleStartRecording();
 }

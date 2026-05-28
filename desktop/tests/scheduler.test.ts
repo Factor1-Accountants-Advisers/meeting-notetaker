@@ -58,61 +58,32 @@ describe('scheduler', () => {
     jest.useRealTimers();
   });
 
-  it('polls the calendar on startup and schedules upcoming meetings', async () => {
+  it('polls the calendar on startup and schedules upcoming meeting notifications', async () => {
     const now = Date.now();
     const inFiveMin = new Date(now + 5 * 60_000).toISOString();
     const inOneHour = new Date(now + 60 * 60_000).toISOString();
 
-    // Use mockResolvedValue (not Once) so repeat polls still return the event
     mockGetUpcomingMeetings.mockResolvedValue([
       makeEvent({ id: 'evt-near', start: inFiveMin, end: inOneHour }),
     ]);
 
     startScheduler();
-    // Let the async poll complete
     await jest.advanceTimersByTimeAsync(0);
 
     expect(mockGetUpcomingMeetings).toHaveBeenCalledWith('mock-token');
 
-    // Advance to meeting start time — should trigger notification
     await jest.advanceTimersByTimeAsync(5 * 60_000);
 
     expect(Notification).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: 'Auto-Record Starting',
+        title: 'Meeting Starting',
         body: expect.stringContaining('Team Standup'),
       }),
     );
     expect(mockNotificationShow).toHaveBeenCalled();
   });
 
-  it('auto-starts recording after the 30-second grace period', async () => {
-    const now = Date.now();
-    const justNow = new Date(now - 1000).toISOString(); // meeting already started
-    const inOneHour = new Date(now + 60 * 60_000).toISOString();
-
-    mockGetUpcomingMeetings.mockResolvedValueOnce([
-      makeEvent({ start: justNow, end: inOneHour }),
-    ]);
-
-    startScheduler();
-    await jest.advanceTimersByTimeAsync(0);
-
-    // Notification shown immediately for already-started meeting
-    expect(mockNotificationShow).toHaveBeenCalled();
-
-    // Advance through grace period
-    await jest.advanceTimersByTimeAsync(30_000);
-
-    expect(mockSetPendingMeeting).toHaveBeenCalledWith(
-      'Team Standup',
-      [{ name: 'Alice', email: 'alice@test.com' }],
-      justNow,
-    );
-    expect(mockHandleStartRecording).toHaveBeenCalled();
-  });
-
-  it('does not start recording when user dismisses the notification', async () => {
+  it('does not auto-start recording after notifying about an already-started meeting', async () => {
     const now = Date.now();
     const justNow = new Date(now - 1000).toISOString();
     const inOneHour = new Date(now + 60 * 60_000).toISOString();
@@ -124,20 +95,32 @@ describe('scheduler', () => {
     startScheduler();
     await jest.advanceTimersByTimeAsync(0);
 
-    // Simulate user clicking the notification (dismiss)
-    const clickHandler = mockNotificationOn.mock.calls.find(
-      ([event]: [string]) => event === 'click',
-    )?.[1];
-    expect(clickHandler).toBeDefined();
-    clickHandler();
+    expect(mockNotificationShow).toHaveBeenCalled();
 
-    // Advance past grace period
     await jest.advanceTimersByTimeAsync(30_000);
 
+    expect(mockSetPendingMeeting).not.toHaveBeenCalled();
     expect(mockHandleStartRecording).not.toHaveBeenCalled();
   });
 
-  it('skips auto-record when already recording', async () => {
+  it('opens no app/settings flow from background scheduler notifications', async () => {
+    const now = Date.now();
+    const justNow = new Date(now - 1000).toISOString();
+    const inOneHour = new Date(now + 60 * 60_000).toISOString();
+
+    mockGetUpcomingMeetings.mockResolvedValueOnce([
+      makeEvent({ start: justNow, end: inOneHour }),
+    ]);
+
+    startScheduler();
+    await jest.advanceTimersByTimeAsync(0);
+    await jest.advanceTimersByTimeAsync(30_000);
+
+    expect(mockHandleStartRecording).not.toHaveBeenCalled();
+    expect(mockSetPendingMeeting).not.toHaveBeenCalled();
+  });
+
+  it('skips notifications when already recording', async () => {
     mockIsRecording.mockReturnValue(true);
     const now = Date.now();
     const justNow = new Date(now - 1000).toISOString();
@@ -150,7 +133,6 @@ describe('scheduler', () => {
     startScheduler();
     await jest.advanceTimersByTimeAsync(0);
 
-    // Should not show notification when already recording
     expect(mockNotificationShow).not.toHaveBeenCalled();
     expect(mockHandleStartRecording).not.toHaveBeenCalled();
   });
@@ -170,7 +152,7 @@ describe('scheduler', () => {
     expect(mockNotificationShow).not.toHaveBeenCalled();
   });
 
-  it('dismissAutoRecord cancels the grace period from IPC', async () => {
+  it('dismissAutoRecord cancels the current notification without starting recording', async () => {
     const now = Date.now();
     const justNow = new Date(now - 1000).toISOString();
     const inOneHour = new Date(now + 60 * 60_000).toISOString();
@@ -184,10 +166,7 @@ describe('scheduler', () => {
 
     expect(mockNotificationShow).toHaveBeenCalled();
 
-    // Dismiss via IPC
     dismissAutoRecord();
-
-    // Advance past grace period
     await jest.advanceTimersByTimeAsync(30_000);
 
     expect(mockHandleStartRecording).not.toHaveBeenCalled();
@@ -205,14 +184,11 @@ describe('scheduler', () => {
     startScheduler();
     await jest.advanceTimersByTimeAsync(0);
 
-    // Grace period triggers, let it auto-start
-    await jest.advanceTimersByTimeAsync(30_000);
-    expect(mockHandleStartRecording).toHaveBeenCalledTimes(1);
+    expect(mockNotificationShow).toHaveBeenCalledTimes(1);
 
-    // Simulate next poll cycle (5 minutes)
     await jest.advanceTimersByTimeAsync(5 * 60_000);
 
-    // Should NOT trigger again for the same event
-    expect(mockHandleStartRecording).toHaveBeenCalledTimes(1);
+    expect(mockNotificationShow).toHaveBeenCalledTimes(1);
+    expect(mockHandleStartRecording).not.toHaveBeenCalled();
   });
 });

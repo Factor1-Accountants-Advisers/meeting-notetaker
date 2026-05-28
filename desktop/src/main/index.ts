@@ -68,10 +68,11 @@ if (!app.requestSingleInstanceLock()) app.quit();
 let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
 
-function createMainWindow(): BrowserWindow {
+export function createMainWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
+    show: false,
     title: 'Meeting Note-Taker',
     webPreferences: {
       nodeIntegration: false,
@@ -117,10 +118,9 @@ function createMainWindow(): BrowserWindow {
 export function showMainWindow(): void {
   if (!mainWindow || mainWindow.isDestroyed()) {
     mainWindow = createMainWindow();
-  } else {
-    mainWindow.show();
-    mainWindow.focus();
   }
+  mainWindow.show();
+  mainWindow.focus();
 }
 
 export function getMainWindow(): BrowserWindow | null {

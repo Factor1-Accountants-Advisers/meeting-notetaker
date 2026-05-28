@@ -33,6 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.createMainWindow = createMainWindow;
 exports.showMainWindow = showMainWindow;
 exports.getMainWindow = getMainWindow;
 const path = __importStar(require("path"));
@@ -106,6 +107,7 @@ function createMainWindow() {
     const win = new electron_1.BrowserWindow({
         width: 1200,
         height: 800,
+        show: false,
         title: 'Meeting Note-Taker',
         webPreferences: {
             nodeIntegration: false,
@@ -147,10 +149,8 @@ function showMainWindow() {
     if (!mainWindow || mainWindow.isDestroyed()) {
         mainWindow = createMainWindow();
     }
-    else {
-        mainWindow.show();
-        mainWindow.focus();
-    }
+    mainWindow.show();
+    mainWindow.focus();
 }
 function getMainWindow() {
     return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;

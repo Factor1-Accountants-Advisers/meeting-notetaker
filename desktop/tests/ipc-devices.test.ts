@@ -5,6 +5,7 @@ jest.mock('electron', () => ({
   },
   BrowserWindow: { fromWebContents: jest.fn() },
   shell: { openExternal: jest.fn() },
+  protocol: { registerSchemesAsPrivileged: jest.fn() },
   app: {
     getVersion: jest.fn(() => '1.0.0'),
     requestSingleInstanceLock: jest.fn(() => true),
@@ -30,7 +31,7 @@ jest.mock('../src/main/recorder', () => ({
   onRecordingError: jest.fn(),
 }));
 jest.mock('../src/main/uploader', () => ({ uploadRecording: jest.fn() }));
-jest.mock('../src/main/tray', () => ({ setPendingMeeting: jest.fn() }));
+jest.mock('../src/main/tray', () => ({ setPendingMeeting: jest.fn(), syncTrayToRecordingState: jest.fn() }));
 jest.mock('ffmpeg-static', () => 'C:\\ffmpeg\\ffmpeg.exe');
 jest.mock('electron-updater', () => ({ autoUpdater: { checkForUpdatesAndNotify: jest.fn() } }));
 jest.mock('../src/main/protocol', () => ({ registerAppProtocol: jest.fn() }));
