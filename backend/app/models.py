@@ -4,6 +4,7 @@ from datetime import datetime
 from sqlalchemy import (
     Boolean,
     Column,
+    Float,
     Integer,
     String,
     DateTime,
@@ -12,6 +13,7 @@ from sqlalchemy import (
     Text,
     Date,
     JSON,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -36,6 +38,22 @@ class ActionItemStatus(str, enum.Enum):
     """Action item status."""
     OPEN = "open"
     COMPLETE = "complete"
+
+
+class SpeakerMappingSource(str, enum.Enum):
+    """Source for resolved speaker identity mappings."""
+    ASSEMBLYAI = "assemblyai"
+    LLM_INFERENCE = "llm_inference"
+    USER_CORRECTED = "user_corrected"
+
+
+class ActionOwnerSource(str, enum.Enum):
+    """Source for action item owner assignment."""
+    SPEAKER_MAPPING = "speaker_mapping"
+    EXPLICIT_NAME_MATCH = "explicit_name_match"
+    LLM_EXTRACTION = "llm_extraction"
+    USER_CORRECTED = "user_corrected"
+    UNASSIGNED = "unassigned"
 
 
 class User(Base):
@@ -64,6 +82,10 @@ class Meeting(Base):
     status = Column(Enum(MeetingStatus, values_callable=lambda e: [x.value for x in e]), default=MeetingStatus.PROCESSING, nullable=False, index=True)
     audio_blob_url = Column(String, nullable=True)
     identity_hints = Column(JSONType, nullable=True)  # {current_user, organizer, source_event_id}
+    needs_speaker_review = Column(Boolean, default=False, nullable=False, index=True)
+    speaker_review_completed_at = Column(DateTime, nullable=True)
+    speaker_mapping_quality = Column(Float, nullable=True)
+    diarization_diagnostics = Column(JSONType, nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
 
@@ -71,6 +93,7 @@ class Meeting(Base):
     user = relationship("User", back_populates="meetings")
     participants = relationship("Participant", back_populates="meeting", cascade="all, delete-orphan")
     transcript = relationship("Transcript", back_populates="meeting", uselist=False, cascade="all, delete-orphan")
+    speaker_mappings = relationship("SpeakerMapping", back_populates="meeting", cascade="all, delete-orphan")
     summary = relationship("Summary", back_populates="meeting", uselist=False, cascade="all, delete-orphan")
     action_items = relationship("ActionItem", back_populates="meeting", cascade="all, delete-orphan")
 
@@ -103,6 +126,27 @@ class Transcript(Base):
     meeting = relationship("Meeting", back_populates="transcript")
 
 
+class SpeakerMapping(Base):
+    """Resolved identity for a raw transcript speaker label in one meeting."""
+    __tablename__ = "speaker_mappings"
+    __table_args__ = (
+        UniqueConstraint("meeting_id", "speaker_label", name="uq_speaker_mappings_meeting_label"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    meeting_id = Column(Integer, ForeignKey("meetings.id"), nullable=False, index=True)
+    speaker_label = Column(String, nullable=False)
+    display_name = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    confidence = Column(Float, default=0.0, nullable=False)
+    source = Column(Enum(SpeakerMappingSource, values_callable=lambda e: [x.value for x in e]), nullable=False, index=True)
+    reason = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    meeting = relationship("Meeting", back_populates="speaker_mappings")
+
+
 class Summary(Base):
     """Summary model."""
     __tablename__ = "summaries"
@@ -126,6 +170,9 @@ class ActionItem(Base):
     description = Column(Text, nullable=False)
     owner_name = Column(String, nullable=True)
     owner_email = Column(String, nullable=True)
+    owner_confidence = Column(Float, nullable=True)
+    owner_source = Column(Enum(ActionOwnerSource, values_callable=lambda e: [x.value for x in e]), nullable=True, index=True)
+    owner_reason = Column(Text, nullable=True)
     due_date = Column(Date, nullable=True)
     status = Column(Enum(ActionItemStatus, values_callable=lambda e: [x.value for x in e]), default=ActionItemStatus.OPEN, nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
