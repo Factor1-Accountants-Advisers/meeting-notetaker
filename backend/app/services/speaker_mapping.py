@@ -13,6 +13,54 @@ from app.models import Meeting, SpeakerMapping, SpeakerMappingSource, Transcript
 DEFAULT_REVIEW_CONFIDENCE_THRESHOLD = 0.7
 
 
+def _normalize_optional_string(value: Any) -> str | None:
+    """Return stripped string value, treating blank/None values as missing."""
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _mapping_has_identity(mapping: SpeakerMapping) -> bool:
+    """Return True when a mapping resolves to a non-blank identity."""
+    return bool(
+        _normalize_optional_string(cast(Any, mapping).display_name)
+        or _normalize_optional_string(cast(Any, mapping).email)
+    )
+
+
+def _normalize_proposed_mappings(proposed: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Validate and normalize proposed mapping payloads.
+
+    Duplicate labels are deterministic: labels are normalized first and the last
+    proposal for a label wins while preserving first-seen label order.
+    """
+    normalized_by_label: dict[str, dict[str, Any]] = {}
+
+    for item in proposed:
+        label = _normalize_optional_string(item.get("speaker_label"))
+        if label is None:
+            raise ValueError("speaker_label must be a non-blank string")
+
+        try:
+            confidence = float(item.get("confidence") or 0.0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("confidence must be a number between 0.0 and 1.0") from exc
+
+        if confidence < 0.0 or confidence > 1.0:
+            raise ValueError("confidence must be between 0.0 and 1.0")
+
+        normalized_by_label[label] = {
+            "speaker_label": label,
+            "display_name": _normalize_optional_string(item.get("display_name")),
+            "email": _normalize_optional_string(item.get("email")),
+            "confidence": confidence,
+            "reason": _normalize_optional_string(item.get("reason")),
+        }
+
+    return list(normalized_by_label.values())
+
+
 def extract_speaker_labels(segments: list[dict] | None) -> list[str]:
     """Return distinct non-empty speaker labels from transcript segments in order."""
     labels: list[str] = []
@@ -38,7 +86,7 @@ def should_require_review(
     """Return True when any transcript speaker label is unmapped or low confidence."""
     for label in labels:
         mapping = mappings_by_label.get(label)
-        if mapping is None:
+        if mapping is None or not _mapping_has_identity(mapping):
             return True
         if (
             cast(Any, mapping).source != SpeakerMappingSource.USER_CORRECTED
@@ -69,20 +117,35 @@ def refresh_speaker_mapping_diagnostics(
         .order_by(SpeakerMapping.speaker_label)
         .all()
     )
-    mappings_by_label = {cast(Any, mapping).speaker_label: mapping for mapping in mappings}
+    current_label_set = set(transcript_labels)
+    current_mappings = [
+        mapping
+        for mapping in mappings
+        if not current_label_set or cast(Any, mapping).speaker_label in current_label_set
+    ]
+    mappings_by_label = {cast(Any, mapping).speaker_label: mapping for mapping in current_mappings}
 
-    labels = transcript_labels or [cast(Any, mapping).speaker_label for mapping in mappings]
-    mapped_labels = [label for label in labels if label in mappings_by_label]
-    unmapped_labels = [label for label in labels if label not in mappings_by_label]
+    labels = transcript_labels or [cast(Any, mapping).speaker_label for mapping in current_mappings]
+    mapped_labels = [
+        label
+        for label in labels
+        if label in mappings_by_label and _mapping_has_identity(mappings_by_label[label])
+    ]
+    unmapped_labels = [
+        label
+        for label in labels
+        if label not in mappings_by_label or not _mapping_has_identity(mappings_by_label[label])
+    ]
     low_confidence_labels = [
         label
         for label in labels
         if label in mappings_by_label
+        and _mapping_has_identity(mappings_by_label[label])
         and cast(Any, mappings_by_label[label]).source != SpeakerMappingSource.USER_CORRECTED
         and float(cast(Any, mappings_by_label[label]).confidence or 0.0) < threshold
     ]
 
-    meeting.speaker_mapping_quality = calculate_mapping_quality(mappings)
+    meeting.speaker_mapping_quality = calculate_mapping_quality(current_mappings)
     meeting.needs_speaker_review = should_require_review(labels, mappings_by_label, threshold)
     meeting.diarization_diagnostics = {
         "speaker_labels": labels,
@@ -106,46 +169,53 @@ def upsert_speaker_mappings(
     mapping sources. Meeting diagnostics are refreshed and the transaction is
     committed before returning saved mappings.
     """
-    existing = {
-        cast(Any, m).speaker_label: m
-        for m in db.query(SpeakerMapping)
-        .filter(SpeakerMapping.meeting_id == meeting.id)
-        .all()
-    }
+    normalized = _normalize_proposed_mappings(proposed)
     saved: list[SpeakerMapping] = []
 
-    for item in proposed:
-        label = item["speaker_label"]
-        mapping = existing.get(label)
-        if (
-            mapping
-            and preserve_user_corrected
-            and cast(Any, mapping).source == SpeakerMappingSource.USER_CORRECTED
-            and source != SpeakerMappingSource.USER_CORRECTED
-        ):
+    try:
+        existing = {
+            cast(Any, m).speaker_label: m
+            for m in db.query(SpeakerMapping)
+            .filter(SpeakerMapping.meeting_id == meeting.id)
+            .all()
+        }
+
+        for item in normalized:
+            label = item["speaker_label"]
+            mapping = existing.get(label)
+            if (
+                mapping
+                and preserve_user_corrected
+                and cast(Any, mapping).source == SpeakerMappingSource.USER_CORRECTED
+                and source != SpeakerMappingSource.USER_CORRECTED
+            ):
+                saved.append(mapping)
+                continue
+
+            if mapping is None:
+                mapping = SpeakerMapping(
+                    meeting_id=meeting.id,
+                    speaker_label=label,
+                    source=source,
+                )
+                db.add(mapping)
+                existing[label] = mapping
+
+            mapping.display_name = item["display_name"]
+            mapping.email = item["email"]
+            mapping.confidence = item["confidence"]
+            mapping.source = source
+            mapping.reason = item["reason"]
             saved.append(mapping)
-            continue
 
-        if mapping is None:
-            mapping = SpeakerMapping(
-                meeting_id=meeting.id,
-                speaker_label=label,
-                source=source,
-            )
-            db.add(mapping)
-            existing[label] = mapping
+        db.flush()
+        refresh_speaker_mapping_diagnostics(db, meeting)
+        db.add(meeting)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
-        mapping.display_name = item.get("display_name")
-        mapping.email = item.get("email")
-        mapping.confidence = float(item.get("confidence") or 0.0)
-        mapping.source = source
-        mapping.reason = item.get("reason")
-        saved.append(mapping)
-
-    db.flush()
-    refresh_speaker_mapping_diagnostics(db, meeting)
-    db.add(meeting)
-    db.commit()
     db.refresh(meeting)
     for mapping in saved:
         db.refresh(mapping)

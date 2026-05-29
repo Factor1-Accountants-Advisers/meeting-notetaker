@@ -1,5 +1,7 @@
 """Tests for speaker mapping service."""
 
+import pytest
+
 from app.models import Meeting, SpeakerMapping, SpeakerMappingSource, Transcript
 from app.services.speaker_mapping import (
     calculate_mapping_quality,
@@ -134,6 +136,132 @@ def test_marks_review_needed_when_major_labels_unmapped_or_low_confidence(db_ses
         "low_confidence_speaker_labels": ["Speaker B"],
         "speaker_mapping_threshold": 0.7,
     }
+
+
+def test_identity_less_high_confidence_mapping_still_requires_review(db_session, test_meeting):
+    transcript = Transcript(
+        meeting_id=test_meeting.id,
+        full_text="Speaker A talked",
+        segments=[{"speaker": "Speaker A", "text": "Hello"}],
+    )
+    db_session.add(transcript)
+    db_session.commit()
+
+    saved = upsert_speaker_mappings(
+        db=db_session,
+        meeting=test_meeting,
+        proposed=[
+            {
+                "speaker_label": "Speaker A",
+                "display_name": None,
+                "email": "   ",
+                "confidence": 0.99,
+                "reason": "   ",
+            }
+        ],
+        source=SpeakerMappingSource.LLM_INFERENCE,
+    )
+
+    db_session.refresh(test_meeting)
+    assert should_require_review(
+        ["Speaker A"],
+        {mapping.speaker_label: mapping for mapping in saved},
+    ) is True
+    assert test_meeting.needs_speaker_review is True
+    assert test_meeting.diarization_diagnostics["mapped_speaker_labels"] == []
+    assert test_meeting.diarization_diagnostics["unmapped_speaker_labels"] == ["Speaker A"]
+    assert saved[0].email is None
+    assert saved[0].reason is None
+
+
+@pytest.mark.parametrize("speaker_label", ["", "   ", None])
+def test_upsert_rejects_blank_speaker_labels(db_session, test_meeting, speaker_label):
+    with pytest.raises(ValueError, match="speaker_label"):
+        upsert_speaker_mappings(
+            db=db_session,
+            meeting=test_meeting,
+            proposed=[{"speaker_label": speaker_label, "display_name": "Alice", "confidence": 0.9}],
+            source=SpeakerMappingSource.LLM_INFERENCE,
+        )
+
+    assert db_session.query(SpeakerMapping).filter(SpeakerMapping.meeting_id == test_meeting.id).count() == 0
+
+
+@pytest.mark.parametrize("confidence", [-0.01, 1.01])
+def test_upsert_rejects_out_of_range_confidence(db_session, test_meeting, confidence):
+    with pytest.raises(ValueError, match="confidence"):
+        upsert_speaker_mappings(
+            db=db_session,
+            meeting=test_meeting,
+            proposed=[{"speaker_label": "Speaker A", "display_name": "Alice", "confidence": confidence}],
+            source=SpeakerMappingSource.LLM_INFERENCE,
+        )
+
+    assert db_session.query(SpeakerMapping).filter(SpeakerMapping.meeting_id == test_meeting.id).count() == 0
+
+
+def test_upsert_duplicate_labels_last_normalized_value_wins(db_session, test_meeting):
+    saved = upsert_speaker_mappings(
+        db=db_session,
+        meeting=test_meeting,
+        proposed=[
+            {
+                "speaker_label": " Speaker A ",
+                "display_name": "Alice First",
+                "email": "first@example.com",
+                "confidence": 0.4,
+                "reason": "first",
+            },
+            {
+                "speaker_label": "Speaker A",
+                "display_name": "  Alice Last  ",
+                "email": "  ",
+                "confidence": 0.95,
+                "reason": "  last reason  ",
+            },
+        ],
+        source=SpeakerMappingSource.LLM_INFERENCE,
+    )
+
+    mappings = db_session.query(SpeakerMapping).filter(SpeakerMapping.meeting_id == test_meeting.id).all()
+    assert len(saved) == 1
+    assert len(mappings) == 1
+    assert saved[0].speaker_label == "Speaker A"
+    assert saved[0].display_name == "Alice Last"
+    assert saved[0].email is None
+    assert saved[0].confidence == 0.95
+    assert saved[0].reason == "last reason"
+
+
+def test_stale_mappings_excluded_from_current_transcript_quality(db_session, test_meeting):
+    transcript = Transcript(
+        meeting_id=test_meeting.id,
+        full_text="Speaker A talked",
+        segments=[{"speaker": "Speaker A", "text": "Hello"}],
+    )
+    db_session.add(transcript)
+    db_session.add(
+        SpeakerMapping(
+            meeting_id=test_meeting.id,
+            speaker_label="Stale Speaker",
+            display_name="Stale",
+            confidence=0.1,
+            source=SpeakerMappingSource.LLM_INFERENCE,
+        )
+    )
+    db_session.commit()
+
+    upsert_speaker_mappings(
+        db=db_session,
+        meeting=test_meeting,
+        proposed=[{"speaker_label": "Speaker A", "display_name": "Alice", "confidence": 0.9}],
+        source=SpeakerMappingSource.LLM_INFERENCE,
+    )
+
+    db_session.refresh(test_meeting)
+    assert test_meeting.speaker_mapping_quality == 0.9
+    assert test_meeting.diarization_diagnostics["speaker_labels"] == ["Speaker A"]
+    assert test_meeting.diarization_diagnostics["mapped_speaker_labels"] == ["Speaker A"]
 
 
 def test_marks_review_not_needed_when_all_labels_confidently_mapped(db_session, test_meeting):
