@@ -20,7 +20,7 @@ from app.core.database import get_db
 from app.api.dependencies import get_current_user
 from app.models import (
     User, Meeting, Participant, Transcript, Summary, ActionItem,
-    MeetingStatus,
+    MeetingStatus, SpeakerMapping, SpeakerMappingSource, ActionOwnerSource,
 )
 from app.schemas import (
     MeetingUploadResponse, MeetingUploadMetadata,
@@ -28,10 +28,18 @@ from app.schemas import (
     ParticipantResponse, TranscriptResponse, SummaryResponse,
     ActionItemResponse,
     RenameSpeakerRequest, RenameSpeakerResponse,
+    SpeakerMappingListResponse, SpeakerMappingResponse, SpeakerMappingUpdate,
 )
 from app.services.storage import get_storage
 from app.services.pipeline import enqueue_meeting
 from app.services.audio import extract_audio_from_video
+from app.services.identity_candidates import build_candidate_pool
+from app.services.speaker_mapping import (
+    calculate_mapping_quality,
+    extract_speaker_labels,
+    should_require_review,
+)
+from app.services.action_owner_resolution import resolve_action_owner
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +97,180 @@ def normalize_scheduled_time(value: Optional[datetime]) -> Optional[datetime]:
     if value.tzinfo is None:
         return value
     return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+async def get_owned_meeting_or_404(
+    db: AsyncSession, meeting_id: int, current_user: User
+) -> Meeting:
+    result = await db.execute(
+        select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == current_user.id)
+    )
+    meeting = result.scalar_one_or_none()
+    if meeting is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting not found")
+    return meeting
+
+
+def _speaker_mapping_response(mapping: SpeakerMapping) -> SpeakerMappingResponse:
+    return SpeakerMappingResponse(
+        id=mapping.id,
+        meeting_id=mapping.meeting_id,
+        speaker_label=mapping.speaker_label,
+        display_name=mapping.display_name,
+        email=mapping.email,
+        confidence=mapping.confidence,
+        source=mapping.source.value if hasattr(mapping.source, "value") else mapping.source,
+        reason=mapping.reason,
+        created_at=mapping.created_at,
+        updated_at=mapping.updated_at,
+    )
+
+
+def _action_item_response(action_item: ActionItem) -> ActionItemResponse:
+    return ActionItemResponse(
+        id=action_item.id,
+        meeting_id=action_item.meeting_id,
+        description=action_item.description,
+        owner_name=action_item.owner_name,
+        owner_email=action_item.owner_email,
+        owner_confidence=action_item.owner_confidence,
+        owner_source=(
+            action_item.owner_source.value
+            if action_item.owner_source is not None and hasattr(action_item.owner_source, "value")
+            else action_item.owner_source
+        ),
+        owner_reason=action_item.owner_reason,
+        due_date=action_item.due_date,
+        status=action_item.status.value,
+        created_at=action_item.created_at,
+        updated_at=action_item.updated_at,
+    )
+
+
+def _source_speaker_label_from_reason(owner_reason: str | None) -> str | None:
+    prefix = "speaker_label="
+    if not owner_reason or not owner_reason.startswith(prefix):
+        return None
+    label = owner_reason[len(prefix):].split(";", 1)[0].strip()
+    return label or None
+
+
+async def _list_speaker_mappings(
+    db: AsyncSession, meeting: Meeting
+) -> SpeakerMappingListResponse:
+    result = await db.execute(
+        select(SpeakerMapping)
+        .where(SpeakerMapping.meeting_id == meeting.id)
+        .order_by(SpeakerMapping.speaker_label)
+    )
+    mappings = list(result.scalars().all())
+    return SpeakerMappingListResponse(
+        items=[_speaker_mapping_response(mapping) for mapping in mappings],
+        needs_speaker_review=meeting.needs_speaker_review,
+        speaker_mapping_quality=meeting.speaker_mapping_quality,
+    )
+
+
+async def _refresh_speaker_mapping_diagnostics(
+    db: AsyncSession, meeting: Meeting, transcript: Transcript | None = None
+) -> None:
+    if transcript is None:
+        t_result = await db.execute(
+            select(Transcript).where(Transcript.meeting_id == meeting.id)
+        )
+        transcript = t_result.scalar_one_or_none()
+
+    labels = extract_speaker_labels(transcript.segments if transcript else [])
+    result = await db.execute(
+        select(SpeakerMapping)
+        .where(SpeakerMapping.meeting_id == meeting.id)
+        .order_by(SpeakerMapping.speaker_label)
+    )
+    mappings = list(result.scalars().all())
+    if transcript is not None:
+        label_set = set(labels)
+        current_mappings = [m for m in mappings if m.speaker_label in label_set]
+    else:
+        current_mappings = mappings
+    mappings_by_label = {m.speaker_label: m for m in current_mappings}
+
+    mapped_labels = [
+        label
+        for label in labels
+        if label in mappings_by_label
+        and (mappings_by_label[label].display_name or mappings_by_label[label].email)
+    ]
+    unmapped_labels = [
+        label
+        for label in labels
+        if label not in mappings_by_label
+        or not (mappings_by_label[label].display_name or mappings_by_label[label].email)
+    ]
+    low_confidence_labels = [
+        label
+        for label in labels
+        if label in mappings_by_label
+        and (mappings_by_label[label].display_name or mappings_by_label[label].email)
+        and mappings_by_label[label].source != SpeakerMappingSource.USER_CORRECTED
+        and float(mappings_by_label[label].confidence or 0.0) < 0.7
+    ]
+
+    meeting.speaker_mapping_quality = calculate_mapping_quality(current_mappings)
+    meeting.needs_speaker_review = should_require_review(labels, mappings_by_label)
+    meeting.diarization_diagnostics = {
+        "speaker_labels": labels,
+        "mapped_speaker_labels": mapped_labels,
+        "unmapped_speaker_labels": unmapped_labels,
+        "low_confidence_speaker_labels": low_confidence_labels,
+        "mapped_speaker_count": len(mapped_labels),
+        "speaker_mapping_threshold": 0.7,
+    }
+
+
+async def _resolve_action_item_owners_for_meeting(
+    db: AsyncSession, meeting: Meeting
+) -> list[ActionItem]:
+    p_result = await db.execute(
+        select(Participant).where(Participant.meeting_id == meeting.id)
+    )
+    participants = list(p_result.scalars().all())
+    candidates = build_candidate_pool(participants, meeting.identity_hints)
+
+    m_result = await db.execute(
+        select(SpeakerMapping)
+        .where(SpeakerMapping.meeting_id == meeting.id)
+        .order_by(SpeakerMapping.speaker_label)
+    )
+    mappings = list(m_result.scalars().all())
+    mappings_by_label = {mapping.speaker_label: mapping for mapping in mappings}
+
+    ai_result = await db.execute(
+        select(ActionItem)
+        .where(ActionItem.meeting_id == meeting.id)
+        .order_by(ActionItem.id)
+    )
+    action_items = list(ai_result.scalars().all())
+
+    for action_item in action_items:
+        if action_item.owner_source == ActionOwnerSource.USER_CORRECTED:
+            continue
+        speaker_label = None
+        if action_item.owner_source == ActionOwnerSource.SPEAKER_MAPPING:
+            speaker_label = _source_speaker_label_from_reason(action_item.owner_reason)
+        resolved = resolve_action_owner(
+            extracted_owner=action_item.owner_name,
+            speaker_label=speaker_label,
+            candidates=candidates,
+            mappings_by_label=mappings_by_label,
+        )
+        action_item.owner_name = resolved["owner_name"]
+        action_item.owner_email = resolved["owner_email"]
+        action_item.owner_confidence = resolved["owner_confidence"]
+        action_item.owner_source = resolved["owner_source"]
+        action_item.owner_reason = resolved["owner_reason"]
+
+    await db.flush()
+    return action_items
 
 
 @router.post("/upload", response_model=MeetingUploadResponse)
@@ -349,6 +531,88 @@ async def list_meetings(
     )
 
 
+@router.get("/{meeting_id}/speaker-mappings", response_model=SpeakerMappingListResponse)
+async def get_speaker_mappings(
+    meeting_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> SpeakerMappingListResponse:
+    """Get speaker identity mappings for a meeting owned by the current user."""
+    meeting = await get_owned_meeting_or_404(db, meeting_id, current_user)
+    return await _list_speaker_mappings(db, meeting)
+
+
+@router.put("/{meeting_id}/speaker-mappings", response_model=SpeakerMappingListResponse)
+async def put_speaker_mappings(
+    meeting_id: int,
+    body: list[SpeakerMappingUpdate],
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> SpeakerMappingListResponse:
+    """Create/update user-corrected speaker mappings and re-resolve actions."""
+    meeting = await get_owned_meeting_or_404(db, meeting_id, current_user)
+
+    t_result = await db.execute(
+        select(Transcript).where(Transcript.meeting_id == meeting.id)
+    )
+    transcript = t_result.scalar_one_or_none()
+    if transcript is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transcript not found")
+
+    valid_labels = set(extract_speaker_labels(transcript.segments or []))
+    requested_labels = {item.speaker_label.strip() for item in body}
+    invalid_labels = sorted(label for label in requested_labels if label not in valid_labels)
+    if invalid_labels:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"speaker_label not present in transcript: {', '.join(invalid_labels)}",
+        )
+
+    existing_result = await db.execute(
+        select(SpeakerMapping).where(SpeakerMapping.meeting_id == meeting.id)
+    )
+    existing = {mapping.speaker_label: mapping for mapping in existing_result.scalars().all()}
+
+    for item in body:
+        label = item.speaker_label.strip()
+        mapping = existing.get(label)
+        if mapping is None:
+            mapping = SpeakerMapping(
+                meeting_id=meeting.id,
+                speaker_label=label,
+                source=SpeakerMappingSource.USER_CORRECTED,
+            )
+            db.add(mapping)
+            existing[label] = mapping
+
+        mapping.display_name = item.display_name.strip() if item.display_name else None
+        mapping.email = str(item.email).strip() if item.email else None
+        mapping.confidence = item.confidence
+        mapping.source = SpeakerMappingSource.USER_CORRECTED
+        mapping.reason = item.reason.strip() if item.reason else None
+
+    await db.flush()
+    await _refresh_speaker_mapping_diagnostics(db, meeting, transcript)
+    await _resolve_action_item_owners_for_meeting(db, meeting)
+    await db.commit()
+    await db.refresh(meeting)
+
+    return await _list_speaker_mappings(db, meeting)
+
+
+@router.post("/{meeting_id}/resolve-action-owners", response_model=list[ActionItemResponse])
+async def resolve_action_owners(
+    meeting_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[ActionItemResponse]:
+    """Re-resolve action item owners for a meeting owned by the current user."""
+    meeting = await get_owned_meeting_or_404(db, meeting_id, current_user)
+    action_items = await _resolve_action_item_owners_for_meeting(db, meeting)
+    await db.commit()
+    return [_action_item_response(action_item) for action_item in action_items]
+
+
 @router.get("/{meeting_id}", response_model=MeetingDetailResponse)
 async def get_meeting(
     meeting_id: int,
@@ -504,20 +768,7 @@ async def get_meeting_action_items(
     )
     items = result.scalars().all()
 
-    return [
-        ActionItemResponse(
-            id=ai.id,
-            meeting_id=ai.meeting_id,
-            description=ai.description,
-            owner_name=ai.owner_name,
-            owner_email=ai.owner_email,
-            due_date=ai.due_date,
-            status=ai.status.value,
-            created_at=ai.created_at,
-            updated_at=ai.updated_at,
-        )
-        for ai in items
-    ]
+    return [_action_item_response(ai) for ai in items]
 
 
 @router.post("/{meeting_id}/retry", response_model=MeetingUploadResponse)
