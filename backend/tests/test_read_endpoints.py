@@ -6,7 +6,7 @@ endpoints using an async test client with dependency overrides.
 import pytest
 from datetime import datetime, date
 from httpx import AsyncClient, ASGITransport
-from sqlalchemy import JSON, event
+from sqlalchemy import JSON, event, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.pool import StaticPool
@@ -15,7 +15,7 @@ from app.core.database import Base, get_db
 from app.api.dependencies import get_current_user
 from app.models import (
     User, Meeting, Participant, Transcript, Summary, ActionItem,
-    MeetingStatus, ActionItemStatus,
+    SpeakerMapping, MeetingStatus, ActionItemStatus, SpeakerMappingSource,
 )
 from app.main import app
 
@@ -277,6 +277,68 @@ class TestGetMeetingDetail:
         data = resp.json()
         assert data["transcript"] is not None
         assert len(data["transcript"]["segments"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_get_meeting_detail_resolves_speaker_mappings(
+        self,
+        client: AsyncClient,
+        async_db: AsyncSession,
+        seed_data,
+    ):
+        meeting = seed_data["meeting1"]
+        meeting.needs_speaker_review = True
+        meeting.speaker_mapping_quality = 0.9
+
+        result = await async_db.execute(
+            select(Transcript).where(Transcript.meeting_id == meeting.id)
+        )
+        transcript = result.scalar_one()
+        transcript.segments = [
+            {
+                "speaker": "Speaker A",
+                "start": 0.0,
+                "end": 1.5,
+                "text": "Hello.",
+            }
+        ]
+        async_db.add(
+            SpeakerMapping(
+                meeting_id=meeting.id,
+                speaker_label="Speaker A",
+                display_name="Joseph",
+                email="joseph@example.com",
+                confidence=0.86,
+                source=SpeakerMappingSource.LLM_INFERENCE,
+                reason="Matched by test fixture",
+            )
+        )
+        await async_db.commit()
+
+        resp = await client.get(f"/api/meetings/{meeting.id}")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        segment = data["transcript"]["segments"][0]
+        assert segment["speaker"] == "Joseph"
+        assert segment["raw_speaker"] == "Speaker A"
+        assert segment["matched_email"] == "joseph@example.com"
+        assert segment["match_confidence"] == 0.86
+        assert data["needs_speaker_review"] is True
+        assert data["speaker_mapping_quality"] == 0.9
+        assert len(data["speaker_mappings"]) == 1
+        assert data["speaker_mappings"][0]["speaker_label"] == "Speaker A"
+        assert data["speaker_mappings"][0]["display_name"] == "Joseph"
+        assert data["speaker_mappings"][0]["email"] == "joseph@example.com"
+        assert data["speaker_mappings"][0]["confidence"] == 0.86
+
+        persisted = await async_db.execute(
+            select(Transcript).where(Transcript.meeting_id == meeting.id)
+        )
+        persisted_segment = persisted.scalar_one().segments[0]
+        assert persisted_segment["speaker"] == "Speaker A"
+        assert "raw_speaker" not in persisted_segment
+        assert "matched_email" not in persisted_segment
+        assert "match_confidence" not in persisted_segment
 
     @pytest.mark.asyncio
     async def test_get_meeting_not_found(self, client: AsyncClient):

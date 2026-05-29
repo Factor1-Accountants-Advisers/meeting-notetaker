@@ -126,6 +126,27 @@ def _speaker_mapping_response(mapping: SpeakerMapping) -> SpeakerMappingResponse
     )
 
 
+def resolve_segments_for_display(
+    segments: list[dict], mappings: list[SpeakerMapping]
+) -> list[dict]:
+    by_label = {mapping.speaker_label: mapping for mapping in mappings}
+    resolved: list[dict] = []
+    for segment in segments or []:
+        raw = segment.get("speaker")
+        mapping = by_label.get(raw)
+        item = dict(segment)
+        item["raw_speaker"] = raw
+        if mapping and mapping.display_name:
+            item["speaker"] = mapping.display_name
+            item["matched_email"] = mapping.email
+            item["match_confidence"] = mapping.confidence
+        else:
+            item["matched_email"] = None
+            item["match_confidence"] = None
+        resolved.append(item)
+    return resolved
+
+
 def _action_item_response(action_item: ActionItem) -> ActionItemResponse:
     return ActionItemResponse(
         id=action_item.id,
@@ -654,6 +675,14 @@ async def get_meeting(
     )
     participants = p_result.scalars().all()
 
+    # Speaker mappings
+    sm_result = await db.execute(
+        select(SpeakerMapping)
+        .where(SpeakerMapping.meeting_id == meeting.id)
+        .order_by(SpeakerMapping.speaker_label)
+    )
+    speaker_mappings = list(sm_result.scalars().all())
+
     # Transcript
     t_result = await db.execute(
         select(Transcript).where(Transcript.meeting_id == meeting.id)
@@ -663,7 +692,9 @@ async def get_meeting(
     if transcript_row:
         transcript = TranscriptResponse(
             meeting_id=meeting.id,
-            segments=transcript_row.segments or [],
+            segments=resolve_segments_for_display(
+                transcript_row.segments or [], speaker_mappings
+            ),
         )
 
     # Summary
@@ -699,19 +730,13 @@ async def get_meeting(
         ],
         transcript=transcript,
         summary=summary,
-        action_items=[
-            ActionItemResponse(
-                id=ai.id,
-                meeting_id=ai.meeting_id,
-                description=ai.description,
-                owner_name=ai.owner_name,
-                owner_email=ai.owner_email,
-                due_date=ai.due_date,
-                status=ai.status.value,
-                created_at=ai.created_at,
-                updated_at=ai.updated_at,
-            )
-            for ai in action_items
+        action_items=[_action_item_response(ai) for ai in action_items],
+        needs_speaker_review=meeting.needs_speaker_review,
+        speaker_review_completed_at=meeting.speaker_review_completed_at,
+        speaker_mapping_quality=meeting.speaker_mapping_quality,
+        diarization_diagnostics=meeting.diarization_diagnostics,
+        speaker_mappings=[
+            _speaker_mapping_response(mapping) for mapping in speaker_mappings
         ],
     )
 
