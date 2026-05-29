@@ -17,6 +17,20 @@ def test_dedupes_participants_by_email_case_insensitively():
     assert [candidate["email"] for candidate in pool] == ["Alice@Example.com", "bob@example.com"]
 
 
+def test_merges_organizer_flag_when_duplicate_participant_email_seen_later():
+    participants = [
+        SimpleNamespace(name="Alice Original", email="Alice@Example.com", is_organizer=False),
+        SimpleNamespace(name="Alice Organizer", email=" alice@example.com ", is_organizer=True),
+    ]
+
+    pool = build_candidate_pool(participants, identity_hints=None)
+
+    assert len(pool) == 1
+    assert pool[0]["display_name"] == "Alice Original"
+    assert pool[0]["email"] == "Alice@Example.com"
+    assert pool[0]["is_organizer"] is True
+
+
 def test_marks_current_user_as_recorder_when_email_matches_existing_candidate():
     participants = [
         SimpleNamespace(name="Joseph Guerrero", email="joseph@example.com", is_organizer=False),
@@ -76,6 +90,55 @@ def test_ignores_malformed_identity_hints_without_raising():
             "is_organizer": False,
             "is_recorder": False,
         }
+    ]
+
+
+def test_ignores_hint_with_non_string_name():
+    pool = build_candidate_pool(
+        [],
+        identity_hints={
+            "current_user": {"name": 123, "email": "recorder@example.com"},
+            "organizer": {"name": {"bad": "shape"}, "email": "organizer@example.com"},
+        },
+    )
+
+    assert pool == []
+
+
+def test_ignores_hint_with_whitespace_only_name():
+    pool = build_candidate_pool(
+        [],
+        identity_hints={
+            "current_user": {"name": "   ", "email": "recorder@example.com"},
+            "organizer": {"name": "\t\n", "email": "organizer@example.com"},
+        },
+    )
+
+    assert pool == []
+
+
+def test_non_string_hint_email_is_not_preserved():
+    pool = build_candidate_pool(
+        [],
+        identity_hints={
+            "current_user": {"name": "Recorder", "email": 123},
+            "organizer": {"name": "Organizer", "email": {"bad": "shape"}},
+        },
+    )
+
+    assert pool == [
+        {
+            "display_name": "Recorder",
+            "email": None,
+            "is_organizer": False,
+            "is_recorder": True,
+        },
+        {
+            "display_name": "Organizer",
+            "email": None,
+            "is_organizer": True,
+            "is_recorder": False,
+        },
     ]
 
 
