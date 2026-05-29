@@ -4,6 +4,7 @@ Resolves action item owner metadata from speaker mappings, meeting identity
 candidates, and owner text extracted by the summarisation LLM.
 """
 
+import math
 from typing import Any, cast
 
 from sqlalchemy.orm import Session
@@ -13,6 +14,8 @@ from app.services.identity_candidates import build_candidate_pool
 
 EXPLICIT_NAME_MATCH_CONFIDENCE = 0.8
 LLM_EXTRACTION_CONFIDENCE = 0.5
+AMBIGUOUS_CANDIDATE_CONFIDENCE = 0.4
+SPEAKER_LABEL_REASON_PREFIX = "speaker_label="
 UNASSIGNED_OWNER_TOKENS = {
     "",
     "unknown",
@@ -54,6 +57,58 @@ def _mapping_has_display_name(mapping: SpeakerMapping) -> bool:
     return _normalize_optional_string(cast(Any, mapping).display_name) is not None
 
 
+def _bounded_confidence(value: Any) -> float:
+    """Return a finite confidence value clamped to the supported 0..1 range."""
+    try:
+        confidence = float(value if value is not None else 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(confidence):
+        return 0.0
+    return min(1.0, max(0.0, confidence))
+
+
+def _speaker_label_from_mapping(mapping: SpeakerMapping, fallback: str) -> str:
+    """Return the canonical speaker label for a mapping when available."""
+    return _normalize_optional_string(cast(Any, mapping).speaker_label) or fallback
+
+
+def _lookup_mapping(
+    mappings_by_label: dict[str, SpeakerMapping],
+    speaker_label: str | None,
+) -> tuple[str, SpeakerMapping] | None:
+    """Find a speaker mapping by label using trimmed, case-insensitive matching."""
+    normalized_label = _normalize_optional_string(speaker_label)
+    if normalized_label is None:
+        return None
+
+    mapping = mappings_by_label.get(normalized_label)
+    if mapping is not None:
+        return (_speaker_label_from_mapping(mapping, normalized_label), mapping)
+
+    label_key = _normalize_match_key(normalized_label)
+    for candidate_label, candidate_mapping in mappings_by_label.items():
+        mapping_label = _speaker_label_from_mapping(candidate_mapping, str(candidate_label))
+        if _normalize_match_key(mapping_label) == label_key:
+            return (mapping_label, candidate_mapping)
+        if _normalize_match_key(candidate_label) == label_key:
+            return (mapping_label, candidate_mapping)
+    return None
+
+
+def _source_speaker_label_from_reason(owner_reason: str | None) -> str | None:
+    """Recover the source speaker label stored in an owner reason prefix."""
+    normalized_reason = _normalize_optional_string(owner_reason)
+    if normalized_reason is None or not normalized_reason.startswith(
+        SPEAKER_LABEL_REASON_PREFIX
+    ):
+        return None
+    source_label = normalized_reason[len(SPEAKER_LABEL_REASON_PREFIX) :].split(";", 1)[
+        0
+    ]
+    return _normalize_optional_string(source_label)
+
+
 def _result(
     owner_name: str | None,
     owner_email: str | None,
@@ -79,9 +134,12 @@ def _resolve_from_mapping(
     return _result(
         owner_name=_normalize_optional_string(cast(Any, mapping).display_name),
         owner_email=_normalize_optional_string(cast(Any, mapping).email),
-        owner_confidence=float(cast(Any, mapping).confidence or 0.0),
+        owner_confidence=_bounded_confidence(cast(Any, mapping).confidence),
         owner_source=ActionOwnerSource.SPEAKER_MAPPING,
-        owner_reason=f"Resolved from speaker mapping for {speaker_label}",
+        owner_reason=(
+            f"{SPEAKER_LABEL_REASON_PREFIX}{speaker_label}; "
+            f"Resolved from speaker mapping for {speaker_label}"
+        ),
     )
 
 
@@ -92,6 +150,11 @@ def _candidate_display_name(candidate: dict[str, Any]) -> str | None:
         if candidate.get("display_name") is not None
         else candidate.get("name")
     )
+
+
+def _candidate_email(candidate: dict[str, Any]) -> str | None:
+    """Return a normalized candidate email."""
+    return _normalize_optional_string(candidate.get("email"))
 
 
 def resolve_action_owner(
@@ -111,28 +174,72 @@ def resolve_action_owner(
     """
     normalized_speaker_label = _normalize_optional_string(speaker_label)
     if normalized_speaker_label is not None:
-        mapping = mappings_by_label.get(normalized_speaker_label)
-        if mapping is not None and _mapping_has_display_name(mapping):
-            return _resolve_from_mapping(normalized_speaker_label, mapping)
+        mapping_match = _lookup_mapping(mappings_by_label, normalized_speaker_label)
+        if mapping_match is not None:
+            matched_label, mapping = mapping_match
+            if _mapping_has_display_name(mapping):
+                return _resolve_from_mapping(matched_label, mapping)
 
     normalized_owner = _normalize_optional_string(extracted_owner)
     if normalized_owner is not None:
-        mapping = mappings_by_label.get(normalized_owner)
-        if mapping is not None and _mapping_has_display_name(mapping):
-            return _resolve_from_mapping(normalized_owner, mapping)
+        mapping_match = _lookup_mapping(mappings_by_label, normalized_owner)
+        if mapping_match is not None:
+            matched_label, mapping = mapping_match
+            if _mapping_has_display_name(mapping):
+                return _resolve_from_mapping(matched_label, mapping)
 
     if normalized_owner is not None and not _is_unassigned_owner(normalized_owner):
         owner_key = _normalize_match_key(normalized_owner)
-        for candidate in candidates:
+
+        email_matches = [
+            candidate
+            for candidate in candidates
+            if _candidate_email(candidate) is not None
+            and _normalize_match_key(_candidate_email(candidate)) == owner_key
+        ]
+        if email_matches:
+            candidate = email_matches[0]
             display_name = _candidate_display_name(candidate)
-            if display_name is not None and _normalize_match_key(display_name) == owner_key:
-                return _result(
-                    owner_name=display_name,
-                    owner_email=_normalize_optional_string(candidate.get("email")),
-                    owner_confidence=EXPLICIT_NAME_MATCH_CONFIDENCE,
-                    owner_source=ActionOwnerSource.EXPLICIT_NAME_MATCH,
-                    owner_reason="Exact case-insensitive match to participant/candidate name",
-                )
+            return _result(
+                owner_name=display_name,
+                owner_email=_candidate_email(candidate),
+                owner_confidence=EXPLICIT_NAME_MATCH_CONFIDENCE,
+                owner_source=ActionOwnerSource.EXPLICIT_NAME_MATCH,
+                owner_reason="Exact case-insensitive match to participant/candidate email",
+            )
+
+        display_name_matches = [
+            candidate
+            for candidate in candidates
+            if _candidate_display_name(candidate) is not None
+            and _normalize_match_key(_candidate_display_name(candidate)) == owner_key
+        ]
+        matching_emails = {
+            _normalize_match_key(_candidate_email(candidate))
+            for candidate in display_name_matches
+        }
+        if len(display_name_matches) > 1 and len(matching_emails) > 1:
+            return _result(
+                owner_name=normalized_owner,
+                owner_email=None,
+                owner_confidence=AMBIGUOUS_CANDIDATE_CONFIDENCE,
+                owner_source=ActionOwnerSource.LLM_EXTRACTION,
+                owner_reason=(
+                    "Ambiguous duplicate candidate name with different emails; "
+                    "preserved LLM owner text"
+                ),
+            )
+
+        if display_name_matches:
+            candidate = display_name_matches[0]
+            display_name = _candidate_display_name(candidate)
+            return _result(
+                owner_name=display_name,
+                owner_email=_candidate_email(candidate),
+                owner_confidence=EXPLICIT_NAME_MATCH_CONFIDENCE,
+                owner_source=ActionOwnerSource.EXPLICIT_NAME_MATCH,
+                owner_reason="Exact case-insensitive match to participant/candidate name",
+            )
 
         return _result(
             owner_name=normalized_owner,
@@ -173,12 +280,14 @@ def resolve_action_item_owners_for_meeting(db: Session, meeting_id: int) -> list
         .order_by(SpeakerMapping.speaker_label)
         .all()
     )
-    mappings_by_label = {
-        cast(Any, mapping).speaker_label: mapping
-        for mapping in mappings
-        if _normalize_optional_string(cast(Any, mapping).speaker_label) is not None
-    }
-    candidates = build_candidate_pool(list(cast(Any, meeting).participants), cast(Any, meeting).identity_hints)
+    mappings_by_label: dict[str, SpeakerMapping] = {}
+    for mapping in mappings:
+        mapping_label = _normalize_optional_string(cast(Any, mapping).speaker_label)
+        if mapping_label is not None:
+            mappings_by_label[mapping_label] = mapping
+    candidates = build_candidate_pool(
+        list(cast(Any, meeting).participants), cast(Any, meeting).identity_hints
+    )
 
     try:
         for action_item in action_items:
@@ -186,7 +295,16 @@ def resolve_action_item_owners_for_meeting(db: Session, meeting_id: int) -> list
                 continue
 
             current_owner_name = _normalize_optional_string(cast(Any, action_item).owner_name)
-            speaker_label = current_owner_name if current_owner_name in mappings_by_label else None
+            speaker_label = None
+            if cast(Any, action_item).owner_source == ActionOwnerSource.SPEAKER_MAPPING:
+                speaker_label = _source_speaker_label_from_reason(
+                    cast(Any, action_item).owner_reason
+                )
+            if (
+                speaker_label is None
+                and _lookup_mapping(mappings_by_label, current_owner_name) is not None
+            ):
+                speaker_label = current_owner_name
             resolved = resolve_action_owner(
                 extracted_owner=current_owner_name,
                 speaker_label=speaker_label,

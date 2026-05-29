@@ -36,8 +36,49 @@ def test_speaker_mapping_owner_resolves_email_and_confidence():
         "owner_email": "alice@example.com",
         "owner_confidence": 0.92,
         "owner_source": ActionOwnerSource.SPEAKER_MAPPING,
-        "owner_reason": "Resolved from speaker mapping for Speaker A",
+        "owner_reason": "speaker_label=Speaker A; Resolved from speaker mapping for Speaker A",
     }
+
+
+def test_speaker_mapping_confidence_is_clamped_to_valid_range():
+    mapping = SpeakerMapping(
+        speaker_label="Speaker A",
+        display_name="Alice Nguyen",
+        email="alice@example.com",
+        confidence=1.25,
+        source=SpeakerMappingSource.LLM_INFERENCE,
+    )
+
+    resolved = resolve_action_owner(
+        extracted_owner="Speaker A",
+        speaker_label="Speaker A",
+        candidates=[],
+        mappings_by_label={"Speaker A": mapping},
+    )
+
+    assert resolved["owner_confidence"] == 1.0
+
+
+def test_speaker_mapping_lookup_is_case_insensitive_and_trimmed():
+    mapping = SpeakerMapping(
+        speaker_label="Speaker A",
+        display_name="Alice Nguyen",
+        email="alice@example.com",
+        confidence=0.92,
+        source=SpeakerMappingSource.LLM_INFERENCE,
+    )
+
+    resolved = resolve_action_owner(
+        extracted_owner=None,
+        speaker_label="  speaker a  ",
+        candidates=[],
+        mappings_by_label={"Speaker A": mapping},
+    )
+
+    assert resolved["owner_name"] == "Alice Nguyen"
+    assert resolved["owner_email"] == "alice@example.com"
+    assert resolved["owner_source"] == ActionOwnerSource.SPEAKER_MAPPING
+    assert resolved["owner_reason"].startswith("speaker_label=Speaker A;")
 
 
 def test_explicit_name_match_resolves_to_candidate_email():
@@ -56,6 +97,43 @@ def test_explicit_name_match_resolves_to_candidate_email():
     assert resolved["owner_confidence"] == 0.8
     assert resolved["owner_source"] == ActionOwnerSource.EXPLICIT_NAME_MATCH
     assert resolved["owner_reason"] == "Exact case-insensitive match to participant/candidate name"
+
+
+def test_extracted_owner_matching_candidate_email_resolves_explicit_name_match():
+    resolved = resolve_action_owner(
+        extracted_owner="  MELISSA@EXAMPLE.COM  ",
+        speaker_label=None,
+        candidates=[
+            {"display_name": "Test User", "email": "test@example.com"},
+            {"display_name": "Melissa Hall", "email": "melissa@example.com"},
+        ],
+        mappings_by_label={},
+    )
+
+    assert resolved["owner_name"] == "Melissa Hall"
+    assert resolved["owner_email"] == "melissa@example.com"
+    assert resolved["owner_confidence"] == 0.8
+    assert resolved["owner_source"] == ActionOwnerSource.EXPLICIT_NAME_MATCH
+    assert "email" in resolved["owner_reason"].lower()
+
+
+def test_duplicate_candidate_display_names_are_ambiguous():
+    resolved = resolve_action_owner(
+        extracted_owner="Alex Kim",
+        speaker_label=None,
+        candidates=[
+            {"display_name": "Alex Kim", "email": "alex.sales@example.com"},
+            {"display_name": "Alex Kim", "email": "alex.engineering@example.com"},
+        ],
+        mappings_by_label={},
+    )
+
+    assert resolved["owner_name"] == "Alex Kim"
+    assert resolved["owner_email"] is None
+    assert resolved["owner_confidence"] == 0.4
+    assert resolved["owner_source"] == ActionOwnerSource.LLM_EXTRACTION
+    assert "ambiguous" in resolved["owner_reason"].lower()
+    assert "duplicate" in resolved["owner_reason"].lower()
 
 
 def test_llm_owner_with_no_candidate_remains_name_only_medium_confidence():
@@ -183,3 +261,41 @@ def test_resolves_action_item_owners_for_meeting_from_mappings_and_candidates(db
     assert unknown_item.owner_email is None
     assert unknown_item.owner_confidence == 0.0
     assert unknown_item.owner_source == ActionOwnerSource.UNASSIGNED
+
+
+def test_reresolution_recovers_original_speaker_label_after_mapping_changes(db_session, test_meeting: Meeting):
+    mapping = SpeakerMapping(
+        meeting_id=test_meeting.id,
+        speaker_label="Speaker A",
+        display_name="Alice Nguyen",
+        email="alice@example.com",
+        confidence=0.91,
+        source=SpeakerMappingSource.LLM_INFERENCE,
+    )
+    action_item = ActionItem(
+        meeting_id=test_meeting.id,
+        description="Draft the proposal",
+        owner_name="Speaker A",
+    )
+    db_session.add_all([mapping, action_item])
+    db_session.commit()
+
+    resolve_action_item_owners_for_meeting(db_session, test_meeting.id)
+    db_session.refresh(action_item)
+    assert action_item.owner_name == "Alice Nguyen"
+    assert action_item.owner_email == "alice@example.com"
+    assert action_item.owner_source == ActionOwnerSource.SPEAKER_MAPPING
+    assert action_item.owner_reason.startswith("speaker_label=Speaker A;")
+
+    mapping.display_name = "Bob Smith"
+    mapping.email = "bob@example.com"
+    mapping.confidence = 0.87
+    db_session.commit()
+
+    resolve_action_item_owners_for_meeting(db_session, test_meeting.id)
+    db_session.refresh(action_item)
+    assert action_item.owner_name == "Bob Smith"
+    assert action_item.owner_email == "bob@example.com"
+    assert action_item.owner_confidence == 0.87
+    assert action_item.owner_source == ActionOwnerSource.SPEAKER_MAPPING
+    assert action_item.owner_reason.startswith("speaker_label=Speaker A;")
