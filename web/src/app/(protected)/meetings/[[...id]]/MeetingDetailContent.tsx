@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -9,13 +9,15 @@ import {
   ChevronDown,
   ChevronUp,
 } from "lucide-react";
-import { useMeeting } from "@/lib/api";
+import { updateSpeakerMappings, useMeeting } from "@/lib/api";
 import AudioPlayer, { type AudioPlayerHandle } from "@/components/AudioPlayer";
 import ActionItemsTable from "@/components/ActionItemsTable";
 import ExportMenu from "@/components/ExportMenu";
 import StatusBadge from "@/components/StatusBadge";
 import ProcessingProgress from "@/components/ProcessingProgress";
 import SpeakerLabel from "@/components/SpeakerLabel";
+import SpeakerReviewPanel from "@/components/speaker-review/SpeakerReviewPanel";
+import type { SpeakerMappingUpdate } from "@/types";
 
 const SPEAKER_COLORS = [
   "text-blue-400",
@@ -78,6 +80,8 @@ export default function MeetingDetailContent({
   const audioRef = useRef<AudioPlayerHandle>(null);
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
   const [activeSegmentIndex, setActiveSegmentIndex] = useState<number | null>(null);
+  const [isSavingSpeakerReview, setIsSavingSpeakerReview] = useState(false);
+  const [speakerReviewError, setSpeakerReviewError] = useState<string | null>(null);
   const segmentRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   useEffect(() => {
@@ -89,7 +93,7 @@ export default function MeetingDetailContent({
   }, [activeSegmentIndex]);
 
   // Must be above early returns — hooks cannot be called conditionally
-  const segments = m?.transcript?.segments ?? [];
+  const segments = useMemo(() => m?.transcript?.segments ?? [], [m?.transcript?.segments]);
 
   const handleTimeUpdate = useCallback(
     (currentTime: number) => {
@@ -141,6 +145,21 @@ export default function MeetingDetailContent({
     mutate(updatedMeeting, false);
   }
 
+  async function handleSpeakerReviewSave(updates: SpeakerMappingUpdate[]) {
+    if (!m) return;
+
+    setIsSavingSpeakerReview(true);
+    setSpeakerReviewError(null);
+    try {
+      await updateSpeakerMappings(m.id, updates);
+      await mutate();
+    } catch (err) {
+      setSpeakerReviewError(err instanceof Error ? err.message : "Failed to save speaker mappings.");
+    } finally {
+      setIsSavingSpeakerReview(false);
+    }
+  }
+
   const isProcessing = m.status !== "complete" && m.status !== "failed";
 
   return (
@@ -183,6 +202,28 @@ export default function MeetingDetailContent({
           />
         )}
       </div>
+
+      {m.needs_speaker_review && (
+        <div className="surface-card mb-6 rounded-[28px] border border-[color:var(--border-strong)] p-5 shadow-[var(--shadow-soft)]">
+          <p className="text-sm font-medium text-[color:var(--text-primary)]">
+            Some speaker labels are uncertain. Review them to improve action item ownership.
+          </p>
+          {speakerReviewError ? (
+            <p className="mt-2 text-sm text-[color:var(--danger)]" role="alert">
+              {speakerReviewError}
+            </p>
+          ) : null}
+          <div className="mt-5">
+            <SpeakerReviewPanel
+              segments={segments}
+              mappings={m.speaker_mappings}
+              participants={m.participants}
+              isSaving={isSavingSpeakerReview}
+              onSave={handleSpeakerReviewSave}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Audio player */}
       {m.audio_url ? (
