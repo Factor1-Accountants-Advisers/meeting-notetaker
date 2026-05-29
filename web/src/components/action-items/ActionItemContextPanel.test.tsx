@@ -62,6 +62,58 @@ describe("ActionItemContextPanel", () => {
     expect(screen.getByText(meetingSummary)).toBeVisible();
   });
 
+  it("shows owner uncertainty when extracted ownership confidence is low", () => {
+    renderPanel({
+      actionItem: {
+        ...actionItem,
+        owner_confidence: 0.52,
+        owner_source: "llm_extraction",
+      },
+    });
+
+    expect(screen.getByText("Owner uncertain")).toBeVisible();
+    expect(screen.queryByText("Owner confirmed")).not.toBeInTheDocument();
+  });
+
+  it("shows owner uncertainty when no owner is assigned", () => {
+    renderPanel({
+      actionItem: {
+        ...actionItem,
+        owner_name: null,
+        owner_confidence: null,
+        owner_source: "unassigned",
+      },
+    });
+
+    expect(screen.getByPlaceholderText("Unassigned")).toHaveValue("");
+    expect(screen.getByText("Owner uncertain")).toBeVisible();
+  });
+
+  it("shows confirmed ownership without uncertainty when the owner was user-corrected", () => {
+    renderPanel({
+      actionItem: {
+        ...actionItem,
+        owner_confidence: 1,
+        owner_source: "user_corrected",
+      },
+    });
+
+    expect(screen.getByText("Owner confirmed")).toBeVisible();
+    expect(screen.queryByText("Owner uncertain")).not.toBeInTheDocument();
+  });
+
+  it("shows likely ownership for high-confidence inferred owners", () => {
+    renderPanel({
+      actionItem: {
+        ...actionItem,
+        owner_confidence: 0.86,
+        owner_source: "explicit_name_match",
+      },
+    });
+
+    expect(screen.getByText("Owner likely")).toBeVisible();
+  });
+
   it("emits partial patches when task fields change", async () => {
     const { onSave } = renderPanel();
 

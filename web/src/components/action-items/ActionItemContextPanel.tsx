@@ -2,10 +2,14 @@
 
 import { useEffect, useId, useState } from "react";
 
+import type { ActionOwnerSource } from "@/types";
+
 type ActionItemFields = {
   id: number;
   description: string;
   owner_name: string | null;
+  owner_confidence?: number | null;
+  owner_source?: ActionOwnerSource | null;
   due_date: string | null;
   status: string;
 };
@@ -22,6 +26,22 @@ const STATUS_OPTIONS = [
   { value: "open", label: "Open" },
   { value: "complete", label: "Complete" },
 ];
+
+function getOwnerConfidenceLabel(actionItem: ActionItemFields, ownerName: string) {
+  if (actionItem.owner_source === "user_corrected") {
+    return "Owner confirmed";
+  }
+
+  if (!ownerName.trim()) {
+    return "Owner uncertain";
+  }
+
+  if ((actionItem.owner_confidence ?? 0) >= 0.8) {
+    return "Owner likely";
+  }
+
+  return "Owner uncertain";
+}
 
 export default function ActionItemContextPanel({
   meetingTitle,
@@ -94,6 +114,10 @@ export default function ActionItemContextPanel({
   const inputBase =
     "w-full rounded-2xl border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] px-4 py-3 text-sm text-[color:var(--text-primary)] placeholder:text-[color:var(--text-muted)] transition-[border-color,box-shadow] duration-150 focus:border-[color:var(--accent)] focus:outline-none focus:ring-1 focus:ring-[color:var(--accent)]";
 
+  const ownerConfidenceLabel = actionItem
+    ? getOwnerConfidenceLabel(actionItem, ownerName)
+    : null;
+
   return (
     <aside
       aria-label="Action item context"
@@ -141,6 +165,11 @@ export default function ActionItemContextPanel({
                         className={inputBase}
                         placeholder="Unassigned"
                       />
+                      {ownerConfidenceLabel && (
+                        <p className="mt-1.5 text-[11px] font-medium text-[color:var(--text-muted)]">
+                          {ownerConfidenceLabel}
+                        </p>
+                      )}
                     </div>
                     <div>
                       <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--text-muted)]">
