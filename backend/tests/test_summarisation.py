@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch, MagicMock
 from datetime import date
 from sqlalchemy.orm import Session
 
-from app.models import Meeting, Transcript, Summary, ActionItem, MeetingStatus
+from app.models import ActionOwnerSource, Meeting, Participant, Transcript, Summary, ActionItem, MeetingStatus
 
 
 class TestOpenAISummarisation:
@@ -219,6 +219,47 @@ class TestSaveSummary:
         assert action_items[0].owner_name == "John"
         assert action_items[0].due_date == date(2026, 3, 25)
         assert action_items[1].due_date is None
+
+    def test_save_summary_resolves_owner_confidence_from_matching_participant(
+        self,
+        db_session: Session,
+        test_meeting: Meeting,
+    ):
+        """Should resolve saved action owner metadata from meeting participants."""
+        from app.services.summarisation import save_summary
+
+        participant = Participant(
+            meeting_id=test_meeting.id,
+            name="Melissa Hall",
+            email="melissa@example.com",
+            is_organizer=True,
+        )
+        db_session.add(participant)
+        db_session.commit()
+
+        summarisation_result = {
+            "summary": "Meeting about client follow-up.",
+            "key_points": ["Client update needed"],
+            "action_items": [
+                {
+                    "description": "Send client follow-up email",
+                    "owner": "Melissa Hall",
+                    "due_date": "2026-03-25",
+                }
+            ],
+            "follow_ups": [],
+        }
+
+        _, action_items = save_summary(db_session, test_meeting.id, summarisation_result)
+
+        assert len(action_items) == 1
+        action_item = action_items[0]
+        assert action_item.owner_name == "Melissa Hall"
+        assert action_item.owner_email == "melissa@example.com"
+        assert action_item.owner_confidence == 0.8
+        assert action_item.owner_source == ActionOwnerSource.EXPLICIT_NAME_MATCH
+        assert action_item.owner_reason == "Exact case-insensitive match to participant/candidate name"
+        assert action_item.due_date == date(2026, 3, 25)
 
     def test_save_summary_handles_no_action_items(
         self,

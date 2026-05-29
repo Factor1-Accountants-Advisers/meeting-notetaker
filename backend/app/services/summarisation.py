@@ -8,12 +8,14 @@ Handles:
 import json
 import logging
 from datetime import date
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, cast
 
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models import ActionItem, Meeting, MeetingStatus, Summary, Transcript
+from app.models import ActionItem, Meeting, MeetingStatus, SpeakerMapping, Summary, Transcript
+from app.services.action_owner_resolution import resolve_action_owner
+from app.services.identity_candidates import build_candidate_pool
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +130,27 @@ def save_summary(
     Returns:
         Tuple of (Summary record, list of ActionItem records)
     """
+    meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+    meeting_record = cast(Any, meeting)
+    candidates = (
+        build_candidate_pool(
+            list(meeting_record.participants), meeting_record.identity_hints
+        )
+        if meeting is not None
+        else []
+    )
+    mappings = (
+        db.query(SpeakerMapping)
+        .filter(SpeakerMapping.meeting_id == meeting_id)
+        .order_by(SpeakerMapping.speaker_label)
+        .all()
+    )
+    mappings_by_label = {
+        cast(Any, mapping).speaker_label: mapping
+        for mapping in mappings
+        if cast(Any, mapping).speaker_label is not None
+    }
+
     # Create Summary record
     summary = Summary(
         meeting_id=meeting_id,
@@ -150,10 +173,21 @@ def save_summary(
                 logger.warning(f"Could not parse due_date '{due}' — setting to None")
                 due_date = None
 
+        resolved = resolve_action_owner(
+            extracted_owner=item.get("owner"),
+            speaker_label=None,
+            candidates=candidates,
+            mappings_by_label=mappings_by_label,
+        )
+
         action_item = ActionItem(
             meeting_id=meeting_id,
             description=item["description"],
-            owner_name=item.get("owner"),
+            owner_name=resolved["owner_name"],
+            owner_email=resolved["owner_email"],
+            owner_confidence=resolved["owner_confidence"],
+            owner_source=resolved["owner_source"],
+            owner_reason=resolved["owner_reason"],
             due_date=due_date,
         )
         db.add(action_item)
