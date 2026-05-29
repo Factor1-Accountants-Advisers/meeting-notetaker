@@ -12,72 +12,11 @@ import logging
 from typing import Any
 
 from app.core.config import settings
+from app.services.identity_candidates import build_candidate_pool
 
 logger = logging.getLogger(__name__)
 
 CONFIDENCE_THRESHOLD = 0.7
-
-
-def build_candidate_pool(
-    participants: list,
-    identity_hints: dict | None,
-) -> list[dict[str, Any]]:
-    """Build the candidate identity pool from participants + hints.
-
-    Deduplicates by email. Marks the current user as 'recorder' and
-    the organizer as 'organizer' for the LLM prompt.
-    """
-    candidates = []
-    seen_emails: set[str] = set()
-
-    for p in participants:
-        entry = {
-            "display_name": p.name,
-            "email": p.email,
-            "is_organizer": getattr(p, "is_organizer", False),
-            "is_recorder": False,
-        }
-        candidates.append(entry)
-        if p.email:
-            seen_emails.add(p.email.lower())
-
-    hints = identity_hints or {}
-
-    # Current user (recorder) — add or mark existing
-    current_user = hints.get("current_user")
-    if current_user and current_user.get("name"):
-        email = (current_user.get("email") or "").lower()
-        if email and email in seen_emails:
-            # Already a participant — just flag them as the recorder
-            for c in candidates:
-                if (c.get("email") or "").lower() == email:
-                    c["is_recorder"] = True
-        else:
-            # Not already present (either no email, or email not seen) — add them
-            candidates.append({
-                "display_name": current_user["name"],
-                "email": current_user.get("email"),
-                "is_organizer": False,
-                "is_recorder": True,
-            })
-            if email:
-                seen_emails.add(email)
-
-    # Organizer — add if not already in the participant list
-    organizer = hints.get("organizer")
-    if organizer and organizer.get("name"):
-        email = (organizer.get("email") or "").lower()
-        if not email or email not in seen_emails:
-            candidates.append({
-                "display_name": organizer["name"],
-                "email": organizer.get("email"),
-                "is_organizer": True,
-                "is_recorder": False,
-            })
-            if email:
-                seen_emails.add(email)
-
-    return candidates
 
 
 SPEAKER_INFERENCE_PROMPT = """\
