@@ -4,6 +4,7 @@ Persists mappings from raw transcript speaker labels to resolved identities and
 maintains meeting-level speaker review diagnostics.
 """
 
+import math
 from typing import Any, cast
 
 from sqlalchemy.orm import Session
@@ -42,12 +43,18 @@ def _normalize_proposed_mappings(proposed: list[dict[str, Any]]) -> list[dict[st
         if label is None:
             raise ValueError("speaker_label must be a non-blank string")
 
+        raw_confidence = item.get("confidence")
+        if raw_confidence is None:
+            raw_confidence = 0.0
+        if isinstance(raw_confidence, str) and not raw_confidence.strip():
+            raise ValueError("confidence must be a number between 0.0 and 1.0")
+
         try:
-            confidence = float(item.get("confidence") or 0.0)
+            confidence = float(raw_confidence)
         except (TypeError, ValueError) as exc:
             raise ValueError("confidence must be a number between 0.0 and 1.0") from exc
 
-        if confidence < 0.0 or confidence > 1.0:
+        if not math.isfinite(confidence) or confidence < 0.0 or confidence > 1.0:
             raise ValueError("confidence must be between 0.0 and 1.0")
 
         normalized_by_label[label] = {
@@ -110,6 +117,7 @@ def refresh_speaker_mapping_diagnostics(
             .one_or_none()
         )
 
+    has_transcript = transcript is not None
     transcript_labels = extract_speaker_labels(cast(Any, transcript).segments if transcript else [])
     mappings = (
         db.query(SpeakerMapping)
@@ -118,14 +126,14 @@ def refresh_speaker_mapping_diagnostics(
         .all()
     )
     current_label_set = set(transcript_labels)
-    current_mappings = [
-        mapping
-        for mapping in mappings
-        if not current_label_set or cast(Any, mapping).speaker_label in current_label_set
-    ]
+    current_mappings = (
+        [mapping for mapping in mappings if cast(Any, mapping).speaker_label in current_label_set]
+        if has_transcript
+        else mappings
+    )
     mappings_by_label = {cast(Any, mapping).speaker_label: mapping for mapping in current_mappings}
 
-    labels = transcript_labels or [cast(Any, mapping).speaker_label for mapping in current_mappings]
+    labels = transcript_labels if has_transcript else [cast(Any, mapping).speaker_label for mapping in current_mappings]
     mapped_labels = [
         label
         for label in labels
@@ -152,6 +160,7 @@ def refresh_speaker_mapping_diagnostics(
         "mapped_speaker_labels": mapped_labels,
         "unmapped_speaker_labels": unmapped_labels,
         "low_confidence_speaker_labels": low_confidence_labels,
+        "mapped_speaker_count": len(mapped_labels),
         "speaker_mapping_threshold": threshold,
     }
 

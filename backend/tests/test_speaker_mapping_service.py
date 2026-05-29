@@ -6,6 +6,7 @@ from app.models import Meeting, SpeakerMapping, SpeakerMappingSource, Transcript
 from app.services.speaker_mapping import (
     calculate_mapping_quality,
     extract_speaker_labels,
+    refresh_speaker_mapping_diagnostics,
     should_require_review,
     upsert_speaker_mappings,
 )
@@ -134,6 +135,7 @@ def test_marks_review_needed_when_major_labels_unmapped_or_low_confidence(db_ses
         "mapped_speaker_labels": ["Speaker A", "Speaker B"],
         "unmapped_speaker_labels": ["Speaker C"],
         "low_confidence_speaker_labels": ["Speaker B"],
+        "mapped_speaker_count": 2,
         "speaker_mapping_threshold": 0.7,
     }
 
@@ -187,7 +189,7 @@ def test_upsert_rejects_blank_speaker_labels(db_session, test_meeting, speaker_l
     assert db_session.query(SpeakerMapping).filter(SpeakerMapping.meeting_id == test_meeting.id).count() == 0
 
 
-@pytest.mark.parametrize("confidence", [-0.01, 1.01])
+@pytest.mark.parametrize("confidence", [-0.01, 1.01, "nan", "inf", "-inf", ""])
 def test_upsert_rejects_out_of_range_confidence(db_session, test_meeting, confidence):
     with pytest.raises(ValueError, match="confidence"):
         upsert_speaker_mappings(
@@ -264,6 +266,40 @@ def test_stale_mappings_excluded_from_current_transcript_quality(db_session, tes
     assert test_meeting.diarization_diagnostics["mapped_speaker_labels"] == ["Speaker A"]
 
 
+def test_transcript_with_no_speaker_labels_excludes_stale_mappings_from_quality(db_session, test_meeting):
+    transcript = Transcript(
+        meeting_id=test_meeting.id,
+        full_text="No diarized speaker labels are available",
+        segments=[],
+    )
+    stale_mapping = SpeakerMapping(
+        meeting_id=test_meeting.id,
+        speaker_label="Stale Speaker",
+        display_name="Stale",
+        confidence=0.95,
+        source=SpeakerMappingSource.LLM_INFERENCE,
+    )
+    db_session.add(transcript)
+    db_session.add(stale_mapping)
+    db_session.commit()
+
+    refresh_speaker_mapping_diagnostics(db_session, test_meeting)
+    db_session.add(test_meeting)
+    db_session.commit()
+    db_session.refresh(test_meeting)
+
+    assert test_meeting.speaker_mapping_quality is None
+    assert test_meeting.needs_speaker_review is False
+    assert test_meeting.diarization_diagnostics == {
+        "speaker_labels": [],
+        "mapped_speaker_labels": [],
+        "unmapped_speaker_labels": [],
+        "low_confidence_speaker_labels": [],
+        "mapped_speaker_count": 0,
+        "speaker_mapping_threshold": 0.7,
+    }
+
+
 def test_marks_review_not_needed_when_all_labels_confidently_mapped(db_session, test_meeting):
     transcript = Transcript(
         meeting_id=test_meeting.id,
@@ -304,5 +340,6 @@ def test_marks_review_not_needed_when_all_labels_confidently_mapped(db_session, 
         "mapped_speaker_labels": ["Speaker A", "Speaker B"],
         "unmapped_speaker_labels": [],
         "low_confidence_speaker_labels": [],
+        "mapped_speaker_count": 2,
         "speaker_mapping_threshold": 0.7,
     }
