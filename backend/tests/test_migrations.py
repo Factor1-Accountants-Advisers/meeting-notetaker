@@ -4,6 +4,8 @@ These tests run against an in-memory SQLite DB created from the SQLAlchemy
 models (same as the test suite does) and confirm that columns introduced
 by each migration are present and have the correct types.
 """
+from pathlib import Path
+
 import pytest
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -107,6 +109,28 @@ class TestMigration003SpeakerIdentified:
         assert "speaker_identified" in columns, (
             "transcripts.speaker_identified is missing — migration 003 not applied"
         )
+
+
+class TestMigration004SpeakerMappings:
+    """Verify migration 004 exists and covers speaker mapping schema changes."""
+
+    def test_migration_file_contains_required_schema_changes(self):
+        migration_path = (
+            Path(__file__).resolve().parents[1]
+            / "alembic"
+            / "versions"
+            / "004_add_speaker_mappings_and_owner_confidence.py"
+        )
+        assert migration_path.exists(), "migration 004 file is missing"
+
+        migration_text = migration_path.read_text()
+        for expected in (
+            "speaker_mappings",
+            "needs_speaker_review",
+            "owner_confidence",
+            "uq_speaker_mappings_meeting_label",
+        ):
+            assert expected in migration_text
 
 
 class TestMigration002IdentityHintsAndIsOrganizer:
