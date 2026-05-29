@@ -10,10 +10,19 @@ import logging
 from datetime import date
 from typing import Any, Dict, List, Tuple, cast
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models import ActionItem, Meeting, MeetingStatus, SpeakerMapping, Summary, Transcript
+from app.models import (
+    ActionItem,
+    ActionOwnerSource,
+    Meeting,
+    MeetingStatus,
+    SpeakerMapping,
+    Summary,
+    Transcript,
+)
 from app.services.action_owner_resolution import resolve_action_owner
 from app.services.identity_candidates import build_candidate_pool
 
@@ -151,50 +160,71 @@ def save_summary(
         if cast(Any, mapping).speaker_label is not None
     }
 
-    # Create Summary record
-    summary = Summary(
-        meeting_id=meeting_id,
-        summary_text=summarisation_result["summary"],
-        key_points=summarisation_result.get("key_points", []),
-        follow_ups=summarisation_result.get("follow_ups", []),
-    )
-    db.add(summary)
+    try:
+        # Upsert Summary record so retrying summarisation for a meeting is safe.
+        summary = db.query(Summary).filter(Summary.meeting_id == meeting_id).one_or_none()
+        if summary is None:
+            summary = Summary(meeting_id=meeting_id)
+            db.add(summary)
 
-    # Create ActionItem records
-    action_items = []
-    for item in summarisation_result.get("action_items", []):
-        # Parse due_date: if valid ISO string, use date.fromisoformat, else None
-        due = item.get("due_date")
-        due_date = None
-        if due and isinstance(due, str) and due not in ("null", "None", ""):
-            try:
-                due_date = date.fromisoformat(due)
-            except (ValueError, TypeError):
-                logger.warning(f"Could not parse due_date '{due}' — setting to None")
-                due_date = None
+        summary.summary_text = summarisation_result["summary"]
+        summary.key_points = summarisation_result.get("key_points", [])
+        summary.follow_ups = summarisation_result.get("follow_ups", [])
 
-        resolved = resolve_action_owner(
-            extracted_owner=item.get("owner"),
-            speaker_label=None,
-            candidates=candidates,
-            mappings_by_label=mappings_by_label,
+        # Replace generated/non-corrected action items for this meeting, preserving
+        # explicit user corrections because the current model cannot distinguish
+        # generated from other manual items beyond owner_source.
+        (
+            db.query(ActionItem)
+            .filter(
+                ActionItem.meeting_id == meeting_id,
+                or_(
+                    ActionItem.owner_source.is_(None),
+                    ActionItem.owner_source != ActionOwnerSource.USER_CORRECTED,
+                ),
+            )
+            .delete(synchronize_session=False)
         )
 
-        action_item = ActionItem(
-            meeting_id=meeting_id,
-            description=item["description"],
-            owner_name=resolved["owner_name"],
-            owner_email=resolved["owner_email"],
-            owner_confidence=resolved["owner_confidence"],
-            owner_source=resolved["owner_source"],
-            owner_reason=resolved["owner_reason"],
-            due_date=due_date,
-        )
-        db.add(action_item)
-        action_items.append(action_item)
+        # Create ActionItem records
+        action_items = []
+        for item in summarisation_result.get("action_items", []):
+            # Parse due_date: if valid ISO string, use date.fromisoformat, else None
+            due = item.get("due_date")
+            due_date = None
+            if due and isinstance(due, str) and due not in ("null", "None", ""):
+                try:
+                    due_date = date.fromisoformat(due)
+                except (ValueError, TypeError):
+                    logger.warning(f"Could not parse due_date '{due}' — setting to None")
+                    due_date = None
 
-    # Commit all changes
-    db.commit()
+            resolved = resolve_action_owner(
+                extracted_owner=item.get("owner"),
+                speaker_label=None,
+                candidates=candidates,
+                mappings_by_label=mappings_by_label,
+            )
+
+            action_item = ActionItem(
+                meeting_id=meeting_id,
+                description=item["description"],
+                owner_name=resolved["owner_name"],
+                owner_email=resolved["owner_email"],
+                owner_confidence=resolved["owner_confidence"],
+                owner_source=resolved["owner_source"],
+                owner_reason=resolved["owner_reason"],
+                due_date=due_date,
+            )
+            db.add(action_item)
+            action_items.append(action_item)
+
+        # Commit all changes
+        db.commit()
+
+    except Exception:
+        db.rollback()
+        raise
 
     # Refresh objects from database
     db.refresh(summary)
@@ -231,8 +261,12 @@ def process_summarisation(db: Session, meeting_id: int) -> Tuple[Summary, List[A
         raise ValueError(f"Meeting not found: {meeting_id}")
 
     # Set status to SUMMARISING
-    meeting.status = MeetingStatus.SUMMARISING
-    db.commit()
+    try:
+        meeting.status = MeetingStatus.SUMMARISING
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     try:
         # Format transcript text for the LLM
@@ -258,7 +292,14 @@ def process_summarisation(db: Session, meeting_id: int) -> Tuple[Summary, List[A
         return summary, action_items
 
     except Exception:
-        # Set status to FAILED on any error
-        meeting.status = MeetingStatus.FAILED
-        db.commit()
+        # Ensure the session is usable even if save_summary/flush failed, then mark
+        # the meeting failed in a clean transaction.
+        db.rollback()
+        failed_meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if failed_meeting is not None:
+            failed_meeting.status = MeetingStatus.FAILED
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
         raise

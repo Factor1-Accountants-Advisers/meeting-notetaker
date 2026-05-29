@@ -9,7 +9,17 @@ from unittest.mock import Mock, patch, MagicMock
 from datetime import date
 from sqlalchemy.orm import Session
 
-from app.models import ActionOwnerSource, Meeting, Participant, Transcript, Summary, ActionItem, MeetingStatus
+from app.models import (
+    ActionOwnerSource,
+    Meeting,
+    Participant,
+    Transcript,
+    Summary,
+    ActionItem,
+    MeetingStatus,
+    SpeakerMapping,
+    SpeakerMappingSource,
+)
 
 
 class TestOpenAISummarisation:
@@ -260,6 +270,138 @@ class TestSaveSummary:
         assert action_item.owner_source == ActionOwnerSource.EXPLICIT_NAME_MATCH
         assert action_item.owner_reason == "Exact case-insensitive match to participant/candidate name"
         assert action_item.due_date == date(2026, 3, 25)
+
+    def test_save_summary_is_idempotent_and_preserves_user_corrected_items(
+        self,
+        db_session: Session,
+        test_meeting: Meeting,
+    ):
+        """Rerunning save_summary should upsert summary and replace generated items only."""
+        from app.services.summarisation import save_summary
+
+        first_result = {
+            "summary": "Initial summary.",
+            "key_points": ["Initial point"],
+            "action_items": [
+                {"description": "Draft first report", "owner": "John", "due_date": "2026-03-25"}
+            ],
+            "follow_ups": ["Initial follow-up"],
+        }
+        summary, first_items = save_summary(db_session, test_meeting.id, first_result)
+        first_item_id = first_items[0].id
+
+        corrected_item = ActionItem(
+            meeting_id=test_meeting.id,
+            description="Human corrected item",
+            owner_name="Human Owner",
+            owner_email="human@example.com",
+            owner_confidence=1.0,
+            owner_source=ActionOwnerSource.USER_CORRECTED,
+            owner_reason="Corrected in UI",
+        )
+        db_session.add(corrected_item)
+        db_session.commit()
+
+        second_result = {
+            "summary": "Updated summary.",
+            "key_points": ["Updated point"],
+            "action_items": [
+                {"description": "Draft updated report", "owner": "Jane", "due_date": None}
+            ],
+            "follow_ups": ["Updated follow-up"],
+        }
+        updated_summary, second_items = save_summary(db_session, test_meeting.id, second_result)
+
+        assert updated_summary.id == summary.id
+        assert updated_summary.summary_text == "Updated summary."
+        assert updated_summary.key_points == ["Updated point"]
+        assert updated_summary.follow_ups == ["Updated follow-up"]
+        assert len(second_items) == 1
+        assert second_items[0].description == "Draft updated report"
+        assert second_items[0].id != first_item_id
+
+        all_items = (
+            db_session.query(ActionItem)
+            .filter(ActionItem.meeting_id == test_meeting.id)
+            .order_by(ActionItem.id)
+            .all()
+        )
+        assert len(all_items) == 2
+        assert [item.description for item in all_items] == [
+            "Human corrected item",
+            "Draft updated report",
+        ]
+        assert all_items[0].owner_source == ActionOwnerSource.USER_CORRECTED
+        assert all_items[0].owner_name == "Human Owner"
+
+    def test_save_summary_resolves_speaker_mapping_owner(
+        self,
+        db_session: Session,
+        test_meeting: Meeting,
+    ):
+        """LLM owner text matching a speaker label should use mapping metadata."""
+        from app.services.summarisation import save_summary
+
+        db_session.add(
+            SpeakerMapping(
+                meeting_id=test_meeting.id,
+                speaker_label="Speaker 2",
+                display_name="Alice Nguyen",
+                email="alice@example.com",
+                confidence=0.93,
+                source=SpeakerMappingSource.LLM_INFERENCE,
+                reason="Resolved during diarisation review",
+            )
+        )
+        db_session.commit()
+
+        summarisation_result = {
+            "summary": "Planning discussion.",
+            "key_points": [],
+            "action_items": [
+                {"description": "Prepare proposal", "owner": "Speaker 2", "due_date": "2026-03-25"}
+            ],
+            "follow_ups": [],
+        }
+
+        _, action_items = save_summary(db_session, test_meeting.id, summarisation_result)
+
+        assert len(action_items) == 1
+        action_item = action_items[0]
+        assert action_item.owner_name == "Alice Nguyen"
+        assert action_item.owner_email == "alice@example.com"
+        assert action_item.owner_confidence == 0.93
+        assert action_item.owner_source == ActionOwnerSource.SPEAKER_MAPPING
+        assert action_item.owner_reason == (
+            "speaker_label=Speaker 2; Resolved from speaker mapping for Speaker 2"
+        )
+        assert action_item.due_date == date(2026, 3, 25)
+
+    def test_save_summary_marks_unknown_owner_unassigned(
+        self,
+        db_session: Session,
+        test_meeting: Meeting,
+    ):
+        """Unknown/unassigned owner text should not be persisted as a fake owner name."""
+        from app.services.summarisation import save_summary
+
+        summarisation_result = {
+            "summary": "Planning discussion.",
+            "key_points": [],
+            "action_items": [
+                {"description": "Find an owner", "owner": "unknown", "due_date": None}
+            ],
+            "follow_ups": [],
+        }
+
+        _, action_items = save_summary(db_session, test_meeting.id, summarisation_result)
+
+        assert len(action_items) == 1
+        assert action_items[0].owner_name is None
+        assert action_items[0].owner_email is None
+        assert action_items[0].owner_confidence == 0.0
+        assert action_items[0].owner_source == ActionOwnerSource.UNASSIGNED
+        assert action_items[0].owner_reason == "No actionable owner extracted"
 
     def test_save_summary_handles_no_action_items(
         self,
