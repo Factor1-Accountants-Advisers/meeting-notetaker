@@ -476,7 +476,26 @@ class TestPatchActionItem:
             json={"owner_name": "Charlie", "owner_email": "charlie@example.com"}
         )
         assert resp.status_code == 200
-        assert resp.json()["owner_name"] == "Charlie"
+        data = resp.json()
+        assert data["owner_name"] == "Charlie"
+        assert data["owner_email"] == "charlie@example.com"
+        assert data["owner_source"] == "user_corrected"
+        assert data["owner_confidence"] == 1.0
+        assert data["owner_reason"] == "User corrected action owner"
+
+    @pytest.mark.asyncio
+    async def test_update_owner_to_blank_clears_stale_owner_metadata(self, client: AsyncClient):
+        resp = await client.patch(
+            "/api/action-items/1",
+            json={"owner_name": ""}
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["owner_name"] == ""
+        assert data["owner_email"] is None
+        assert data["owner_source"] == "unassigned"
+        assert data["owner_confidence"] == 0.0
+        assert data["owner_reason"] == "User cleared action owner"
 
     @pytest.mark.asyncio
     async def test_update_due_date(self, client: AsyncClient):

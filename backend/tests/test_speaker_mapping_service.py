@@ -179,6 +179,40 @@ def test_identity_less_high_confidence_mapping_still_requires_review(db_session,
     assert saved[0].reason is None
 
 
+def test_user_corrected_unknown_mapping_completes_review(db_session, test_meeting):
+    transcript = Transcript(
+        meeting_id=test_meeting.id,
+        full_text="Speaker A talked",
+        segments=[{"speaker": "Speaker A", "text": "Hello"}],
+    )
+    db_session.add(transcript)
+    db_session.commit()
+
+    saved = upsert_speaker_mappings(
+        db=db_session,
+        meeting=test_meeting,
+        proposed=[
+            {
+                "speaker_label": "Speaker A",
+                "display_name": None,
+                "email": None,
+                "confidence": 1.0,
+                "reason": "User confirmed this speaker is unknown",
+            }
+        ],
+        source=SpeakerMappingSource.USER_CORRECTED,
+    )
+
+    db_session.refresh(test_meeting)
+    assert should_require_review(
+        ["Speaker A"],
+        {mapping.speaker_label: mapping for mapping in saved},
+    ) is False
+    assert test_meeting.needs_speaker_review is False
+    assert test_meeting.diarization_diagnostics["mapped_speaker_labels"] == ["Speaker A"]
+    assert test_meeting.diarization_diagnostics["unmapped_speaker_labels"] == []
+
+
 @pytest.mark.parametrize("speaker_label", ["", "   ", None])
 def test_upsert_rejects_blank_speaker_labels(db_session, test_meeting, speaker_label):
     with pytest.raises(ValueError, match="speaker_label"):

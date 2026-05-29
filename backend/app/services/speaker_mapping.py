@@ -30,6 +30,26 @@ def _mapping_has_identity(mapping: SpeakerMapping) -> bool:
     )
 
 
+def _mapping_counts_as_reviewed(mapping: SpeakerMapping) -> bool:
+    """Return True when a mapping is either identified or explicitly user-reviewed."""
+    return bool(
+        _mapping_has_identity(mapping)
+        or cast(Any, mapping).source == SpeakerMappingSource.USER_CORRECTED
+    )
+
+
+def _mapping_requires_confidence_review(
+    mapping: SpeakerMapping,
+    threshold: float = DEFAULT_REVIEW_CONFIDENCE_THRESHOLD,
+) -> bool:
+    """Return True when a non-user mapping has identity but low confidence."""
+    return bool(
+        _mapping_has_identity(mapping)
+        and cast(Any, mapping).source != SpeakerMappingSource.USER_CORRECTED
+        and float(cast(Any, mapping).confidence or 0.0) < threshold
+    )
+
+
 def _normalize_proposed_mappings(proposed: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Validate and normalize proposed mapping payloads.
 
@@ -113,15 +133,12 @@ def should_require_review(
     mappings_by_label: dict[str, SpeakerMapping],
     threshold: float = DEFAULT_REVIEW_CONFIDENCE_THRESHOLD,
 ) -> bool:
-    """Return True when any transcript speaker label is unmapped or low confidence."""
+    """Return True when any transcript speaker label still needs user review."""
     for label in labels:
         mapping = mappings_by_label.get(label)
-        if mapping is None or not _mapping_has_identity(mapping):
+        if mapping is None or not _mapping_counts_as_reviewed(mapping):
             return True
-        if (
-            cast(Any, mapping).source != SpeakerMappingSource.USER_CORRECTED
-            and float(cast(Any, mapping).confidence or 0.0) < threshold
-        ):
+        if _mapping_requires_confidence_review(mapping, threshold):
             return True
     return False
 
@@ -160,20 +177,18 @@ def refresh_speaker_mapping_diagnostics(
     mapped_labels = [
         label
         for label in labels
-        if label in mappings_by_label and _mapping_has_identity(mappings_by_label[label])
+        if label in mappings_by_label and _mapping_counts_as_reviewed(mappings_by_label[label])
     ]
     unmapped_labels = [
         label
         for label in labels
-        if label not in mappings_by_label or not _mapping_has_identity(mappings_by_label[label])
+        if label not in mappings_by_label or not _mapping_counts_as_reviewed(mappings_by_label[label])
     ]
     low_confidence_labels = [
         label
         for label in labels
         if label in mappings_by_label
-        and _mapping_has_identity(mappings_by_label[label])
-        and cast(Any, mappings_by_label[label]).source != SpeakerMappingSource.USER_CORRECTED
-        and float(cast(Any, mappings_by_label[label]).confidence or 0.0) < threshold
+        and _mapping_requires_confidence_review(mappings_by_label[label], threshold)
     ]
 
     average_mapping_confidence = calculate_mapping_quality(current_mappings)

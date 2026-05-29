@@ -12,7 +12,7 @@ from sqlalchemy import select, func
 
 from app.core.database import get_db
 from app.api.dependencies import get_current_user
-from app.models import User, Meeting, ActionItem, ActionItemStatus
+from app.models import User, Meeting, ActionItem, ActionItemStatus, ActionOwnerSource
 from app.schemas import (
     ActionItemCreate,
     ActionItemListResponse,
@@ -180,11 +180,31 @@ async def update_action_item(
 
     # Apply updates
     update_data = update.model_dump(exclude_unset=True)
+    owner_was_updated = "owner_name" in update_data or "owner_email" in update_data
+    owner_email_was_provided = "owner_email" in update_data
+
     for field, value in update_data.items():
         if field == "status" and value is not None:
             setattr(action_item, field, ActionItemStatus(value))
         else:
             setattr(action_item, field, value)
+
+    if owner_was_updated:
+        owner_name = (action_item.owner_name or "").strip()
+        owner_email = (action_item.owner_email or "").strip()
+
+        if not owner_name and not owner_email_was_provided:
+            action_item.owner_email = None
+            owner_email = ""
+
+        owner_present = bool(owner_name or owner_email)
+        action_item.owner_source = (
+            ActionOwnerSource.USER_CORRECTED if owner_present else ActionOwnerSource.UNASSIGNED
+        )
+        action_item.owner_confidence = 1.0 if owner_present else 0.0
+        action_item.owner_reason = (
+            "User corrected action owner" if owner_present else "User cleared action owner"
+        )
 
     await db.commit()
     await db.refresh(action_item)

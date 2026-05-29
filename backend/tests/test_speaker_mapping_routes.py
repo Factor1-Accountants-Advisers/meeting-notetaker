@@ -220,6 +220,7 @@ async def test_get_speaker_mappings_for_another_users_meeting_returns_404(
 @pytest.mark.asyncio
 async def test_put_user_corrected_mapping_creates_and_updates_mapping(
     client: AsyncClient,
+    async_db: AsyncSession,
 ):
     resp = await client.put(
         "/api/meetings/1/speaker-mappings",
@@ -249,6 +250,75 @@ async def test_put_user_corrected_mapping_creates_and_updates_mapping(
     assert by_label["Speaker A"]["source"] == "user_corrected"
     assert by_label["Speaker B"]["display_name"] == "Bob Smith"
     assert by_label["Speaker B"]["source"] == "user_corrected"
+
+    meeting = await async_db.get(Meeting, 1)
+    assert meeting is not None
+    assert meeting.speaker_review_completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_put_user_corrected_unknown_mapping_completes_review(
+    client: AsyncClient,
+    async_db: AsyncSession,
+):
+    resp = await client.put(
+        "/api/meetings/1/speaker-mappings",
+        json=[
+            {
+                "speaker_label": "Speaker A",
+                "display_name": None,
+                "email": None,
+                "confidence": 1.0,
+                "reason": "User confirmed unknown",
+            },
+            {
+                "speaker_label": "Speaker B",
+                "display_name": "Bob Smith",
+                "email": "bob@example.com",
+                "confidence": 1.0,
+            },
+        ],
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["needs_speaker_review"] is False
+    by_label = {item["speaker_label"]: item for item in data["items"]}
+    assert by_label["Speaker A"]["display_name"] is None
+    assert by_label["Speaker A"]["email"] is None
+    assert by_label["Speaker A"]["source"] == "user_corrected"
+
+    meeting = await async_db.get(Meeting, 1)
+    assert meeting is not None
+    assert meeting.speaker_review_completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_put_incomplete_mapping_clears_review_completed_at(
+    client: AsyncClient,
+    async_db: AsyncSession,
+):
+    meeting = await async_db.get(Meeting, 1)
+    assert meeting is not None
+    meeting.speaker_review_completed_at = datetime(2026, 5, 1, 12, 0)
+    await async_db.commit()
+
+    resp = await client.put(
+        "/api/meetings/1/speaker-mappings",
+        json=[
+            {
+                "speaker_label": "Speaker A",
+                "display_name": "Alice Nguyen",
+                "email": "alice@example.com",
+                "confidence": 1.0,
+            }
+        ],
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["needs_speaker_review"] is True
+    await async_db.refresh(meeting)
+    assert meeting.speaker_review_completed_at is None
 
 
 @pytest.mark.asyncio

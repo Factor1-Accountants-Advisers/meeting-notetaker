@@ -39,6 +39,8 @@ from app.services.speaker_mapping import (
     calculate_mapping_quality,
     extract_speaker_labels,
     should_require_review,
+    _mapping_counts_as_reviewed,
+    _mapping_requires_confidence_review,
 )
 from app.services.action_owner_resolution import resolve_action_owner
 
@@ -220,21 +222,19 @@ async def _refresh_speaker_mapping_diagnostics(
         label
         for label in labels
         if label in mappings_by_label
-        and (mappings_by_label[label].display_name or mappings_by_label[label].email)
+        and _mapping_counts_as_reviewed(mappings_by_label[label])
     ]
     unmapped_labels = [
         label
         for label in labels
         if label not in mappings_by_label
-        or not (mappings_by_label[label].display_name or mappings_by_label[label].email)
+        or not _mapping_counts_as_reviewed(mappings_by_label[label])
     ]
     low_confidence_labels = [
         label
         for label in labels
         if label in mappings_by_label
-        and (mappings_by_label[label].display_name or mappings_by_label[label].email)
-        and mappings_by_label[label].source != SpeakerMappingSource.USER_CORRECTED
-        and float(mappings_by_label[label].confidence or 0.0) < 0.7
+        and _mapping_requires_confidence_review(mappings_by_label[label])
     ]
 
     average_mapping_confidence = calculate_mapping_quality(current_mappings)
@@ -615,6 +615,9 @@ async def put_speaker_mappings(
 
     await db.flush()
     await _refresh_speaker_mapping_diagnostics(db, meeting, transcript)
+    meeting.speaker_review_completed_at = (
+        datetime.utcnow() if not meeting.needs_speaker_review else None
+    )
     await _resolve_action_item_owners_for_meeting(db, meeting)
     await db.commit()
     await db.refresh(meeting)
@@ -892,13 +895,36 @@ async def rename_speaker(
     if not transcript:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transcript not found")
 
-    # Replace speaker labels
+    # Replace raw speaker labels and/or update display-name mappings.
+    old_name = body.old_name
     segments = list(transcript.segments or [])
     updated_count = 0
-    for seg in segments:
-        if seg.get("speaker") == body.old_name:
-            seg["speaker"] = new_name
-            updated_count += 1
+
+    mapping_result = await db.execute(
+        select(SpeakerMapping).where(SpeakerMapping.meeting_id == meeting_id)
+    )
+    mappings = list(mapping_result.scalars().all())
+    display_label_mappings = [mapping for mapping in mappings if mapping.display_name == old_name]
+    display_label_raw_labels = {mapping.speaker_label for mapping in display_label_mappings}
+
+    if display_label_mappings:
+        for mapping in display_label_mappings:
+            mapping.display_name = new_name
+            mapping.source = SpeakerMappingSource.USER_CORRECTED
+            mapping.confidence = 1.0
+            mapping.reason = "User corrected speaker display name"
+
+        for seg in segments:
+            raw_speaker = seg.get("raw_speaker") or seg.get("speaker")
+            if raw_speaker in display_label_raw_labels:
+                if seg.get("speaker") == old_name:
+                    seg["speaker"] = new_name
+                updated_count += 1
+    else:
+        for seg in segments:
+            if seg.get("speaker") == old_name or seg.get("raw_speaker") == old_name:
+                seg["speaker"] = new_name
+                updated_count += 1
 
     # Persist — reassign to trigger SQLAlchemy change detection on JSON column
     transcript.segments = segments
