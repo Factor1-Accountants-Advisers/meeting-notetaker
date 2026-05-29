@@ -17,7 +17,6 @@ export interface MeetingListItem {
   speaker_review_completed_at?: string | null;
   speaker_mapping_quality?: number | null;
   diarization_diagnostics?: Record<string, unknown> | null;
-  speaker_mappings?: SpeakerMapping[];
 }
 
 export interface MeetingListResponse {
@@ -55,9 +54,9 @@ export interface ActionItem {
   description: string;
   owner_name: string | null;
   owner_email: string | null;
-  owner_confidence: number | null;
-  owner_source: ActionOwnerSource | null;
-  owner_reason: string | null;
+  owner_confidence?: number | null;
+  owner_source?: ActionOwnerSource | null;
+  owner_reason?: string | null;
   due_date: string | null;
   status: string;
   created_at: string;
@@ -88,9 +87,10 @@ export type SpeakerMapping = {
 
 export type SpeakerMappingUpdate = {
   speaker_label: string;
-  display_name: string | null;
+  display_name?: string | null;
   email?: string | null;
   confidence?: number;
+  source?: "user_corrected";
   reason?: string | null;
 };
 

@@ -114,6 +114,11 @@ function makeMeetingDetail(overrides: Partial<MeetingDetail> = {}): MeetingDetai
       follow_ups: [],
     },
     action_items: [],
+    needs_speaker_review: false,
+    speaker_review_completed_at: null,
+    speaker_mapping_quality: null,
+    diarization_diagnostics: null,
+    speaker_mappings: [],
     ...overrides,
   };
 }

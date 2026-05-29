@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import ActionItemContextPanel from "./ActionItemContextPanel";
@@ -22,33 +22,21 @@ describe("ActionItemContextPanel", () => {
   function renderPanel(
     overrides: Partial<React.ComponentProps<typeof ActionItemContextPanel>> = {}
   ) {
-    const onDraftChange = vi.fn();
-    const onSave = vi.fn();
-    const onReset = vi.fn();
-    const onDelete = vi.fn();
+    const onSave = vi.fn(async () => undefined);
+    const onDelete = vi.fn(async () => undefined);
 
     render(
       <ActionItemContextPanel
         meetingTitle={meetingTitle}
         meetingSummary={meetingSummary}
         actionItem={actionItem}
-        draft={{
-          description: actionItem.description,
-          owner_name: actionItem.owner_name,
-          due_date: actionItem.due_date,
-          status: actionItem.status,
-        }}
-        isDirty={false}
-        isSaving={false}
-        onDraftChange={onDraftChange}
         onSave={onSave}
-        onReset={onReset}
         onDelete={onDelete}
         {...overrides}
       />
     );
 
-    return { onDraftChange, onSave, onReset, onDelete };
+    return { onSave, onDelete };
   }
 
   it("renders editable task fields and disabled pristine actions", () => {
@@ -58,62 +46,56 @@ describe("ActionItemContextPanel", () => {
       screen.getByRole("complementary", { name: "Action item context" })
     ).toBeVisible();
     expect(screen.getByRole("heading", { name: "Task details" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Meeting context" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Actions" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Source meeting" })).toBeVisible();
 
-    expect(screen.getByLabelText("Task description")).toHaveValue(
+    expect(screen.getByPlaceholderText("Describe the action item...")).toHaveValue(
       actionItem.description
     );
-    expect(screen.getByLabelText("Owner")).toHaveValue(actionItem.owner_name);
-    expect(screen.getByLabelText("Due date")).toHaveValue(actionItem.due_date);
-    expect(screen.getByLabelText("Status")).toHaveValue(actionItem.status);
+    expect(screen.getByPlaceholderText("Unassigned")).toHaveValue(actionItem.owner_name);
+    expect(screen.getByDisplayValue(actionItem.due_date)).toBeVisible();
+    expect(screen.getByRole("combobox")).toHaveValue(actionItem.status);
 
     expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Reset" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Delete task" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete action item" })).not.toBeDisabled();
     expect(screen.getByText(meetingTitle)).toBeVisible();
     expect(screen.getByText(meetingSummary)).toBeVisible();
   });
 
-  it("emits partial patches when task fields change", () => {
-    const { onDraftChange } = renderPanel();
+  it("emits partial patches when task fields change", async () => {
+    const { onSave } = renderPanel();
 
-    fireEvent.change(screen.getByLabelText("Task description"), {
+    fireEvent.change(screen.getByPlaceholderText("Describe the action item..."), {
       target: { value: "Update the vendor shortlist" },
     });
-    fireEvent.change(screen.getByLabelText("Owner"), {
+    fireEvent.change(screen.getByPlaceholderText("Unassigned"), {
       target: { value: "Mia" },
     });
-    fireEvent.change(screen.getByLabelText("Due date"), {
+    fireEvent.change(screen.getByDisplayValue(actionItem.due_date), {
       target: { value: "2026-04-10" },
     });
-    fireEvent.change(screen.getByLabelText("Status"), {
+    fireEvent.change(screen.getByRole("combobox"), {
       target: { value: "complete" },
     });
 
-    expect(onDraftChange).toHaveBeenNthCalledWith(1, {
-      description: "Update the vendor shortlist",
-    });
-    expect(onDraftChange).toHaveBeenNthCalledWith(2, {
-      owner_name: "Mia",
-    });
-    expect(onDraftChange).toHaveBeenNthCalledWith(3, {
-      due_date: "2026-04-10",
-    });
-    expect(onDraftChange).toHaveBeenNthCalledWith(4, {
-      status: "complete",
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith(101, {
+        description: "Update the vendor shortlist",
+        owner_name: "Mia",
+        due_date: "2026-04-10",
+        status: "complete",
+      });
     });
   });
 
   it("disables save, reset, and delete while saving", () => {
-    renderPanel({
-      isDirty: true,
-      isSaving: true,
-    });
+    renderPanel();
 
     expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Reset" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Delete task" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Delete action item" })).not.toBeDisabled();
   });
 
   it("renders the editor safely when no action item is selected", () => {
@@ -122,25 +104,12 @@ describe("ActionItemContextPanel", () => {
         meetingTitle={meetingTitle}
         meetingSummary={meetingSummary}
         actionItem={null}
-        draft={{
-          description: actionItem.description,
-          owner_name: actionItem.owner_name,
-          due_date: actionItem.due_date,
-          status: actionItem.status,
-        }}
-        isDirty={false}
-        isSaving={false}
-        onDraftChange={vi.fn()}
-        onSave={vi.fn()}
-        onReset={vi.fn()}
-        onDelete={vi.fn()}
+        onSave={async () => undefined}
+        onDelete={async () => undefined}
       />
     );
 
-    expect(screen.getByLabelText("Task description")).toBeVisible();
-    expect(screen.getByLabelText("Owner")).toBeVisible();
-    expect(screen.getByLabelText("Due date")).toBeVisible();
-    expect(screen.getByLabelText("Status")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Delete task" })).toBeDisabled();
+    expect(screen.getByText("Select an action item to view and edit its details.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Delete action item" })).not.toBeInTheDocument();
   });
 });
