@@ -104,6 +104,12 @@ After processing completes, click the meeting in **Past Meetings** to open it. Y
 - **Transcript** — the full speaker-labelled transcript.
 - **Export** — copy the summary or save it out for sharing.
 
+### Speaker review
+
+If the app is uncertain about who spoke, a **Review speakers** panel appears near the top of the meeting page. Use it to match speaker labels to attendees, mark a speaker as unknown, or enter a custom display name. Speaker review is only prompted when labels are uncertain, and your mappings can improve transcript names and action item owners.
+
+For more detail, see [Speaker Review and Diarization](./diarization-review.md).
+
 ---
 
 ## Troubleshooting
