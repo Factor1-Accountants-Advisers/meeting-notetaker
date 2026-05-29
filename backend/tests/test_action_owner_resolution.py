@@ -136,6 +136,25 @@ def test_duplicate_candidate_display_names_are_ambiguous():
     assert "duplicate" in resolved["owner_reason"].lower()
 
 
+def test_duplicate_candidate_display_names_with_missing_emails_are_ambiguous():
+    resolved = resolve_action_owner(
+        extracted_owner="Alex Kim",
+        speaker_label=None,
+        candidates=[
+            {"display_name": "Alex Kim", "email": None},
+            {"display_name": "Alex Kim", "email": None},
+        ],
+        mappings_by_label={},
+    )
+
+    assert resolved["owner_name"] == "Alex Kim"
+    assert resolved["owner_email"] is None
+    assert resolved["owner_confidence"] == 0.4
+    assert resolved["owner_source"] == ActionOwnerSource.LLM_EXTRACTION
+    assert "ambiguous" in resolved["owner_reason"].lower()
+    assert "duplicate" in resolved["owner_reason"].lower()
+
+
 def test_llm_owner_with_no_candidate_remains_name_only_medium_confidence():
     resolved = resolve_action_owner(
         extracted_owner="Jordan from Finance",

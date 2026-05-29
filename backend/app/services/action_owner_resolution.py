@@ -214,18 +214,21 @@ def resolve_action_owner(
             if _candidate_display_name(candidate) is not None
             and _normalize_match_key(_candidate_display_name(candidate)) == owner_key
         ]
-        matching_emails = {
+        matching_emails = [
             _normalize_match_key(_candidate_email(candidate))
             for candidate in display_name_matches
-        }
-        if len(display_name_matches) > 1 and len(matching_emails) > 1:
+        ]
+        has_single_shared_non_empty_email = (
+            len(set(matching_emails)) == 1 and matching_emails[0] != ""
+        )
+        if len(display_name_matches) > 1 and not has_single_shared_non_empty_email:
             return _result(
                 owner_name=normalized_owner,
                 owner_email=None,
                 owner_confidence=AMBIGUOUS_CANDIDATE_CONFIDENCE,
                 owner_source=ActionOwnerSource.LLM_EXTRACTION,
                 owner_reason=(
-                    "Ambiguous duplicate candidate name with different emails; "
+                    "Ambiguous duplicate candidate name without one shared email; "
                     "preserved LLM owner text"
                 ),
             )
