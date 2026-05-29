@@ -6,6 +6,8 @@ import type {
   ActionItem,
   ActionItemListResponse,
   ActionItemUpdate,
+  SpeakerMappingListResponse,
+  SpeakerMappingUpdate,
 } from "@/types";
 
 export interface ActionItemCreate {
@@ -66,6 +68,25 @@ const fetcher = async (url: string) => {
     clearTimeout(timer);
   }
 };
+
+async function apiFetch<T>(url: string, init: RequestInit = {}): Promise<T> {
+  const headers = await authHeaders();
+  const res = await fetch(url, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...headers,
+      ...init.headers,
+    },
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail || `API error: ${res.status}`);
+  }
+
+  return res.json();
+}
 
 // --- SWR Hooks ---
 
@@ -213,6 +234,28 @@ export async function deleteActionItem(id: number): Promise<void> {
     headers,
   });
   if (!res.ok) throw new Error(`Failed to delete action item: ${res.status}`);
+}
+
+export async function getSpeakerMappings(
+  meetingId: number
+): Promise<SpeakerMappingListResponse> {
+  return apiFetch<SpeakerMappingListResponse>(`/api/meetings/${meetingId}/speaker-mappings`);
+}
+
+export async function updateSpeakerMappings(
+  meetingId: number,
+  updates: SpeakerMappingUpdate[]
+): Promise<SpeakerMappingListResponse> {
+  return apiFetch<SpeakerMappingListResponse>(`/api/meetings/${meetingId}/speaker-mappings`, {
+    method: "PUT",
+    body: JSON.stringify(updates),
+  });
+}
+
+export async function resolveActionOwners(meetingId: number): Promise<ActionItem[]> {
+  return apiFetch<ActionItem[]>(`/api/meetings/${meetingId}/resolve-action-owners`, {
+    method: "POST",
+  });
 }
 
 export async function renameSpeaker(

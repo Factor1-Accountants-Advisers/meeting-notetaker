@@ -13,6 +13,11 @@ export interface MeetingListItem {
   participant_count: number;
   has_summary: boolean;
   created_at: string;
+  needs_speaker_review?: boolean;
+  speaker_review_completed_at?: string | null;
+  speaker_mapping_quality?: number | null;
+  diarization_diagnostics?: Record<string, unknown> | null;
+  speaker_mappings?: SpeakerMapping[];
 }
 
 export interface MeetingListResponse {
@@ -28,6 +33,9 @@ export interface TranscriptSegment {
   start: number;
   end: number;
   text: string;
+  raw_speaker?: string | null;
+  matched_email?: string | null;
+  match_confidence?: number | null;
 }
 
 export interface TranscriptResponse {
@@ -47,10 +55,49 @@ export interface ActionItem {
   description: string;
   owner_name: string | null;
   owner_email: string | null;
+  owner_confidence: number | null;
+  owner_source: ActionOwnerSource | null;
+  owner_reason: string | null;
   due_date: string | null;
   status: string;
   created_at: string;
   updated_at: string;
+}
+
+export type SpeakerMappingSource = "assemblyai" | "llm_inference" | "user_corrected";
+
+export type ActionOwnerSource =
+  | "speaker_mapping"
+  | "explicit_name_match"
+  | "llm_extraction"
+  | "user_corrected"
+  | "unassigned";
+
+export type SpeakerMapping = {
+  id: number;
+  meeting_id: number;
+  speaker_label: string;
+  display_name: string | null;
+  email: string | null;
+  confidence: number;
+  source: SpeakerMappingSource;
+  reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SpeakerMappingUpdate = {
+  speaker_label: string;
+  display_name: string | null;
+  email?: string | null;
+  confidence?: number;
+  reason?: string | null;
+};
+
+export interface SpeakerMappingListResponse {
+  items: SpeakerMapping[];
+  needs_speaker_review: boolean;
+  speaker_mapping_quality: number | null;
 }
 
 export interface ActionItemListResponse {
@@ -81,6 +128,11 @@ export interface MeetingDetail {
   transcript: TranscriptResponse | null;
   summary: SummaryResponse | null;
   action_items: ActionItem[];
+  needs_speaker_review: boolean;
+  speaker_review_completed_at: string | null;
+  speaker_mapping_quality: number | null;
+  diarization_diagnostics: Record<string, unknown> | null;
+  speaker_mappings: SpeakerMapping[];
 }
 
 export interface CalendarAttendee {
