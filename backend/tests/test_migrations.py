@@ -4,9 +4,13 @@ These tests run against an in-memory SQLite DB created from the SQLAlchemy
 models (same as the test suite does) and confirm that columns introduced
 by each migration are present and have the correct types.
 """
+import importlib.util
 from pathlib import Path
 
 import pytest
+import sqlalchemy as sa
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -112,9 +116,9 @@ class TestMigration003SpeakerIdentified:
 
 
 class TestMigration004SpeakerMappings:
-    """Verify migration 004 exists and covers speaker mapping schema changes."""
+    """Execute migration 004 against SQLite and verify its schema changes."""
 
-    def test_migration_file_contains_required_schema_changes(self):
+    def test_upgrade_and_downgrade_on_sqlite(self):
         migration_path = (
             Path(__file__).resolve().parents[1]
             / "alembic"
@@ -123,14 +127,101 @@ class TestMigration004SpeakerMappings:
         )
         assert migration_path.exists(), "migration 004 file is missing"
 
-        migration_text = migration_path.read_text()
-        for expected in (
-            "speaker_mappings",
-            "needs_speaker_review",
-            "owner_confidence",
-            "uq_speaker_mappings_meeting_label",
-        ):
-            assert expected in migration_text
+        spec = importlib.util.spec_from_file_location("migration_004", migration_path)
+        assert spec is not None and spec.loader is not None
+        migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(migration)
+
+        engine = sa.create_engine("sqlite:///:memory:")
+        metadata = sa.MetaData()
+        sa.Table("meetings", metadata, sa.Column("id", sa.Integer(), primary_key=True))
+        sa.Table("action_items", metadata, sa.Column("id", sa.Integer(), primary_key=True))
+        metadata.create_all(engine)
+
+        def run_migration(connection, function_name):
+            context = MigrationContext.configure(connection)
+            operations = Operations(context)
+            original_op = getattr(migration, "op")
+            setattr(migration, "op", operations)
+            try:
+                getattr(migration, function_name)()
+            finally:
+                setattr(migration, "op", original_op)
+
+        def unique_index_column_sets(connection, table_name):
+            unique_columns = []
+            for row in connection.execute(text(f"PRAGMA index_list('{table_name}')")):
+                # row fields: seq, name, unique, origin, partial
+                if not row[2]:
+                    continue
+                columns = [
+                    index_info[2]
+                    for index_info in connection.execute(text(f"PRAGMA index_info('{row[1]}')"))
+                ]
+                unique_columns.append(columns)
+            return unique_columns
+
+        with engine.begin() as connection:
+            run_migration(connection, "upgrade")
+
+            inspector = inspect(connection)
+            assert "speaker_mappings" in inspector.get_table_names()
+
+            speaker_columns = {
+                column["name"]: column
+                for column in inspector.get_columns("speaker_mappings")
+            }
+            for column_name in ("created_at", "updated_at"):
+                default = str(speaker_columns[column_name].get("default") or "").upper()
+                assert "CURRENT_TIMESTAMP" in default
+                assert "NOW()" not in default
+
+            connection.execute(text("INSERT INTO meetings (id) VALUES (1)"))
+            connection.execute(
+                text(
+                    "INSERT INTO speaker_mappings "
+                    "(meeting_id, speaker_label, source) "
+                    "VALUES (1, 'Speaker A', 'manual')"
+                )
+            )
+            default_values = connection.execute(
+                text(
+                    "SELECT created_at, updated_at "
+                    "FROM speaker_mappings "
+                    "WHERE meeting_id = 1 AND speaker_label = 'Speaker A'"
+                )
+            ).one()
+            assert default_values.created_at is not None
+            assert default_values.updated_at is not None
+
+            meeting_indexes = {index["name"] for index in inspector.get_indexes("meetings")}
+            action_item_indexes = {
+                index["name"] for index in inspector.get_indexes("action_items")
+            }
+            speaker_indexes = {
+                index["name"] for index in inspector.get_indexes("speaker_mappings")
+            }
+            assert "ix_meetings_needs_speaker_review" in meeting_indexes
+            assert "ix_action_items_owner_source" in action_item_indexes
+            assert "ix_speaker_mappings_meeting_id" in speaker_indexes
+            assert "ix_speaker_mappings_source" in speaker_indexes
+
+            unique_constraints = inspector.get_unique_constraints("speaker_mappings")
+            unique_column_sets = [
+                constraint["column_names"] for constraint in unique_constraints
+            ] + unique_index_column_sets(connection, "speaker_mappings")
+            assert ["meeting_id", "speaker_label"] in unique_column_sets
+
+            run_migration(connection, "downgrade")
+
+            inspector = inspect(connection)
+            assert "speaker_mappings" not in inspector.get_table_names()
+            assert "owner_source" not in {
+                column["name"] for column in inspector.get_columns("action_items")
+            }
+            assert "needs_speaker_review" not in {
+                column["name"] for column in inspector.get_columns("meetings")
+            }
 
 
 class TestMigration002IdentityHintsAndIsOrganizer:

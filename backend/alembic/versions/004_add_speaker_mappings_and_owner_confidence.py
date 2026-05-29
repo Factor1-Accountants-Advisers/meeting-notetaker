@@ -40,6 +40,12 @@ def upgrade() -> None:
         "meetings",
         sa.Column("diarization_diagnostics", sa.JSON(), nullable=True),
     )
+    op.create_index(
+        op.f("ix_meetings_needs_speaker_review"),
+        "meetings",
+        ["needs_speaker_review"],
+        unique=False,
+    )
 
     op.add_column(
         "action_items",
@@ -52,6 +58,12 @@ def upgrade() -> None:
     op.add_column(
         "action_items",
         sa.Column("owner_reason", sa.Text(), nullable=True),
+    )
+    op.create_index(
+        op.f("ix_action_items_owner_source"),
+        "action_items",
+        ["owner_source"],
+        unique=False,
     )
 
     op.create_table(
@@ -73,13 +85,13 @@ def upgrade() -> None:
             "created_at",
             sa.DateTime(),
             nullable=False,
-            server_default=sa.text("now()"),
+            server_default=sa.text("CURRENT_TIMESTAMP"),
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(),
             nullable=False,
-            server_default=sa.text("now()"),
+            server_default=sa.text("CURRENT_TIMESTAMP"),
         ),
         sa.ForeignKeyConstraint(["meeting_id"], ["meetings.id"]),
         sa.PrimaryKeyConstraint("id"),
@@ -115,10 +127,12 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_speaker_mappings_id"), table_name="speaker_mappings")
     op.drop_table("speaker_mappings")
 
+    op.drop_index(op.f("ix_action_items_owner_source"), table_name="action_items")
     op.drop_column("action_items", "owner_reason")
     op.drop_column("action_items", "owner_source")
     op.drop_column("action_items", "owner_confidence")
 
+    op.drop_index(op.f("ix_meetings_needs_speaker_review"), table_name="meetings")
     op.drop_column("meetings", "diarization_diagnostics")
     op.drop_column("meetings", "speaker_mapping_quality")
     op.drop_column("meetings", "speaker_review_completed_at")
