@@ -185,6 +185,40 @@ class TestTranscriptSaving:
         db_session.refresh(test_meeting)
         assert test_meeting.status != MeetingStatus.PROCESSING
 
+    def test_save_transcript_updates_existing_record_on_rerun(
+        self, db_session: Session, test_meeting: Meeting, mock_transcription_result
+    ):
+        """Saving transcript twice for one meeting should update, not insert a duplicate."""
+        from app.services.transcription import save_transcript
+
+        first = save_transcript(
+            db_session,
+            meeting_id=test_meeting.id,
+            transcription_result=mock_transcription_result,
+        )
+        first_id = first.id
+
+        updated_result = {
+            "text": "Updated transcript text after retry",
+            "segments": [
+                {"speaker": "Melissa Hall", "start": 1.0, "end": 3.0, "text": "Updated text"}
+            ],
+            "speaker_identified": True,
+        }
+
+        second = save_transcript(
+            db_session,
+            meeting_id=test_meeting.id,
+            transcription_result=updated_result,
+        )
+
+        transcripts = db_session.query(Transcript).filter_by(meeting_id=test_meeting.id).all()
+        assert len(transcripts) == 1
+        assert second.id == first_id
+        assert transcripts[0].full_text == "Updated transcript text after retry"
+        assert transcripts[0].segments == updated_result["segments"]
+        assert transcripts[0].speaker_identified is True
+
 
 class TestAudioDownload:
     """Tests for downloading audio from blob storage."""
@@ -293,6 +327,38 @@ class TestTranscriptionPipeline:
         assert len(transcript.segments) == 2
         assert transcript.segments[0]["speaker"] == "A"
 
+    def test_process_transcription_rerun_updates_existing_transcript(
+        self, db_session: Session, test_meeting: Meeting, sample_audio_file
+    ):
+        """Retrying the pipeline should update the existing transcript row cleanly."""
+        from app.services.transcription import process_transcription
+
+        first_result = {
+            "text": "First transcript",
+            "segments": [{"speaker": "A", "start": 0.0, "end": 1.0, "text": "First"}],
+            "speaker_identified": False,
+        }
+        retry_result = {
+            "text": "Retry transcript with corrected output",
+            "segments": [{"speaker": "B", "start": 1.0, "end": 2.0, "text": "Retry"}],
+            "speaker_identified": True,
+        }
+
+        with patch("app.services.transcription.download_audio", return_value=sample_audio_file), patch(
+            "app.services.transcription.transcribe_audio",
+            side_effect=[first_result, retry_result],
+        ):
+            first = process_transcription(db_session, test_meeting.id)
+            first_id = first.id
+            second = process_transcription(db_session, test_meeting.id)
+
+        transcripts = db_session.query(Transcript).filter_by(meeting_id=test_meeting.id).all()
+        assert len(transcripts) == 1
+        assert second.id == first_id
+        assert transcripts[0].full_text == "Retry transcript with corrected output"
+        assert transcripts[0].segments == retry_result["segments"]
+        assert transcripts[0].speaker_identified is True
+
     def test_process_transcription_marks_generic_speakers_for_review_without_rewriting_segments(
         self, db_session: Session, test_meeting_with_participants: Meeting, sample_audio_file
     ):
@@ -325,6 +391,47 @@ class TestTranscriptionPipeline:
         assert test_meeting_with_participants.needs_speaker_review is True
         assert test_meeting_with_participants.diarization_diagnostics["detected_speaker_count"] == 2
         assert transcript.segments == original_segments
+
+    def test_process_transcription_does_not_auto_map_duplicate_candidate_display_names(
+        self, db_session: Session, test_meeting_with_participants: Meeting, sample_audio_file
+    ):
+        """An AssemblyAI name label matching duplicate candidate names is ambiguous and needs review."""
+        from app.models import Participant, SpeakerMapping
+        from app.services.transcription import process_transcription
+
+        db_session.add(
+            Participant(
+                meeting_id=test_meeting_with_participants.id,
+                name="Melissa Hall",
+                email="duplicate-melissa@example.com",
+                is_organizer=False,
+            )
+        )
+        db_session.commit()
+
+        segments = [
+            {"speaker": "Melissa Hall", "start": 0.0, "end": 2.0, "text": "Ambiguous name"}
+        ]
+
+        with patch("app.services.transcription.download_audio", return_value=sample_audio_file), patch(
+            "app.services.transcription.transcribe_audio",
+            return_value={
+                "text": "Ambiguous name",
+                "segments": segments,
+                "speaker_identified": True,
+            },
+        ):
+            process_transcription(db_session, test_meeting_with_participants.id)
+
+        mappings = db_session.query(SpeakerMapping).filter_by(
+            meeting_id=test_meeting_with_participants.id,
+            speaker_label="Melissa Hall",
+        ).all()
+        db_session.refresh(test_meeting_with_participants)
+
+        assert mappings == []
+        assert test_meeting_with_participants.needs_speaker_review is True
+        assert test_meeting_with_participants.diarization_diagnostics["unmapped_speaker_labels"] == ["Melissa Hall"]
 
     def test_process_transcription_includes_organizer_and_user_names(
         self, db_session: Session, test_meeting_with_participants: Meeting, sample_audio_file

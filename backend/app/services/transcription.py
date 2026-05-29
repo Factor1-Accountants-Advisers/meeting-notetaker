@@ -163,7 +163,10 @@ def save_transcript(
     meeting_id: int,
     transcription_result: Dict[str, Any],
 ) -> Transcript:
-    """Save transcription result to database.
+    """Save or update transcription result in database.
+
+    Transcript.meeting_id is unique, so transcription retries/reruns must update
+    the existing row instead of blindly inserting a duplicate.
 
     Args:
         db: Database session
@@ -171,24 +174,32 @@ def save_transcript(
         transcription_result: Result from transcribe_audio()
 
     Returns:
-        Created Transcript object
+        Created or updated Transcript object
     """
-    # Create transcript record
-    transcript = Transcript(
-        meeting_id=meeting_id,
-        full_text=transcription_result["text"],
-        segments=transcription_result["segments"],
-        speaker_identified=transcription_result.get("speaker_identified", False),
+    transcript = (
+        db.query(Transcript)
+        .filter(Transcript.meeting_id == meeting_id)
+        .one_or_none()
     )
 
-    db.add(transcript)
+    if transcript is None:
+        transcript = Transcript(meeting_id=meeting_id)
+        db.add(transcript)
+
+    transcript.full_text = transcription_result["text"]
+    transcript.segments = transcription_result["segments"]
+    transcript.speaker_identified = transcription_result.get("speaker_identified", False)
 
     # Update meeting status
     meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
     if meeting:
         meeting.status = MeetingStatus.TRANSCRIBING
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(transcript)
 
     logger.info(f"Saved transcript for meeting {meeting_id}")
@@ -221,19 +232,26 @@ def _persist_initial_speaker_mapping_diagnostics(
     detected_speaker_count = len(labels)
 
     candidates = build_candidate_pool(participants, cast(Any, meeting).identity_hints)
-    candidates_by_display_name = {
-        candidate["display_name"].strip(): candidate
-        for candidate in candidates
-        if isinstance(candidate.get("display_name"), str)
-        and candidate["display_name"].strip()
-    }
+    candidates_by_display_name: dict[str, dict[str, Any] | None] = {}
+    for candidate in candidates:
+        display_name = candidate.get("display_name")
+        if not isinstance(display_name, str):
+            continue
+        normalized_display_name = display_name.strip()
+        if not normalized_display_name:
+            continue
+        if normalized_display_name in candidates_by_display_name:
+            candidates_by_display_name[normalized_display_name] = None
+        else:
+            candidates_by_display_name[normalized_display_name] = candidate
+
     proposed_mappings = [
         {
             "speaker_label": label,
             "display_name": candidate["display_name"],
             "email": candidate.get("email"),
             "confidence": 1.0,
-            "reason": "AssemblyAI speaker label exactly matched a candidate display name",
+            "reason": "AssemblyAI speaker label exactly matched a unique candidate display name",
         }
         for label in labels
         if (candidate := candidates_by_display_name.get(label)) is not None
@@ -347,10 +365,14 @@ def process_transcription(db: Session, meeting_id: int) -> Transcript:
         return transcript
 
     except Exception as e:
-        # Fail-closed: Set status to FAILED
+        # Fail-closed: Set status to FAILED. Roll back first so a previous flush
+        # error does not leave the session in PendingRollback state.
         logger.error(f"Transcription pipeline failed for meeting {meeting_id}: {e}")
-        meeting.status = MeetingStatus.FAILED
-        db.commit()
+        db.rollback()
+        failed_meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
+        if failed_meeting:
+            cast(Any, failed_meeting).status = MeetingStatus.FAILED
+            db.commit()
         raise
 
     finally:
