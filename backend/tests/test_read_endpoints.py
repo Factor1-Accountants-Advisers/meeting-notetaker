@@ -16,6 +16,7 @@ from app.api.dependencies import get_current_user
 from app.models import (
     User, Meeting, Participant, Transcript, Summary, ActionItem,
     SpeakerMapping, MeetingStatus, ActionItemStatus, SpeakerMappingSource,
+    ActionOwnerSource,
 )
 from app.main import app
 
@@ -120,6 +121,9 @@ async def seed_data(async_db: AsyncSession):
         description="Prepare budget report",
         owner_name="Alice",
         owner_email="alice@example.com",
+        owner_confidence=0.86,
+        owner_source=ActionOwnerSource.EXPLICIT_NAME_MATCH,
+        owner_reason="Exact case-insensitive match to participant/candidate name",
         due_date=date(2026, 3, 25),
         status=ActionItemStatus.OPEN,
     )
@@ -419,6 +423,11 @@ class TestGetAllActionItems:
         data = resp.json()
         assert data["total"] == 2
         assert len(data["items"]) == 2
+
+        item = next(i for i in data["items"] if i["description"] == "Prepare budget report")
+        assert item["owner_confidence"] == 0.86
+        assert item["owner_source"] == "explicit_name_match"
+        assert item["owner_reason"] == "Exact case-insensitive match to participant/candidate name"
 
     @pytest.mark.asyncio
     async def test_filter_by_status(self, client: AsyncClient):

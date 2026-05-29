@@ -32,6 +32,13 @@ def _serialize_action_item(action_item: ActionItem) -> ActionItemResponse:
         description=action_item.description,
         owner_name=action_item.owner_name,
         owner_email=action_item.owner_email,
+        owner_confidence=action_item.owner_confidence,
+        owner_source=(
+            action_item.owner_source.value
+            if action_item.owner_source is not None and hasattr(action_item.owner_source, "value")
+            else action_item.owner_source
+        ),
+        owner_reason=action_item.owner_reason,
         due_date=action_item.due_date,
         status=action_item.status.value,
         created_at=action_item.created_at,

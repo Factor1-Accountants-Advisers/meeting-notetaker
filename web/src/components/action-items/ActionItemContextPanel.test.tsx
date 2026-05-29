@@ -15,6 +15,8 @@ describe("ActionItemContextPanel", () => {
     id: 101,
     description: "Confirm vendor shortlist and next steps",
     owner_name: "Ava",
+    owner_confidence: 0.86,
+    owner_source: "explicit_name_match" as const,
     due_date: "2026-04-03",
     status: "open",
   } as const;
@@ -48,12 +50,12 @@ describe("ActionItemContextPanel", () => {
     expect(screen.getByRole("heading", { name: "Task details" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Source meeting" })).toBeVisible();
 
-    expect(screen.getByPlaceholderText("Describe the action item...")).toHaveValue(
+    expect(screen.getByLabelText("Description")).toHaveValue(
       actionItem.description
     );
-    expect(screen.getByPlaceholderText("Unassigned")).toHaveValue(actionItem.owner_name);
-    expect(screen.getByDisplayValue(actionItem.due_date)).toBeVisible();
-    expect(screen.getByRole("combobox")).toHaveValue(actionItem.status);
+    expect(screen.getByLabelText("Owner")).toHaveValue(actionItem.owner_name);
+    expect(screen.getByLabelText("Due date")).toHaveValue(actionItem.due_date);
+    expect(screen.getByLabelText("Status")).toHaveValue(actionItem.status);
 
     expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Reset" })).toBeDisabled();
@@ -85,7 +87,7 @@ describe("ActionItemContextPanel", () => {
       },
     });
 
-    expect(screen.getByPlaceholderText("Unassigned")).toHaveValue("");
+    expect(screen.getByLabelText("Owner")).toHaveValue("");
     expect(screen.getByText("Owner uncertain")).toBeVisible();
   });
 
@@ -114,19 +116,52 @@ describe("ActionItemContextPanel", () => {
     expect(screen.getByText("Owner likely")).toBeVisible();
   });
 
+  it("shows tentative ownership for medium-confidence inferred owners", () => {
+    renderPanel({
+      actionItem: {
+        ...actionItem,
+        owner_confidence: 0.74,
+        owner_source: "llm_extraction",
+      },
+    });
+
+    expect(screen.getByText("Owner tentative")).toBeVisible();
+    expect(screen.queryByText("Owner uncertain")).not.toBeInTheDocument();
+    expect(screen.queryByText("Owner likely")).not.toBeInTheDocument();
+  });
+
+  it("does not show stale confidence metadata after a local owner edit", () => {
+    renderPanel({
+      actionItem: {
+        ...actionItem,
+        owner_confidence: 0.91,
+        owner_source: "speaker_mapping",
+      },
+    });
+
+    expect(screen.getByText("Owner likely")).toBeVisible();
+
+    fireEvent.change(screen.getByLabelText("Owner"), {
+      target: { value: "Mia" },
+    });
+
+    expect(screen.getByText("Owner changed")).toBeVisible();
+    expect(screen.queryByText("Owner likely")).not.toBeInTheDocument();
+  });
+
   it("emits partial patches when task fields change", async () => {
     const { onSave } = renderPanel();
 
-    fireEvent.change(screen.getByPlaceholderText("Describe the action item..."), {
+    fireEvent.change(screen.getByLabelText("Description"), {
       target: { value: "Update the vendor shortlist" },
     });
-    fireEvent.change(screen.getByPlaceholderText("Unassigned"), {
+    fireEvent.change(screen.getByLabelText("Owner"), {
       target: { value: "Mia" },
     });
-    fireEvent.change(screen.getByDisplayValue(actionItem.due_date), {
+    fireEvent.change(screen.getByLabelText("Due date"), {
       target: { value: "2026-04-10" },
     });
-    fireEvent.change(screen.getByRole("combobox"), {
+    fireEvent.change(screen.getByLabelText("Status"), {
       target: { value: "complete" },
     });
 

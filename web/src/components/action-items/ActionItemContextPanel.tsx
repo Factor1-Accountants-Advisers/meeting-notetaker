@@ -10,6 +10,7 @@ type ActionItemFields = {
   owner_name: string | null;
   owner_confidence?: number | null;
   owner_source?: ActionOwnerSource | null;
+  owner_reason?: string | null;
   due_date: string | null;
   status: string;
 };
@@ -28,16 +29,25 @@ const STATUS_OPTIONS = [
 ];
 
 function getOwnerConfidenceLabel(actionItem: ActionItemFields, ownerName: string) {
-  if (actionItem.owner_source === "user_corrected") {
-    return "Owner confirmed";
+  if ((actionItem.owner_name ?? "").trim() !== ownerName.trim()) {
+    return "Owner changed";
   }
 
   if (!ownerName.trim()) {
     return "Owner uncertain";
   }
 
-  if ((actionItem.owner_confidence ?? 0) >= 0.8) {
+  if (actionItem.owner_source === "user_corrected") {
+    return "Owner confirmed";
+  }
+
+  const confidence = actionItem.owner_confidence ?? 0;
+  if (confidence >= 0.8) {
     return "Owner likely";
+  }
+
+  if (confidence >= 0.7) {
+    return "Owner tentative";
   }
 
   return "Owner uncertain";
@@ -53,6 +63,10 @@ export default function ActionItemContextPanel({
   const instanceId = useId();
   const taskSectionId = `${instanceId}-task`;
   const meetingSectionId = `${instanceId}-meeting`;
+  const descriptionInputId = `${instanceId}-description`;
+  const ownerInputId = `${instanceId}-owner`;
+  const dueDateInputId = `${instanceId}-due-date`;
+  const statusInputId = `${instanceId}-status`;
 
   const [description, setDescription] = useState("");
   const [ownerName, setOwnerName] = useState("");
@@ -70,7 +84,7 @@ export default function ActionItemContextPanel({
       setStatus(actionItem.status);
       setDirty(false);
     }
-  }, [actionItem?.id, actionItem?.description, actionItem?.owner_name, actionItem?.due_date, actionItem?.status]);
+  }, [actionItem]);
 
   function markDirty() {
     setDirty(true);
@@ -140,10 +154,14 @@ export default function ActionItemContextPanel({
                 <div className="space-y-4">
                   {/* Description */}
                   <div>
-                    <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--text-muted)]">
+                    <label
+                      htmlFor={descriptionInputId}
+                      className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--text-muted)]"
+                    >
                       Description
                     </label>
                     <textarea
+                      id={descriptionInputId}
                       value={description}
                       onChange={(e) => { setDescription(e.target.value); markDirty(); }}
                       rows={3}
@@ -155,10 +173,14 @@ export default function ActionItemContextPanel({
                   {/* Owner + Due Date — side by side */}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--text-muted)]">
+                      <label
+                        htmlFor={ownerInputId}
+                        className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--text-muted)]"
+                      >
                         Owner
                       </label>
                       <input
+                        id={ownerInputId}
                         type="text"
                         value={ownerName}
                         onChange={(e) => { setOwnerName(e.target.value); markDirty(); }}
@@ -166,16 +188,20 @@ export default function ActionItemContextPanel({
                         placeholder="Unassigned"
                       />
                       {ownerConfidenceLabel && (
-                        <p className="mt-1.5 text-[11px] font-medium text-[color:var(--text-muted)]">
+                        <p className="mt-1.5 inline-flex rounded-full border border-[color:var(--border-subtle)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--text-muted)]">
                           {ownerConfidenceLabel}
                         </p>
                       )}
                     </div>
                     <div>
-                      <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--text-muted)]">
+                      <label
+                        htmlFor={dueDateInputId}
+                        className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--text-muted)]"
+                      >
                         Due date
                       </label>
                       <input
+                        id={dueDateInputId}
                         type="date"
                         value={dueDate}
                         onChange={(e) => { setDueDate(e.target.value); markDirty(); }}
@@ -186,10 +212,14 @@ export default function ActionItemContextPanel({
 
                   {/* Status */}
                   <div>
-                    <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--text-muted)]">
+                    <label
+                      htmlFor={statusInputId}
+                      className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.18em] text-[color:var(--text-muted)]"
+                    >
                       Status
                     </label>
                     <select
+                      id={statusInputId}
                       value={status}
                       onChange={(e) => { setStatus(e.target.value); markDirty(); }}
                       className={inputBase}
