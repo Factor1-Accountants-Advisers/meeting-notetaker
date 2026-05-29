@@ -123,6 +123,44 @@ class TranscriptResponse(BaseModel):
 
 
 # ============================================================================
+# Speaker Mapping Schemas
+# ============================================================================
+
+class SpeakerMappingResponse(BaseModel):
+    """Speaker mapping response."""
+    id: int
+    meeting_id: int
+    speaker_label: str
+    display_name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    source: str
+    reason: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class SpeakerMappingUpdate(BaseModel):
+    """Speaker mapping update request."""
+    speaker_label: str = Field(..., min_length=1, max_length=100)
+    display_name: Optional[str] = Field(None, max_length=200)
+    email: Optional[EmailStr] = None
+    confidence: float = Field(1.0, ge=0.0, le=1.0)
+    source: str = "user_corrected"
+    reason: Optional[str] = Field(None, max_length=500)
+
+
+class SpeakerMappingListResponse(BaseModel):
+    """Speaker mapping list response."""
+    items: List[SpeakerMappingResponse]
+    needs_speaker_review: bool
+    speaker_mapping_quality: Optional[float] = None
+
+
+# ============================================================================
 # Summary Schemas
 # ============================================================================
 
@@ -145,6 +183,9 @@ class ActionItemBase(BaseModel):
     description: str
     owner_name: Optional[str] = None
     owner_email: Optional[EmailStr] = None
+    owner_confidence: Optional[float] = None
+    owner_source: Optional[str] = None
+    owner_reason: Optional[str] = None
     due_date: Optional[date] = None
     status: str = "open"
 
@@ -209,6 +250,13 @@ class MeetingDetailResponse(BaseModel):
 
     # Action items
     action_items: List[ActionItemResponse] = Field(default_factory=list)
+
+    # Speaker mappings
+    needs_speaker_review: bool = False
+    speaker_review_completed_at: Optional[datetime] = None
+    speaker_mapping_quality: Optional[float] = None
+    diarization_diagnostics: Optional[dict] = None
+    speaker_mappings: List[SpeakerMappingResponse] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
