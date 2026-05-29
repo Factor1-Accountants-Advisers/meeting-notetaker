@@ -14,12 +14,18 @@ OWASP: No sensitive data logged, fail-closed on errors.
 import os
 import logging
 import tempfile
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, cast
 
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models import Meeting, Participant, Transcript, MeetingStatus
+from app.models import Meeting, Participant, Transcript, MeetingStatus, SpeakerMappingSource
+from app.services.identity_candidates import build_candidate_pool
+from app.services.speaker_mapping import (
+    extract_speaker_labels,
+    refresh_speaker_mapping_diagnostics,
+    upsert_speaker_mappings,
+)
 from app.services.storage import get_storage
 
 logger = logging.getLogger(__name__)
@@ -189,6 +195,66 @@ def save_transcript(
     return transcript
 
 
+def _add_detected_speaker_count(meeting: Meeting, detected_speaker_count: int) -> None:
+    """Add transcription-time detected speaker count to meeting diagnostics."""
+    diagnostics = dict(cast(Any, meeting).diarization_diagnostics or {})
+    diagnostics["detected_speaker_count"] = detected_speaker_count
+    cast(Any, meeting).diarization_diagnostics = diagnostics
+
+
+def _persist_initial_speaker_mapping_diagnostics(
+    db: Session,
+    meeting: Meeting,
+    participants: List[Participant],
+    transcript: Transcript,
+) -> None:
+    """Persist speaker mapping diagnostics immediately after transcription.
+
+    AssemblyAI may return real participant names when speaker identification
+    succeeds. Because the transcription payload does not distinguish named
+    AssemblyAI speakers from generic diarization labels, only labels that
+    exactly match a known candidate display name are persisted as AssemblyAI
+    mappings. All other labels remain unmapped so the review diagnostics flag
+    them for human review without rewriting transcript segments.
+    """
+    labels = extract_speaker_labels(cast(Any, transcript).segments)
+    detected_speaker_count = len(labels)
+
+    candidates = build_candidate_pool(participants, cast(Any, meeting).identity_hints)
+    candidates_by_display_name = {
+        candidate["display_name"].strip(): candidate
+        for candidate in candidates
+        if isinstance(candidate.get("display_name"), str)
+        and candidate["display_name"].strip()
+    }
+    proposed_mappings = [
+        {
+            "speaker_label": label,
+            "display_name": candidate["display_name"],
+            "email": candidate.get("email"),
+            "confidence": 1.0,
+            "reason": "AssemblyAI speaker label exactly matched a candidate display name",
+        }
+        for label in labels
+        if (candidate := candidates_by_display_name.get(label)) is not None
+    ]
+
+    if proposed_mappings:
+        upsert_speaker_mappings(
+            db=db,
+            meeting=meeting,
+            proposed=proposed_mappings,
+            source=SpeakerMappingSource.ASSEMBLYAI,
+        )
+    else:
+        refresh_speaker_mapping_diagnostics(db, meeting)
+
+    _add_detected_speaker_count(meeting, detected_speaker_count)
+    db.add(meeting)
+    db.commit()
+    db.refresh(meeting)
+
+
 def process_transcription(db: Session, meeting_id: int) -> Transcript:
     """Run the full transcription pipeline for a meeting.
 
@@ -265,6 +331,17 @@ def process_transcription(db: Session, meeting_id: int) -> Transcript:
 
         # Save results
         transcript = save_transcript(db, meeting_id, transcription_result)
+
+        # Persist initial speaker mapping diagnostics without modifying
+        # transcript segments. Generic labels remain unmapped and require review;
+        # labels exactly matching known candidates are trusted as AssemblyAI
+        # speaker-identification mappings.
+        _persist_initial_speaker_mapping_diagnostics(
+            db=db,
+            meeting=meeting,
+            participants=participants,
+            transcript=transcript,
+        )
 
         logger.info(f"Transcription pipeline complete for meeting {meeting_id}")
         return transcript

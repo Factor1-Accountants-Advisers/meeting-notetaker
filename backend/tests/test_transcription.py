@@ -293,6 +293,39 @@ class TestTranscriptionPipeline:
         assert len(transcript.segments) == 2
         assert transcript.segments[0]["speaker"] == "A"
 
+    def test_process_transcription_marks_generic_speakers_for_review_without_rewriting_segments(
+        self, db_session: Session, test_meeting_with_participants: Meeting, sample_audio_file
+    ):
+        """Generic diarization labels should produce diagnostics and require review."""
+        from app.services.transcription import process_transcription
+
+        original_segments = [
+            {"speaker": "A", "start": 0.0, "end": 2.0, "text": "Full transcript"},
+            {"speaker": "B", "start": 2.0, "end": 4.0, "text": "text here"},
+            {"speaker": "A", "start": 4.0, "end": 5.0, "text": "again"},
+        ]
+
+        with patch("app.services.transcription.download_audio") as mock_download:
+            mock_download.return_value = sample_audio_file
+
+            with patch("app.services.transcription.transcribe_audio") as mock_transcribe:
+                mock_transcribe.return_value = {
+                    "text": "Full transcript text here again",
+                    "segments": original_segments,
+                    "speaker_identified": False,
+                }
+
+                process_transcription(db_session, test_meeting_with_participants.id)
+
+        transcript = db_session.query(Transcript).filter_by(
+            meeting_id=test_meeting_with_participants.id
+        ).one()
+        db_session.refresh(test_meeting_with_participants)
+
+        assert test_meeting_with_participants.needs_speaker_review is True
+        assert test_meeting_with_participants.diarization_diagnostics["detected_speaker_count"] == 2
+        assert transcript.segments == original_segments
+
     def test_process_transcription_includes_organizer_and_user_names(
         self, db_session: Session, test_meeting_with_participants: Meeting, sample_audio_file
     ):
