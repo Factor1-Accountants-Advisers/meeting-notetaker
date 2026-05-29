@@ -127,6 +127,24 @@ describe("MeetingDetailContent speaker review", () => {
     expect(screen.getByRole("heading", { name: "Review speakers" })).toBeVisible();
   });
 
+  it("shows concise diarization diagnostics when available", () => {
+    renderDetail(makeMeetingDetail({
+      diarization_diagnostics: {
+        detected_speaker_count: 2,
+        mapped_speaker_count: 1,
+        average_mapping_confidence: 0.78,
+      },
+    }));
+
+    expect(screen.getByRole("heading", { name: "Diarization quality" })).toBeVisible();
+    expect(screen.getByText("Detected speakers")).toBeVisible();
+    expect(screen.getByText("2")).toBeVisible();
+    expect(screen.getByText("Mapped speakers")).toBeVisible();
+    expect(screen.getByText("1")).toBeVisible();
+    expect(screen.getByText("Average confidence")).toBeVisible();
+    expect(screen.getByText("78%")).toBeVisible();
+  });
+
   it("saves speaker mappings and revalidates the meeting detail", async () => {
     mockedUpdateSpeakerMappings.mockResolvedValue({
       items: [],

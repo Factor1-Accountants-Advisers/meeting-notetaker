@@ -36,6 +36,18 @@ function formatTimestamp(seconds: number): string {
   return `${min}:${String(sec).padStart(2, "0")}`;
 }
 
+function getDiagnosticNumber(
+  diagnostics: Record<string, unknown> | null | undefined,
+  key: string,
+): number | null {
+  const value = diagnostics?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function formatConfidence(value: number | null): string {
+  return value === null ? "—" : `${Math.round(value * 100)}%`;
+}
+
 function SkeletonBlock({ lines = 3 }: { lines?: number }) {
   return (
     <div className="space-y-2">
@@ -161,6 +173,13 @@ export default function MeetingDetailContent({
   }
 
   const isProcessing = m.status !== "complete" && m.status !== "failed";
+  const diagnostics = m.diarization_diagnostics;
+  const hasDiagnostics = Boolean(diagnostics && Object.keys(diagnostics).length > 0);
+  const detectedSpeakerCount = getDiagnosticNumber(diagnostics, "detected_speaker_count");
+  const mappedSpeakerCount = getDiagnosticNumber(diagnostics, "mapped_speaker_count");
+  const averageMappingConfidence =
+    getDiagnosticNumber(diagnostics, "average_mapping_confidence") ?? m.speaker_mapping_quality;
+  const showDiarizationQuality = m.needs_speaker_review || hasDiagnostics;
 
   return (
     <div className="max-w-3xl pb-8">
@@ -223,6 +242,32 @@ export default function MeetingDetailContent({
             />
           </div>
         </div>
+      )}
+
+      {showDiarizationQuality && (
+        <section className="mb-6 rounded-[20px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-soft)] px-4 py-3">
+          <h2 className="text-sm font-medium text-[color:var(--text-primary)]">Diarization quality</h2>
+          <dl className="mt-3 grid gap-3 text-sm text-[color:var(--text-secondary)] sm:grid-cols-3">
+            <div>
+              <dt className="text-xs uppercase tracking-[0.12em] text-[color:var(--text-muted)]">Detected speakers</dt>
+              <dd className="mt-1 font-medium text-[color:var(--text-primary)]">
+                {detectedSpeakerCount ?? "—"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-[0.12em] text-[color:var(--text-muted)]">Mapped speakers</dt>
+              <dd className="mt-1 font-medium text-[color:var(--text-primary)]">
+                {mappedSpeakerCount ?? "—"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-[0.12em] text-[color:var(--text-muted)]">Average confidence</dt>
+              <dd className="mt-1 font-medium text-[color:var(--text-primary)]">
+                {formatConfidence(averageMappingConfidence)}
+              </dd>
+            </div>
+          </dl>
+        </section>
       )}
 
       {/* Audio player */}

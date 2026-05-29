@@ -85,6 +85,29 @@ def calculate_mapping_quality(mappings: list[SpeakerMapping]) -> float | None:
     return sum(float(cast(Any, m).confidence or 0.0) for m in mappings) / len(mappings)
 
 
+def build_diarization_diagnostics(
+    labels: list[str],
+    mapped_labels: list[str],
+    unmapped_labels: list[str],
+    low_confidence_labels: list[str],
+    average_mapping_confidence: float | None,
+    threshold: float = DEFAULT_REVIEW_CONFIDENCE_THRESHOLD,
+) -> dict[str, Any]:
+    """Build compact, stable diarization diagnostics for API/UI consumers."""
+    return {
+        "detected_speaker_count": len(labels),
+        "mapped_speaker_count": len(mapped_labels),
+        "average_mapping_confidence": average_mapping_confidence,
+        "low_confidence_labels": low_confidence_labels,
+        # Keep detailed legacy fields for existing support workflows.
+        "speaker_labels": labels,
+        "mapped_speaker_labels": mapped_labels,
+        "unmapped_speaker_labels": unmapped_labels,
+        "low_confidence_speaker_labels": low_confidence_labels,
+        "speaker_mapping_threshold": threshold,
+    }
+
+
 def should_require_review(
     labels: list[str],
     mappings_by_label: dict[str, SpeakerMapping],
@@ -153,16 +176,17 @@ def refresh_speaker_mapping_diagnostics(
         and float(cast(Any, mappings_by_label[label]).confidence or 0.0) < threshold
     ]
 
-    meeting.speaker_mapping_quality = calculate_mapping_quality(current_mappings)
-    meeting.needs_speaker_review = should_require_review(labels, mappings_by_label, threshold)
-    meeting.diarization_diagnostics = {
-        "speaker_labels": labels,
-        "mapped_speaker_labels": mapped_labels,
-        "unmapped_speaker_labels": unmapped_labels,
-        "low_confidence_speaker_labels": low_confidence_labels,
-        "mapped_speaker_count": len(mapped_labels),
-        "speaker_mapping_threshold": threshold,
-    }
+    average_mapping_confidence = calculate_mapping_quality(current_mappings)
+    cast(Any, meeting).speaker_mapping_quality = average_mapping_confidence
+    cast(Any, meeting).needs_speaker_review = should_require_review(labels, mappings_by_label, threshold)
+    cast(Any, meeting).diarization_diagnostics = build_diarization_diagnostics(
+        labels=labels,
+        mapped_labels=mapped_labels,
+        unmapped_labels=unmapped_labels,
+        low_confidence_labels=low_confidence_labels,
+        average_mapping_confidence=average_mapping_confidence,
+        threshold=threshold,
+    )
 
 
 def upsert_speaker_mappings(

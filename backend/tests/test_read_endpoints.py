@@ -292,6 +292,12 @@ class TestGetMeetingDetail:
         meeting = seed_data["meeting1"]
         meeting.needs_speaker_review = True
         meeting.speaker_mapping_quality = 0.9
+        meeting.diarization_diagnostics = {
+            "detected_speaker_count": 1,
+            "mapped_speaker_count": 1,
+            "average_mapping_confidence": 0.86,
+            "low_confidence_labels": [],
+        }
 
         result = await async_db.execute(
             select(Transcript).where(Transcript.meeting_id == meeting.id)
@@ -329,6 +335,9 @@ class TestGetMeetingDetail:
         assert segment["match_confidence"] == 0.86
         assert data["needs_speaker_review"] is True
         assert data["speaker_mapping_quality"] == 0.9
+        assert data["diarization_diagnostics"]["detected_speaker_count"] == 1
+        assert data["diarization_diagnostics"]["mapped_speaker_count"] == 1
+        assert data["diarization_diagnostics"]["average_mapping_confidence"] == 0.86
         assert len(data["speaker_mappings"]) == 1
         assert data["speaker_mappings"][0]["speaker_label"] == "Speaker A"
         assert data["speaker_mappings"][0]["display_name"] == "Joseph"

@@ -131,11 +131,14 @@ def test_marks_review_needed_when_major_labels_unmapped_or_low_confidence(db_ses
     assert test_meeting.needs_speaker_review is True
     assert test_meeting.speaker_mapping_quality == (0.95 + 0.65) / 2
     assert test_meeting.diarization_diagnostics == {
+        "detected_speaker_count": 3,
+        "mapped_speaker_count": 2,
+        "average_mapping_confidence": (0.95 + 0.65) / 2,
+        "low_confidence_labels": ["Speaker B"],
         "speaker_labels": ["Speaker A", "Speaker B", "Speaker C"],
         "mapped_speaker_labels": ["Speaker A", "Speaker B"],
         "unmapped_speaker_labels": ["Speaker C"],
         "low_confidence_speaker_labels": ["Speaker B"],
-        "mapped_speaker_count": 2,
         "speaker_mapping_threshold": 0.7,
     }
 
@@ -291,11 +294,14 @@ def test_transcript_with_no_speaker_labels_excludes_stale_mappings_from_quality(
     assert test_meeting.speaker_mapping_quality is None
     assert test_meeting.needs_speaker_review is False
     assert test_meeting.diarization_diagnostics == {
+        "detected_speaker_count": 0,
+        "mapped_speaker_count": 0,
+        "average_mapping_confidence": None,
+        "low_confidence_labels": [],
         "speaker_labels": [],
         "mapped_speaker_labels": [],
         "unmapped_speaker_labels": [],
         "low_confidence_speaker_labels": [],
-        "mapped_speaker_count": 0,
         "speaker_mapping_threshold": 0.7,
     }
 
@@ -336,10 +342,13 @@ def test_marks_review_not_needed_when_all_labels_confidently_mapped(db_session, 
     assert test_meeting.needs_speaker_review is False
     assert test_meeting.speaker_mapping_quality == (0.91 + 0.7) / 2
     assert test_meeting.diarization_diagnostics == {
+        "detected_speaker_count": 2,
+        "mapped_speaker_count": 2,
+        "average_mapping_confidence": (0.91 + 0.7) / 2,
+        "low_confidence_labels": [],
         "speaker_labels": ["Speaker A", "Speaker B"],
         "mapped_speaker_labels": ["Speaker A", "Speaker B"],
         "unmapped_speaker_labels": [],
         "low_confidence_speaker_labels": [],
-        "mapped_speaker_count": 2,
         "speaker_mapping_threshold": 0.7,
     }

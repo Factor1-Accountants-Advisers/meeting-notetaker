@@ -5,7 +5,7 @@ Handles meeting upload, listing, and detail retrieval.
 import logging
 import os
 import tempfile
-from typing import Optional
+from typing import Any, Optional, cast
 from datetime import datetime, timezone
 
 from pydantic import ValidationError
@@ -35,6 +35,7 @@ from app.services.pipeline import enqueue_meeting
 from app.services.audio import extract_audio_from_video
 from app.services.identity_candidates import build_candidate_pool
 from app.services.speaker_mapping import (
+    build_diarization_diagnostics,
     calculate_mapping_quality,
     extract_speaker_labels,
     should_require_review,
@@ -213,7 +214,7 @@ async def _refresh_speaker_mapping_diagnostics(
         current_mappings = [m for m in mappings if m.speaker_label in label_set]
     else:
         current_mappings = mappings
-    mappings_by_label = {m.speaker_label: m for m in current_mappings}
+    mappings_by_label = {cast(str, m.speaker_label): m for m in current_mappings}
 
     mapped_labels = [
         label
@@ -236,16 +237,16 @@ async def _refresh_speaker_mapping_diagnostics(
         and float(mappings_by_label[label].confidence or 0.0) < 0.7
     ]
 
-    meeting.speaker_mapping_quality = calculate_mapping_quality(current_mappings)
-    meeting.needs_speaker_review = should_require_review(labels, mappings_by_label)
-    meeting.diarization_diagnostics = {
-        "speaker_labels": labels,
-        "mapped_speaker_labels": mapped_labels,
-        "unmapped_speaker_labels": unmapped_labels,
-        "low_confidence_speaker_labels": low_confidence_labels,
-        "mapped_speaker_count": len(mapped_labels),
-        "speaker_mapping_threshold": 0.7,
-    }
+    average_mapping_confidence = calculate_mapping_quality(current_mappings)
+    cast(Any, meeting).speaker_mapping_quality = average_mapping_confidence
+    cast(Any, meeting).needs_speaker_review = should_require_review(labels, mappings_by_label)
+    cast(Any, meeting).diarization_diagnostics = build_diarization_diagnostics(
+        labels=labels,
+        mapped_labels=mapped_labels,
+        unmapped_labels=unmapped_labels,
+        low_confidence_labels=low_confidence_labels,
+        average_mapping_confidence=average_mapping_confidence,
+    )
 
 
 async def _resolve_action_item_owners_for_meeting(
