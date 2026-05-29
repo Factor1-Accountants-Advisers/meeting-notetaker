@@ -1,6 +1,6 @@
 """Pydantic schemas for API request and response validation."""
 from datetime import datetime, date
-from typing import List, Optional
+from typing import List, Literal, Optional
 from pydantic import BaseModel, EmailStr, Field
 
 
@@ -149,7 +149,7 @@ class SpeakerMappingUpdate(BaseModel):
     display_name: Optional[str] = Field(None, max_length=200)
     email: Optional[EmailStr] = None
     confidence: float = Field(1.0, ge=0.0, le=1.0)
-    source: str = "user_corrected"
+    source: Literal["user_corrected"] = "user_corrected"
     reason: Optional[str] = Field(None, max_length=500)
 
 
@@ -157,7 +157,7 @@ class SpeakerMappingListResponse(BaseModel):
     """Speaker mapping list response."""
     items: List[SpeakerMappingResponse]
     needs_speaker_review: bool
-    speaker_mapping_quality: Optional[float] = None
+    speaker_mapping_quality: Optional[float] = Field(None, ge=0.0, le=1.0)
 
 
 # ============================================================================
@@ -183,9 +183,6 @@ class ActionItemBase(BaseModel):
     description: str
     owner_name: Optional[str] = None
     owner_email: Optional[EmailStr] = None
-    owner_confidence: Optional[float] = None
-    owner_source: Optional[str] = None
-    owner_reason: Optional[str] = None
     due_date: Optional[date] = None
     status: str = "open"
 
@@ -199,6 +196,9 @@ class ActionItemResponse(ActionItemBase):
     """Action item response."""
     id: int
     meeting_id: int
+    owner_confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
+    owner_source: Optional[str] = None
+    owner_reason: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -254,7 +254,7 @@ class MeetingDetailResponse(BaseModel):
     # Speaker mappings
     needs_speaker_review: bool = False
     speaker_review_completed_at: Optional[datetime] = None
-    speaker_mapping_quality: Optional[float] = None
+    speaker_mapping_quality: Optional[float] = Field(None, ge=0.0, le=1.0)
     diarization_diagnostics: Optional[dict] = None
     speaker_mappings: List[SpeakerMappingResponse] = Field(default_factory=list)
 
