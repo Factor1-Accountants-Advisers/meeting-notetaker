@@ -50,18 +50,17 @@ const mappings: SpeakerMapping[] = [
 
 function renderPanel(overrides: Partial<React.ComponentProps<typeof SpeakerReviewPanel>> = {}) {
   const onSave = vi.fn(async () => undefined);
+  const props = {
+    segments,
+    mappings,
+    participants,
+    onSave,
+    ...overrides,
+  } satisfies React.ComponentProps<typeof SpeakerReviewPanel>;
 
-  render(
-    <SpeakerReviewPanel
-      segments={segments}
-      mappings={mappings}
-      participants={participants}
-      onSave={onSave}
-      {...overrides}
-    />
-  );
+  const result = render(<SpeakerReviewPanel {...props} />);
 
-  return { onSave };
+  return { onSave, rerender: result.rerender, props };
 }
 
 describe("SpeakerReviewPanel", () => {
@@ -160,5 +159,95 @@ describe("SpeakerReviewPanel", () => {
         ])
       );
     });
+  });
+
+  it("saves a custom display name without an email", async () => {
+    const { onSave } = renderPanel();
+
+    fireEvent.change(screen.getByLabelText("Mapping for SPEAKER_01"), {
+      target: { value: "custom" },
+    });
+    fireEvent.change(screen.getByLabelText("Custom display name"), {
+      target: { value: "Morgan Lee" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save mappings" }));
+
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          {
+            speaker_label: "SPEAKER_01",
+            display_name: "Morgan Lee",
+            email: null,
+            confidence: 1,
+            source: "user_corrected",
+            reason: "Entered custom display name in speaker review panel",
+          },
+        ])
+      );
+    });
+  });
+
+  it("shows one Custom name option when the current mapping is a non-participant custom name", () => {
+    renderPanel({
+      mappings: [
+        ...mappings,
+        {
+          id: 11,
+          meeting_id: 99,
+          speaker_label: "SPEAKER_01",
+          display_name: "Outside Consultant",
+          email: null,
+          confidence: 0.71,
+          source: "user_corrected",
+          reason: "Provided by organizer",
+          created_at: "2026-05-29T00:00:00.000Z",
+          updated_at: "2026-05-29T00:00:00.000Z",
+        },
+      ],
+    });
+
+    const card = screen.getByRole("article", { name: /SPEAKER_01/i });
+    const speakerSelect = within(card).getByLabelText("Mapping for SPEAKER_01");
+
+    expect(within(card).getByText("Outside Consultant")).toBeVisible();
+    expect(within(speakerSelect).getAllByRole("option", { name: "Custom name" })).toHaveLength(1);
+    expect(within(speakerSelect).queryByRole("option", { name: "Outside Consultant" })).not.toBeInTheDocument();
+    expect(speakerSelect).toHaveValue("custom");
+  });
+
+  it("preserves dirty user edits when refreshed with new mapping props for the same speakers", () => {
+    const { props, rerender } = renderPanel();
+
+    fireEvent.change(screen.getByLabelText("Mapping for SPEAKER_01"), {
+      target: { value: "custom" },
+    });
+    fireEvent.change(screen.getByLabelText("Custom display name"), {
+      target: { value: "Morgan Lee" },
+    });
+
+    rerender(
+      <SpeakerReviewPanel
+        {...props}
+        mappings={[
+          ...mappings,
+          {
+            id: 11,
+            meeting_id: 99,
+            speaker_label: "SPEAKER_01",
+            display_name: "Jordan Kim",
+            email: "jordan@example.com",
+            confidence: 0.92,
+            source: "llm_inference",
+            reason: "Late-arriving inference result",
+            created_at: "2026-05-29T00:00:00.000Z",
+            updated_at: "2026-05-29T00:00:00.000Z",
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByLabelText("Mapping for SPEAKER_01")).toHaveValue("custom");
+    expect(screen.getByLabelText("Custom display name")).toHaveValue("Morgan Lee");
   });
 });

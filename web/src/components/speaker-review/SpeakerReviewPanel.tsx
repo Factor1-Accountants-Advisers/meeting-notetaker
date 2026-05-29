@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   Participant,
@@ -43,6 +43,10 @@ function formatSource(source: SpeakerMapping["source"]): string {
 
 function formatConfidence(confidence: number): string {
   return `${Math.round(confidence * 100)}% confidence`;
+}
+
+function safeDomId(value: string): string {
+  return encodeURIComponent(value).replace(/%/g, "-") || "speaker";
 }
 
 function findParticipantForMapping(
@@ -120,10 +124,19 @@ export default function SpeakerReviewPanel({
   const [selections, setSelections] = useState<Record<string, SelectionState>>(() =>
     createInitialSelections(mappings, participants, speakerLabels)
   );
+  const [isDirty, setIsDirty] = useState(false);
+  const speakerLabelsKey = useMemo(() => speakerLabels.join("\u001f"), [speakerLabels]);
+  const previousSpeakerLabelsKey = useRef(speakerLabelsKey);
 
   useEffect(() => {
-    setSelections(createInitialSelections(mappings, participants, speakerLabels));
-  }, [mappings, participants, speakerLabels]);
+    const speakerLabelsChanged = previousSpeakerLabelsKey.current !== speakerLabelsKey;
+
+    if (!isDirty || speakerLabelsChanged) {
+      setSelections(createInitialSelections(mappings, participants, speakerLabels));
+      setIsDirty(false);
+      previousSpeakerLabelsKey.current = speakerLabelsKey;
+    }
+  }, [isDirty, mappings, participants, speakerLabels, speakerLabelsKey]);
 
   const participantByValue = useMemo(
     () => new Map(participants.map((participant) => [participantValue(participant), participant] as const)),
@@ -131,19 +144,18 @@ export default function SpeakerReviewPanel({
   );
 
   function updateSelection(speakerLabel: string, value: string) {
+    setIsDirty(true);
     setSelections((current) => ({
       ...current,
       [speakerLabel]: {
         value,
-        customName:
-          value === CUSTOM_VALUE
-            ? current[speakerLabel]?.customName ?? ""
-            : current[speakerLabel]?.customName ?? "",
+        customName: current[speakerLabel]?.customName ?? "",
       },
     }));
   }
 
   function updateCustomName(speakerLabel: string, customName: string) {
+    setIsDirty(true);
     setSelections((current) => ({
       ...current,
       [speakerLabel]: {
@@ -223,8 +235,9 @@ export default function SpeakerReviewPanel({
             value: UNKNOWN_VALUE,
             customName: "",
           };
-          const headingId = `speaker-review-${group.speakerLabel}`;
-          const customInputId = `custom-name-${group.speakerLabel}`;
+          const safeSpeakerId = safeDomId(group.speakerLabel);
+          const headingId = `speaker-review-${safeSpeakerId}`;
+          const customInputId = `custom-name-${safeSpeakerId}`;
 
           return (
             <article
@@ -262,9 +275,9 @@ export default function SpeakerReviewPanel({
                     Representative quotes
                   </h4>
                   <ul className="mt-2 space-y-2">
-                    {group.quotes.map((quote) => (
+                    {group.quotes.map((quote, quoteIndex) => (
                       <li
-                        key={quote}
+                        key={`${group.speakerLabel}-${quoteIndex}-${quote}`}
                         className="rounded-2xl border border-[color:var(--border-subtle)] bg-[color:var(--surface-soft)] px-3 py-2 text-sm text-[color:var(--text-secondary)]"
                       >
                         {quote}
@@ -291,10 +304,6 @@ export default function SpeakerReviewPanel({
                             : participant.name}
                         </option>
                       ))}
-                      {group.mapping?.display_name &&
-                      !findParticipantForMapping(group.mapping, participants) ? (
-                        <option value={CUSTOM_VALUE}>{group.mapping.display_name}</option>
-                      ) : null}
                       <option value={CUSTOM_VALUE}>Custom name</option>
                     </select>
                   </label>
