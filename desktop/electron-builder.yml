@@ -15,9 +15,17 @@ extraResources:
     to: backend
     filter:
       - "**/*"
+      - "!**/.env"
+      - "!**/.env.*"
       - "!**/__pycache__/**"
       - "!**/*.pyc"
-      - "!.pytest_cache/**"
+      - "!**/.pytest_cache/**"
+      - "!**/.venv/**"
+      - "!**/venv/**"
+      - "!**/*.db"
+      - "!**/*.sqlite"
+      - "!**/*.sqlite3"
+      - "!**/*.log"
       - "!tests/**"
       - "!data/**"
   - from: python-runtime
