@@ -110,6 +110,18 @@ function saveCache(pca) {
         console.warn('[auth] Failed to persist token cache:', err);
     }
 }
+function isJwtExpiredOrNearExpiry(token, skewSeconds = 300) {
+    try {
+        const payload = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8'));
+        if (!payload.exp)
+            return false;
+        return payload.exp <= Math.floor(Date.now() / 1000) + skewSeconds;
+    }
+    catch {
+        // If the token shape is unexpected, let backend validation be the source of truth.
+        return false;
+    }
+}
 /**
  * Silent-only Graph API token. Throws immediately if no accounts are cached.
  * Used by the scheduler and calendar IPC — never blocks on interactive flow.
@@ -136,9 +148,18 @@ async function acquireIdToken() {
     const accounts = await pca.getTokenCache().getAllAccounts();
     if (accounts.length === 0)
         throw new Error('[auth] No cached accounts — sign in first');
-    const result = await pca.acquireTokenSilent({ account: accounts[0], scopes: ID_SCOPES });
+    const account = accounts[0];
+    let result = await pca.acquireTokenSilent({ account, scopes: ID_SCOPES });
+    if (result?.idToken && !isJwtExpiredOrNearExpiry(result.idToken)) {
+        saveCache(pca);
+        return result.idToken;
+    }
+    console.warn('[auth] Cached ID token is expired or near expiry; forcing refresh');
+    result = await pca.acquireTokenSilent({ account, scopes: ID_SCOPES, forceRefresh: true });
     if (!result?.idToken)
         throw new Error('[auth] Silent token returned no idToken');
+    if (isJwtExpiredOrNearExpiry(result.idToken))
+        throw new Error('[auth] Silent token returned expired idToken');
     saveCache(pca);
     return result.idToken;
 }
@@ -156,11 +177,7 @@ async function signIn() {
     const accounts = await pca.getTokenCache().getAllAccounts();
     if (accounts.length > 0) {
         try {
-            const result = await pca.acquireTokenSilent({ account: accounts[0], scopes: ID_SCOPES });
-            if (result?.idToken) {
-                saveCache(pca);
-                return result.idToken;
-            }
+            return await acquireIdToken();
         }
         catch { /* fall through to interactive */ }
     }

@@ -73,6 +73,17 @@ function saveCache(pca: PublicClientApplication): void {
   }
 }
 
+function isJwtExpiredOrNearExpiry(token: string, skewSeconds = 300): boolean {
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8')) as { exp?: number };
+    if (!payload.exp) return false;
+    return payload.exp <= Math.floor(Date.now() / 1000) + skewSeconds;
+  } catch {
+    // If the token shape is unexpected, let backend validation be the source of truth.
+    return false;
+  }
+}
+
 /**
  * Silent-only Graph API token. Throws immediately if no accounts are cached.
  * Used by the scheduler and calendar IPC — never blocks on interactive flow.
@@ -99,8 +110,17 @@ export async function acquireIdToken(): Promise<string> {
   const accounts = await pca.getTokenCache().getAllAccounts();
   if (accounts.length === 0) throw new Error('[auth] No cached accounts — sign in first');
 
-  const result = await pca.acquireTokenSilent({ account: accounts[0] as AccountInfo, scopes: ID_SCOPES });
+  const account = accounts[0] as AccountInfo;
+  let result = await pca.acquireTokenSilent({ account, scopes: ID_SCOPES });
+  if (result?.idToken && !isJwtExpiredOrNearExpiry(result.idToken)) {
+    saveCache(pca);
+    return result.idToken;
+  }
+
+  console.warn('[auth] Cached ID token is expired or near expiry; forcing refresh');
+  result = await pca.acquireTokenSilent({ account, scopes: ID_SCOPES, forceRefresh: true });
   if (!result?.idToken) throw new Error('[auth] Silent token returned no idToken');
+  if (isJwtExpiredOrNearExpiry(result.idToken)) throw new Error('[auth] Silent token returned expired idToken');
   saveCache(pca);
   return result.idToken;
 }
@@ -120,8 +140,7 @@ export async function signIn(): Promise<string> {
   const accounts = await pca.getTokenCache().getAllAccounts();
   if (accounts.length > 0) {
     try {
-      const result = await pca.acquireTokenSilent({ account: accounts[0] as AccountInfo, scopes: ID_SCOPES });
-      if (result?.idToken) { saveCache(pca); return result.idToken; }
+      return await acquireIdToken();
     } catch { /* fall through to interactive */ }
   }
 

@@ -29,9 +29,19 @@ jest.mock('fs', () => ({
 process.env.AZURE_AD_CLIENT_ID = 'test-client-id';
 process.env.AZURE_AD_TENANT_ID = 'test-tenant-id';
 
-describe('auth.acquireToken', () => {
-  beforeEach(() => jest.clearAllMocks());
+function makeJwt(exp: number): string {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  return `${encode({ alg: 'none' })}.${encode({ exp, name: 'Test User', preferred_username: 'test@example.com' })}.sig`;
+}
 
+beforeEach(() => {
+  jest.clearAllMocks();
+  mockAcquireTokenSilent.mockReset();
+  mockAcquireTokenInteractive.mockReset();
+  mockGetAllAccounts.mockReset().mockResolvedValue([{ homeAccountId: 'acc1' }]);
+});
+
+describe('auth.acquireToken', () => {
   it('returns access token on silent success', async () => {
     mockAcquireTokenSilent.mockResolvedValueOnce({ accessToken: 'token-abc' });
     expect(await acquireToken()).toBe('token-abc');
@@ -45,11 +55,23 @@ describe('auth.acquireToken', () => {
 });
 
 describe('auth.acquireIdToken', () => {
-  beforeEach(() => jest.clearAllMocks());
-
   it('returns id token on silent success', async () => {
-    mockAcquireTokenSilent.mockResolvedValueOnce({ idToken: 'id-token-abc' });
-    expect(await acquireIdToken()).toBe('id-token-abc');
+    mockAcquireTokenSilent.mockResolvedValueOnce({ idToken: makeJwt(Math.floor(Date.now() / 1000) + 3600) });
+    expect(await acquireIdToken()).toContain('.');
+  });
+
+  it('force-refreshes when silent cache returns an expired id token', async () => {
+    const expired = makeJwt(Math.floor(Date.now() / 1000) - 60);
+    const fresh = makeJwt(Math.floor(Date.now() / 1000) + 3600);
+    mockAcquireTokenSilent
+      .mockResolvedValueOnce({ idToken: expired })
+      .mockResolvedValueOnce({ idToken: fresh });
+
+    expect(await acquireIdToken()).toBe(fresh);
+    expect(mockAcquireTokenSilent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ forceRefresh: true }),
+    );
   });
 
   it('throws when no cached accounts exist', async () => {
@@ -59,11 +81,10 @@ describe('auth.acquireIdToken', () => {
 });
 
 describe('auth.signIn', () => {
-  beforeEach(() => jest.clearAllMocks());
-
   it('returns cached id token silently if available', async () => {
-    mockAcquireTokenSilent.mockResolvedValueOnce({ idToken: 'cached-id' });
-    expect(await signIn()).toBe('cached-id');
+    const cached = makeJwt(Math.floor(Date.now() / 1000) + 3600);
+    mockAcquireTokenSilent.mockResolvedValueOnce({ idToken: cached });
+    expect(await signIn()).toBe(cached);
     expect(mockAcquireTokenInteractive).not.toHaveBeenCalled();
   });
 
