@@ -1,4 +1,4 @@
-name: Build and Release MSI
+name: Build and Release NSIS
 
 on:
   push:
@@ -47,7 +47,7 @@ jobs:
       # IMPORTANT: bump the trailing -vN suffix any time you change the setup
       # logic. Earlier runs (pre-v3) silently cached partial/broken runtimes
       # because $ErrorActionPreference was 'Continue' and pip failures didn't
-      # halt the build. Those poisoned caches kept producing 149 MB MSIs.
+      # halt the build. Those poisoned caches kept producing incomplete installers.
       - name: Cache python-runtime
         id: python-cache
         uses: actions/cache@v4
@@ -273,14 +273,13 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          # Only public desktop config belongs in the installer. Long-lived
+          # provider/update credentials are installed per-user at runtime via
+          # desktop/scripts/install-runtime-config.ps1 or a future backend.
           $lines = @(
             "ENVIRONMENT=production",
             "AZURE_AD_TENANT_ID=${{ secrets.AZURE_AD_TENANT_ID }}",
-            "AZURE_AD_CLIENT_ID=${{ secrets.AZURE_AD_CLIENT_ID }}",
-            "AZURE_AD_CLIENT_SECRET=${{ secrets.AZURE_AD_CLIENT_SECRET }}",
-            "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}",
-            "ASSEMBLYAI_API_KEY=${{ secrets.ASSEMBLYAI_API_KEY }}",
-            "GH_TOKEN=${{ secrets.UPDATER_TOKEN }}"
+            "AZURE_AD_CLIENT_ID=${{ secrets.AZURE_AD_CLIENT_ID }}"
           )
           $envFile = Join-Path $env:GITHUB_WORKSPACE "desktop" ".env.production"
           $lines | Set-Content $envFile -Encoding UTF8
@@ -330,10 +329,10 @@ jobs:
             throw "❌ dist/ missing — TypeScript compilation did not run"
           }
 
-      # ── Build MSI ──────────────────────────────────────────────────────────
+      # ── Build NSIS installer ────────────────────────────────────────────────
       # We split the build from the publish step so we can inspect the
       # unpacked output BEFORE uploading anything to GitHub Releases.
-      - name: Build MSI (no publish yet)
+      - name: Build NSIS installer (no publish yet)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --win --publish never
@@ -341,15 +340,15 @@ jobs:
 
       # ── Post-build inspection ──────────────────────────────────────────────
       # Hard-fail if python-runtime didn't end up in the unpacked output.
-      - name: Verify MSI contents
+      - name: Verify NSIS contents
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $unpackedDir   = Join-Path $env:GITHUB_WORKSPACE "desktop" "release" "win-unpacked"
           $resourcesDir  = Join-Path $unpackedDir "resources"
-          $pythonInMsi   = Join-Path $resourcesDir "python" "python.exe"
-          $backendInMsi  = Join-Path $resourcesDir "backend" "app" "main.py"
-          $envInMsi      = Join-Path $resourcesDir ".env.production"
+          $pythonInInstaller = Join-Path $resourcesDir "python" "python.exe"
+          $backendInInstaller = Join-Path $resourcesDir "backend" "app" "main.py"
+          $envInInstaller = Join-Path $resourcesDir ".env.production"
 
           Write-Host "── Post-build inspection ──"
           Write-Host "  Unpacked dir : $unpackedDir"
@@ -376,22 +375,36 @@ jobs:
 
           Write-Host ""
           $allOk = $true
-          if (Test-Path $pythonInMsi)  { Write-Host "  ✓ resources/python/python.exe present" }
+          if (Test-Path $pythonInInstaller) { Write-Host "  ✓ resources/python/python.exe present" }
                                   else { Write-Host "  ❌ resources/python/python.exe MISSING" ; $allOk = $false }
-          if (Test-Path $backendInMsi) { Write-Host "  ✓ resources/backend/app/main.py present" }
+          if (Test-Path $backendInInstaller) { Write-Host "  ✓ resources/backend/app/main.py present" }
                                   else { Write-Host "  ❌ resources/backend/app/main.py MISSING" ; $allOk = $false }
-          if (Test-Path $envInMsi)     { Write-Host "  ✓ resources/.env.production present" }
+          if (Test-Path $envInInstaller) { Write-Host "  ✓ resources/.env.production present" }
                                   else { Write-Host "  ❌ resources/.env.production MISSING" ; $allOk = $false }
 
           if (-not $allOk) {
-            throw "MSI is missing required components — aborting before publish"
+            throw "Installer is missing required components — aborting before publish"
           }
+
+          $envContent = Get-Content $envInInstaller -Raw
+          $forbiddenEnvNames = @(
+            'AZURE_AD_CLIENT_SECRET',
+            'ASSEMBLYAI_API_KEY',
+            'OPENAI_API_KEY',
+            'GH_TOKEN',
+            'GITHUB_TOKEN'
+          )
+          foreach ($name in $forbiddenEnvNames) {
+            if ($envContent -match "(?m)^$name=") {
+              throw "resources/.env.production contains forbidden secret variable $name"
+            }
+          }
+          Write-Host "  ✓ resources/.env.production contains public config only"
 
           # Verify the size of resources/python/ in win-unpacked. This is the
           # real test that Python made it through electron-builder's pipeline.
-          # MSI file size is NOT a reliable proxy for completeness — different
-          # compression ratios produce wildly different MSI sizes (we've seen
-          # 148 MB from a 469 MB win-unpacked, which is normal ~32% compression).
+          # Installer file size is NOT a reliable proxy for completeness —
+          # compressed installers can vary widely for the same unpacked resources.
           # Trust the unpacked contents, not the compressed size.
           $resourcesSizeMB = [Math]::Round(
             (Get-ChildItem $resourcesDir -Recurse -File | Measure-Object Length -Sum).Sum / 1MB,
@@ -407,36 +420,50 @@ jobs:
             throw "resources/python/ is only $pythonSizeMB MB in win-unpacked — Python runtime is incomplete"
           }
 
-          # Find the .msi for an informational size report — no hard fail here.
-          $msi = Get-ChildItem (Join-Path $env:GITHUB_WORKSPACE "desktop" "release") -Filter "*.msi" | Select-Object -First 1
-          if (-not $msi) {
-            throw "No .msi file found in release/ — electron-builder did not produce an installer"
-          }
-          $msiSize = [Math]::Round($msi.Length / 1MB, 2)
+          # Verify NSIS updater assets exist. latest.yml and blockmap are what
+          # electron-updater reads from public GitHub Releases.
+          $releaseDir = Join-Path $env:GITHUB_WORKSPACE "desktop" "release"
+          $installer = Get-ChildItem $releaseDir -Filter "*.exe" | Where-Object { $_.Name -notmatch "blockmap$" } | Select-Object -First 1
+          $latestYml = Join-Path $releaseDir "latest.yml"
+          $blockmap = Get-ChildItem $releaseDir -Filter "*.blockmap" | Select-Object -First 1
+
+          if (-not $installer) { throw "No NSIS .exe installer found in release/" }
+          if (-not (Test-Path $latestYml)) { throw "latest.yml missing — electron-updater will not find this release" }
+          if (-not $blockmap) { throw "No .blockmap found — differential updates will not work" }
+
+          $installerSize = [Math]::Round($installer.Length / 1MB, 2)
           Write-Host ""
-          Write-Host "  MSI: $($msi.Name) — $msiSize MB (informational)"
-          Write-Host "✓ All required resources present in win-unpacked"
+          Write-Host "  Installer: $($installer.Name) — $installerSize MB (informational)"
+          Write-Host "  Metadata : latest.yml"
+          Write-Host "  Blockmap : $($blockmap.Name)"
+          Write-Host "✓ All required NSIS resources and updater assets are present"
 
       # ── Publish to GitHub Releases ─────────────────────────────────────────
       # Only runs if the inspection above passed.
-      - name: Publish MSI to GitHub Releases
+      - name: Publish NSIS installer to GitHub Releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --win --publish always --prepackaged release/win-unpacked
         working-directory: desktop
 
       # ── Post-publish sanity check ──────────────────────────────────────────
-      # Confirm an .msi was produced and report its size. We don't gate on size
+      # Confirm NSIS update assets were produced and report their size. We do not gate on size
       # here — the unpacked-content checks above already guarantee Python is in.
-      - name: Report published MSI
+      - name: Report published NSIS installer
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $msi = Get-ChildItem (Join-Path $env:GITHUB_WORKSPACE "desktop" "release") -Filter "*.msi" |
-                 Select-Object -First 1
-          if (-not $msi) { throw "No MSI found after publish step" }
-          $msiSize = [Math]::Round($msi.Length / 1MB, 2)
-          Write-Host "Final MSI: $($msi.Name) — $msiSize MB"
+          $releaseDir = Join-Path $env:GITHUB_WORKSPACE "desktop" "release"
+          $installer = Get-ChildItem $releaseDir -Filter "*.exe" | Where-Object { $_.Name -notmatch "blockmap$" } | Select-Object -First 1
+          $latestYml = Join-Path $releaseDir "latest.yml"
+          $blockmap = Get-ChildItem $releaseDir -Filter "*.blockmap" | Select-Object -First 1
+          if (-not $installer) { throw "No NSIS installer found after publish step" }
+          if (-not (Test-Path $latestYml)) { throw "latest.yml missing after publish step" }
+          if (-not $blockmap) { throw "blockmap missing after publish step" }
+          $installerSize = [Math]::Round($installer.Length / 1MB, 2)
+          Write-Host "Final NSIS installer: $($installer.Name) — $installerSize MB"
+          Write-Host "Updater metadata: latest.yml"
+          Write-Host "Blockmap: $($blockmap.Name)"
           Write-Host "✓ Published successfully"
 
       # ── Upload diagnostic artifacts ────────────────────────────────────────
@@ -448,7 +475,7 @@ jobs:
         with:
           name: build-diagnostics
           path: |
-            desktop/release/*.msi
+            desktop/release/*.exe
             desktop/release/*.yml
             desktop/release/*.blockmap
           if-no-files-found: warn

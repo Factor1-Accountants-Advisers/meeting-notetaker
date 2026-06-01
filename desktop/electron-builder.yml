@@ -34,19 +34,16 @@ extraResources:
     to: .env.production
 win:
   target:
-    - target: msi
+    - target: nsis
       arch: [x64]
   icon: assets/icon-installer.png
-msi:
+nsis:
   oneClick: false
-  perMachine: true
-  additionalWixArgs:
-    - -ext
-    - WixUtilExtension
-msiProjectCreated: scripts/msi-project-created.cjs
+  perMachine: false
+  allowToChangeInstallationDirectory: false
+  artifactName: "${productName} Setup ${version}.${ext}"
 publish:
   provider: github
   owner: guerrerojoseph
   repo: meeting-notetaker
-  private: true
   releaseType: release

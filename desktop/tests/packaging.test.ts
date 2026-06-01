@@ -12,4 +12,15 @@ describe('electron-builder backend packaging filters', () => {
     expect(config).toContain('!**/.venv/**');
     expect(config).toContain('!**/venv/**');
   });
+
+  it('builds NSIS assets suitable for public GitHub electron-updater releases', () => {
+    expect(config).toContain('target: nsis');
+    expect(config).toContain('provider: github');
+    expect(config).toContain('repo: meeting-notetaker');
+    expect(config).toContain('perMachine: false');
+    expect(config).toContain('artifactName: "${productName} Setup ${version}.${ext}"');
+    expect(config).not.toContain('target: msi');
+    expect(config).not.toContain('private: true');
+    expect(config).not.toContain('msiProjectCreated');
+  });
 });
