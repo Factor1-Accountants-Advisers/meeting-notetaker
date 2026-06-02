@@ -33,6 +33,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.loadRuntimeOverrideEnv = loadRuntimeOverrideEnv;
+exports.buildBackendEnv = buildBackendEnv;
 exports.startBackend = startBackend;
 exports.stopBackend = stopBackend;
 const child_process_1 = require("child_process");
@@ -40,7 +42,40 @@ const runtime_paths_1 = require("./runtime-paths");
 const http = __importStar(require("http"));
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
+const dotenv = __importStar(require("dotenv"));
 let backendProcess = null;
+const RUNTIME_ENV_FILE = '.env.production.local';
+const RUNTIME_ENV_KEYS = ['ASSEMBLYAI_API_KEY', 'OPENAI_API_KEY'];
+function loadRuntimeOverrideEnv(userDataDir) {
+    const envPath = path.join(userDataDir, RUNTIME_ENV_FILE);
+    if (!fs.existsSync(envPath)) {
+        return {};
+    }
+    const parsed = dotenv.parse(fs.readFileSync(envPath));
+    const overrides = {};
+    for (const key of RUNTIME_ENV_KEYS) {
+        const value = parsed[key]?.trim();
+        if (value) {
+            overrides[key] = value;
+        }
+    }
+    return overrides;
+}
+function buildBackendEnv(dataDir, userDataDir = path.dirname(dataDir)) {
+    const runtimeOverrides = loadRuntimeOverrideEnv(userDataDir);
+    const backendEnv = {
+        ...process.env,
+        ...runtimeOverrides,
+        DATABASE_URL: `sqlite+aiosqlite:///${path.join(dataDir, 'meetings.db').replace(/\\/g, '/')}`,
+        LOCAL_STORAGE_DIR: path.join(dataDir, 'audio'),
+        STORAGE_BACKEND: 'local',
+        BACKEND_HOST: '127.0.0.1',
+        BACKEND_PORT: String((0, runtime_paths_1.getBackendPort)()),
+    };
+    const presentKeys = RUNTIME_ENV_KEYS.filter((key) => Boolean(backendEnv[key]));
+    console.log(`[backend] Runtime AI config present: ${presentKeys.length ? presentKeys.join(', ') : 'none'}`);
+    return backendEnv;
+}
 /**
  * Start the bundled FastAPI backend and wait until it responds to /health.
  * Rejects if the backend fails to start within the timeout.
@@ -54,17 +89,7 @@ async function startBackend(timeoutMs = 30000) {
     // Ensure the writable data directory exists (for SQLite DB + audio files)
     const dataDir = (0, runtime_paths_1.getBackendDataDir)();
     fs.mkdirSync(dataDir, { recursive: true });
-    // Build environment for the backend process.
-    // In packaged mode, pass env vars that override defaults in config.py
-    // so the backend writes to a writable location, not Program Files.
-    const backendEnv = {
-        ...process.env,
-        DATABASE_URL: `sqlite+aiosqlite:///${path.join(dataDir, 'meetings.db').replace(/\\/g, '/')}`,
-        LOCAL_STORAGE_DIR: path.join(dataDir, 'audio'),
-        STORAGE_BACKEND: 'local',
-        BACKEND_HOST: '127.0.0.1',
-        BACKEND_PORT: String(port),
-    };
+    const backendEnv = buildBackendEnv(dataDir);
     console.log(`[backend] Spawning: ${pythonPath} -m uvicorn app.main:app --host 127.0.0.1 --port ${port}`);
     console.log(`[backend] Working directory: ${backendDir}`);
     console.log(`[backend] Data directory: ${dataDir}`);

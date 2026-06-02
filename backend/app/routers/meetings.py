@@ -414,6 +414,7 @@ async def upload_meeting(
             title=meeting_metadata.meeting_title,
             scheduled_time=normalize_scheduled_time(meeting_metadata.scheduled_time),
             status=MeetingStatus.PROCESSING,
+            processing_error=None,
             audio_blob_url=blob_path,
             user_id=current_user.id,
             identity_hints=identity_hints,
@@ -539,6 +540,7 @@ async def list_meetings(
             scheduled_time=m.scheduled_time,
             duration_seconds=m.duration_seconds,
             status=m.status.value,
+            processing_error=cast(Any, m).processing_error,
             participant_count=participant_count or 0,
             has_summary=(summary_count or 0) > 0,
             created_at=m.created_at,
@@ -726,6 +728,7 @@ async def get_meeting(
         scheduled_time=meeting.scheduled_time,
         duration_seconds=meeting.duration_seconds,
         status=meeting.status.value,
+        processing_error=cast(Any, meeting).processing_error,
         audio_url=audio_url,
         created_at=meeting.created_at,
         participants=[
@@ -818,6 +821,7 @@ async def retry_meeting(
         )
 
     meeting.status = MeetingStatus.PROCESSING
+    cast(Any, meeting).processing_error = None
     await db.commit()
 
     enqueue_meeting(meeting.id)

@@ -80,6 +80,7 @@ class MeetingListItem(BaseModel):
     date: Optional[datetime] = Field(None, alias="scheduled_time")
     duration: Optional[int] = Field(None, alias="duration_seconds")
     status: str
+    processing_error: Optional[str] = None
     participant_count: int
     has_summary: bool
     created_at: datetime
@@ -236,6 +237,7 @@ class MeetingDetailResponse(BaseModel):
     scheduled_time: Optional[datetime] = None
     duration_seconds: Optional[int] = None
     status: str
+    processing_error: Optional[str] = None
     audio_url: Optional[str] = None
     created_at: datetime
 

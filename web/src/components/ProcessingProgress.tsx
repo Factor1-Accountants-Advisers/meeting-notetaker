@@ -8,6 +8,7 @@ import { useState } from "react";
 interface ProcessingProgressProps {
   meetingId: number;
   status: string;
+  error?: string | null;
 }
 
 type StepState = "done" | "active" | "pending";
@@ -39,6 +40,7 @@ function getSteps(status: string): PipelineStep[] {
 export default function ProcessingProgress({
   meetingId,
   status,
+  error,
 }: ProcessingProgressProps) {
   const { mutate } = useSWRConfig();
   const [retrying, setRetrying] = useState(false);
@@ -69,7 +71,7 @@ export default function ProcessingProgress({
           </h3>
         </div>
         <p className="mb-3 text-xs text-[color:var(--text-secondary)]">
-          Something went wrong while processing your meeting. You can try again.
+          {error || "Something went wrong while processing your meeting. Your recording is saved, so you can try processing it again."}
         </p>
         <button
           onClick={handleRetry}
@@ -92,6 +94,9 @@ export default function ProcessingProgress({
           Processing your meeting...
         </h3>
       </div>
+      <p className="mb-4 text-xs leading-5 text-[color:var(--text-secondary)]">
+        We’ll keep this page updated from upload through transcript, summary, and action items.
+      </p>
 
       <div className="space-y-3">
         {steps.map((step, i) => (

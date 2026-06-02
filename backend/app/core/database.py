@@ -92,6 +92,12 @@ def upgrade_sqlite_schema(connection: Connection) -> None:
         _sqlite_add_column_if_missing(
             connection,
             "meetings",
+            "processing_error",
+            "processing_error TEXT",
+        )
+        _sqlite_add_column_if_missing(
+            connection,
+            "meetings",
             "needs_speaker_review",
             "needs_speaker_review BOOLEAN NOT NULL DEFAULT 0",
         )

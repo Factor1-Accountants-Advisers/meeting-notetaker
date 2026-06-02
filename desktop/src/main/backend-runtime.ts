@@ -3,8 +3,50 @@ import { getPythonPath, getBackendDir, getBackendPort, getBackendUrl, getBackend
 import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as dotenv from 'dotenv';
 
 let backendProcess: ChildProcess | null = null;
+
+const RUNTIME_ENV_FILE = '.env.production.local';
+const RUNTIME_ENV_KEYS = ['ASSEMBLYAI_API_KEY', 'OPENAI_API_KEY'] as const;
+
+type RuntimeEnvKey = typeof RUNTIME_ENV_KEYS[number];
+type RuntimeOverrideEnv = Partial<Record<RuntimeEnvKey, string>>;
+
+export function loadRuntimeOverrideEnv(userDataDir: string): RuntimeOverrideEnv {
+  const envPath = path.join(userDataDir, RUNTIME_ENV_FILE);
+  if (!fs.existsSync(envPath)) {
+    return {};
+  }
+
+  const parsed = dotenv.parse(fs.readFileSync(envPath));
+  const overrides: RuntimeOverrideEnv = {};
+  for (const key of RUNTIME_ENV_KEYS) {
+    const value = parsed[key]?.trim();
+    if (value) {
+      overrides[key] = value;
+    }
+  }
+  return overrides;
+}
+
+export function buildBackendEnv(dataDir: string, userDataDir = path.dirname(dataDir)): Record<string, string> {
+  const runtimeOverrides = loadRuntimeOverrideEnv(userDataDir);
+  const backendEnv: Record<string, string> = {
+    ...process.env as Record<string, string>,
+    ...runtimeOverrides,
+    DATABASE_URL: `sqlite+aiosqlite:///${path.join(dataDir, 'meetings.db').replace(/\\/g, '/')}`,
+    LOCAL_STORAGE_DIR: path.join(dataDir, 'audio'),
+    STORAGE_BACKEND: 'local',
+    BACKEND_HOST: '127.0.0.1',
+    BACKEND_PORT: String(getBackendPort()),
+  };
+
+  const presentKeys = RUNTIME_ENV_KEYS.filter((key) => Boolean(backendEnv[key]));
+  console.log(`[backend] Runtime AI config present: ${presentKeys.length ? presentKeys.join(', ') : 'none'}`);
+
+  return backendEnv;
+}
 
 /**
  * Start the bundled FastAPI backend and wait until it responds to /health.
@@ -21,17 +63,7 @@ export async function startBackend(timeoutMs = 30_000): Promise<void> {
   const dataDir = getBackendDataDir();
   fs.mkdirSync(dataDir, { recursive: true });
 
-  // Build environment for the backend process.
-  // In packaged mode, pass env vars that override defaults in config.py
-  // so the backend writes to a writable location, not Program Files.
-  const backendEnv: Record<string, string> = {
-    ...process.env as Record<string, string>,
-    DATABASE_URL: `sqlite+aiosqlite:///${path.join(dataDir, 'meetings.db').replace(/\\/g, '/')}`,
-    LOCAL_STORAGE_DIR: path.join(dataDir, 'audio'),
-    STORAGE_BACKEND: 'local',
-    BACKEND_HOST: '127.0.0.1',
-    BACKEND_PORT: String(port),
-  };
+  const backendEnv = buildBackendEnv(dataDir);
 
   console.log(`[backend] Spawning: ${pythonPath} -m uvicorn app.main:app --host 127.0.0.1 --port ${port}`);
   console.log(`[backend] Working directory: ${backendDir}`);

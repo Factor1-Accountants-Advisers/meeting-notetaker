@@ -22,6 +22,7 @@ def test_upgrade_sqlite_schema_adds_review_columns_to_existing_desktop_db():
 
         assert "speaker_mappings" in inspector.get_table_names()
         assert {
+            "processing_error",
             "needs_speaker_review",
             "speaker_review_completed_at",
             "speaker_mapping_quality",

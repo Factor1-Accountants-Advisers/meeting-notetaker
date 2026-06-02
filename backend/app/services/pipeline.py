@@ -11,7 +11,7 @@ remain exported as a compatibility layer for legacy tests and integrations.
 import asyncio
 import logging
 import os
-from typing import Optional
+from typing import Optional, Any, cast
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
@@ -44,12 +44,17 @@ def SyncSessionLocal():
     return _get_sync_session_factory()()
 
 
-def update_meeting_status(meeting_id: int, status: MeetingStatus) -> None:
+def update_meeting_status(
+    meeting_id: int,
+    status: MeetingStatus,
+    processing_error: str | None = None,
+) -> None:
     """Update meeting status in database."""
     with SyncSessionLocal() as session:
         meeting = session.query(Meeting).filter(Meeting.id == meeting_id).first()
         if meeting:
             meeting.status = status
+            cast(Any, meeting).processing_error = processing_error
             session.commit()
             logger.info(f"Meeting {meeting_id} status updated to {status.value}")
 
@@ -85,7 +90,7 @@ def _run_pipeline_sync(meeting_id: int) -> dict:
 
     except Exception as e:
         logger.error(f"Pipeline failed for meeting {meeting_id}: {e}")
-        update_meeting_status(meeting_id, MeetingStatus.FAILED)
+        update_meeting_status(meeting_id, MeetingStatus.FAILED, str(e))
         return {"meeting_id": meeting_id, "status": "failed", "error": str(e)}
 
 

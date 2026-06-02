@@ -172,7 +172,7 @@ export default function MeetingDetailContent({
     }
   }
 
-  const isProcessing = m.status !== "complete" && m.status !== "failed";
+  const showProcessingProgress = m.status !== "complete";
   const diagnostics = m.diarization_diagnostics;
   const hasDiagnostics = Boolean(diagnostics && Object.keys(diagnostics).length > 0);
   const detectedSpeakerCount = getDiagnosticNumber(diagnostics, "detected_speaker_count");
@@ -227,6 +227,9 @@ export default function MeetingDetailContent({
           <p className="text-sm font-medium text-[color:var(--text-primary)]">
             Some speaker labels are uncertain. Review them to improve action item ownership.
           </p>
+          <h2 className="mt-1 text-lg font-semibold text-[color:var(--text-primary)]">
+            Review speakers
+          </h2>
           {speakerReviewError ? (
             <p className="mt-2 text-sm text-[color:var(--danger)]" role="alert">
               {speakerReviewError}
@@ -280,9 +283,9 @@ export default function MeetingDetailContent({
       )}
 
       {/* Processing progress */}
-      {isProcessing && (
+      {showProcessingProgress && (
         <div className="mt-6">
-          <ProcessingProgress meetingId={m.id} status={m.status} />
+          <ProcessingProgress meetingId={m.id} status={m.status} error={m.processing_error} />
         </div>
       )}
 
@@ -322,6 +325,10 @@ export default function MeetingDetailContent({
               </div>
             )}
           </div>
+        ) : m.status === "failed" ? (
+          <p className="text-sm text-[color:var(--text-secondary)]">
+            Summary was not generated because processing failed. Retry processing above after fixing the issue.
+          </p>
         ) : (
           <SkeletonBlock lines={4} />
         )}
@@ -340,6 +347,10 @@ export default function MeetingDetailContent({
         </div>
         {m.action_items.length > 0 || m.status === "complete" ? (
           <ActionItemsTable items={m.action_items} />
+        ) : m.status === "failed" ? (
+          <p className="text-sm text-[color:var(--text-secondary)]">
+            Action items were not extracted because processing failed.
+          </p>
         ) : (
           <SkeletonBlock lines={3} />
         )}
@@ -399,6 +410,10 @@ export default function MeetingDetailContent({
           </div>
         ) : m.status === "complete" ? (
           <p className="text-sm italic text-[color:var(--text-secondary)]">No transcript available</p>
+        ) : m.status === "failed" ? (
+          <p className="text-sm text-[color:var(--text-secondary)]">
+            Transcript was not created because processing failed.
+          </p>
         ) : (
           <SkeletonBlock lines={5} />
         )}

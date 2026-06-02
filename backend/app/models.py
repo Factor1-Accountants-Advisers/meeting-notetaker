@@ -80,6 +80,7 @@ class Meeting(Base):
     scheduled_time = Column(DateTime, nullable=True)
     duration_seconds = Column(Integer, nullable=True)
     status = Column(Enum(MeetingStatus, values_callable=lambda e: [x.value for x in e]), default=MeetingStatus.PROCESSING, nullable=False, index=True)
+    processing_error = Column(Text, nullable=True)
     audio_blob_url = Column(String, nullable=True)
     identity_hints = Column(JSONType, nullable=True)  # {current_user, organizer, source_event_id}
     needs_speaker_review = Column(Boolean, default=False, nullable=False, index=True)

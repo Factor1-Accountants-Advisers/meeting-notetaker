@@ -10,6 +10,7 @@ export interface MeetingListItem {
   scheduled_time: string | null;
   duration_seconds: number | null;
   status: string;
+  processing_error?: string | null;
   participant_count: number;
   has_summary: boolean;
   created_at: string;
@@ -122,6 +123,7 @@ export interface MeetingDetail {
   scheduled_time: string | null;
   duration_seconds: number | null;
   status: string;
+  processing_error: string | null;
   audio_url: string | null;
   created_at: string;
   participants: Participant[];
