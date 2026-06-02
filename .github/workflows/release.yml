@@ -268,6 +268,17 @@ jobs:
           }
           Write-Host "✓ python-runtime is healthy"
 
+      - name: Package python-runtime archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $runtimeDir = Join-Path $env:GITHUB_WORKSPACE "desktop" "python-runtime"
+          $archive = Join-Path $env:GITHUB_WORKSPACE "desktop" "python-runtime.zip"
+          if (Test-Path $archive) { Remove-Item $archive -Force }
+          Compress-Archive -Path (Join-Path $runtimeDir '*') -DestinationPath $archive -CompressionLevel Optimal
+          $sizeMB = [Math]::Round((Get-Item $archive).Length / 1MB, 2)
+          Write-Host "✓ python-runtime.zip written ($sizeMB MB)"
+
       # ── Production environment ─────────────────────────────────────────────
       - name: Create .env.production
         shell: pwsh
@@ -346,7 +357,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $unpackedDir   = Join-Path $env:GITHUB_WORKSPACE "desktop" "release" "win-unpacked"
           $resourcesDir  = Join-Path $unpackedDir "resources"
-          $pythonInInstaller = Join-Path $resourcesDir "python" "python.exe"
+          $pythonArchiveInInstaller = Join-Path $resourcesDir "python-runtime.zip"
           $backendInInstaller = Join-Path $resourcesDir "backend" "app" "main.py"
           $envInInstaller = Join-Path $resourcesDir ".env.production"
 
@@ -375,8 +386,8 @@ jobs:
 
           Write-Host ""
           $allOk = $true
-          if (Test-Path $pythonInInstaller) { Write-Host "  ✓ resources/python/python.exe present" }
-                                  else { Write-Host "  ❌ resources/python/python.exe MISSING" ; $allOk = $false }
+          if (Test-Path $pythonArchiveInInstaller) { Write-Host "  ✓ resources/python-runtime.zip present" }
+                                  else { Write-Host "  ❌ resources/python-runtime.zip MISSING" ; $allOk = $false }
           if (Test-Path $backendInInstaller) { Write-Host "  ✓ resources/backend/app/main.py present" }
                                   else { Write-Host "  ❌ resources/backend/app/main.py MISSING" ; $allOk = $false }
           if (Test-Path $envInInstaller) { Write-Host "  ✓ resources/.env.production present" }

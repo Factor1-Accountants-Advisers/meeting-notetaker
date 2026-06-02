@@ -84,6 +84,7 @@ function buildBackendEnv(dataDir, userDataDir = path.dirname(dataDir)) {
 async function startBackend(timeoutMs = 30000) {
     if (backendProcess)
         return; // Already running
+    (0, runtime_paths_1.ensurePackagedPythonRuntime)();
     const pythonPath = (0, runtime_paths_1.getPythonPath)();
     const backendDir = (0, runtime_paths_1.getBackendDir)();
     const port = (0, runtime_paths_1.getBackendPort)();

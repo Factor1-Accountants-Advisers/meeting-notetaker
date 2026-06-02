@@ -1,6 +1,8 @@
 import { app } from 'electron';
 import * as path from 'path';
 import * as dotenv from 'dotenv';
+import * as fs from 'fs';
+import { spawnSync, type SpawnSyncReturns } from 'child_process';
 
 /**
  * Resolve paths and environment for both dev and packaged modes.
@@ -14,6 +16,46 @@ import * as dotenv from 'dotenv';
  */
 
 const PACKAGED_BACKEND_PORT = 38742;
+
+type RuntimeArchiveRunner = typeof spawnSync;
+
+export function getPackagedPythonRuntimeDir(): string {
+  return path.join(app.getPath('userData'), 'python-runtime');
+}
+
+export function getPackagedPythonArchivePath(): string {
+  return path.join(process.resourcesPath, 'python-runtime.zip');
+}
+
+export function ensurePackagedPythonRuntime(run: RuntimeArchiveRunner = spawnSync): void {
+  if (!app.isPackaged) return;
+
+  const runtimeDir = getPackagedPythonRuntimeDir();
+  const pythonExe = path.join(runtimeDir, 'python.exe');
+  if (fs.existsSync(pythonExe)) return;
+
+  const archivePath = getPackagedPythonArchivePath();
+  if (!fs.existsSync(archivePath)) {
+    throw new Error(`[runtime] Packaged Python archive missing: ${archivePath}`);
+  }
+
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  console.log(`[runtime] Extracting packaged Python runtime to ${runtimeDir}`);
+  const result: SpawnSyncReturns<string> = run('powershell.exe', [
+    '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-Command',
+    `$ErrorActionPreference='Stop'; Expand-Archive -Path ${JSON.stringify(archivePath)} -DestinationPath ${JSON.stringify(runtimeDir)} -Force`,
+  ], {
+    windowsHide: true,
+    encoding: 'utf8',
+  });
+
+  if (result.status !== 0 || !fs.existsSync(pythonExe)) {
+    throw new Error(`[runtime] Failed to extract packaged Python runtime: ${result.stderr || result.error?.message || `exit ${result.status}`}`);
+  }
+}
 
 /** Load env vars appropriate to the current mode. */
 export function loadEnv(): void {
@@ -44,7 +86,7 @@ export function getBackendPort(): number {
 /** Path to the bundled Python interpreter (extraResources/python/). */
 export function getPythonPath(): string {
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'python', 'python.exe');
+    return path.join(getPackagedPythonRuntimeDir(), 'python.exe');
   }
   return process.env.PYTHON_PATH ?? 'python';
 }

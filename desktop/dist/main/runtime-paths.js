@@ -33,6 +33,9 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.getPackagedPythonRuntimeDir = getPackagedPythonRuntimeDir;
+exports.getPackagedPythonArchivePath = getPackagedPythonArchivePath;
+exports.ensurePackagedPythonRuntime = ensurePackagedPythonRuntime;
 exports.loadEnv = loadEnv;
 exports.getBackendUrl = getBackendUrl;
 exports.getBackendPort = getBackendPort;
@@ -42,6 +45,8 @@ exports.getBackendDataDir = getBackendDataDir;
 const electron_1 = require("electron");
 const path = __importStar(require("path"));
 const dotenv = __importStar(require("dotenv"));
+const fs = __importStar(require("fs"));
+const child_process_1 = require("child_process");
 /**
  * Resolve paths and environment for both dev and packaged modes.
  *
@@ -53,6 +58,39 @@ const dotenv = __importStar(require("dotenv"));
  *   .env.production     — Packaged env config (extraResources)
  */
 const PACKAGED_BACKEND_PORT = 38742;
+function getPackagedPythonRuntimeDir() {
+    return path.join(electron_1.app.getPath('userData'), 'python-runtime');
+}
+function getPackagedPythonArchivePath() {
+    return path.join(process.resourcesPath, 'python-runtime.zip');
+}
+function ensurePackagedPythonRuntime(run = child_process_1.spawnSync) {
+    if (!electron_1.app.isPackaged)
+        return;
+    const runtimeDir = getPackagedPythonRuntimeDir();
+    const pythonExe = path.join(runtimeDir, 'python.exe');
+    if (fs.existsSync(pythonExe))
+        return;
+    const archivePath = getPackagedPythonArchivePath();
+    if (!fs.existsSync(archivePath)) {
+        throw new Error(`[runtime] Packaged Python archive missing: ${archivePath}`);
+    }
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    console.log(`[runtime] Extracting packaged Python runtime to ${runtimeDir}`);
+    const result = run('powershell.exe', [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        `$ErrorActionPreference='Stop'; Expand-Archive -Path ${JSON.stringify(archivePath)} -DestinationPath ${JSON.stringify(runtimeDir)} -Force`,
+    ], {
+        windowsHide: true,
+        encoding: 'utf8',
+    });
+    if (result.status !== 0 || !fs.existsSync(pythonExe)) {
+        throw new Error(`[runtime] Failed to extract packaged Python runtime: ${result.stderr || result.error?.message || `exit ${result.status}`}`);
+    }
+}
 /** Load env vars appropriate to the current mode. */
 function loadEnv() {
     if (electron_1.app.isPackaged) {
@@ -80,7 +118,7 @@ function getBackendPort() {
 /** Path to the bundled Python interpreter (extraResources/python/). */
 function getPythonPath() {
     if (electron_1.app.isPackaged) {
-        return path.join(process.resourcesPath, 'python', 'python.exe');
+        return path.join(getPackagedPythonRuntimeDir(), 'python.exe');
     }
     return process.env.PYTHON_PATH ?? 'python';
 }

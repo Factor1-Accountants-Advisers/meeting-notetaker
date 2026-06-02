@@ -1,5 +1,5 @@
 import { ChildProcess, spawn, spawnSync, SpawnSyncReturns } from 'child_process';
-import { getPythonPath, getBackendDir, getBackendPort, getBackendUrl, getBackendDataDir } from './runtime-paths';
+import { getPythonPath, getBackendDir, getBackendPort, getBackendUrl, getBackendDataDir, ensurePackagedPythonRuntime } from './runtime-paths';
 import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -55,6 +55,7 @@ export function buildBackendEnv(dataDir: string, userDataDir = path.dirname(data
 export async function startBackend(timeoutMs = 30_000): Promise<void> {
   if (backendProcess) return; // Already running
 
+  ensurePackagedPythonRuntime();
   const pythonPath = getPythonPath();
   const backendDir = getBackendDir();
   const port = getBackendPort();

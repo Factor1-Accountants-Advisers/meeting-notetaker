@@ -28,8 +28,8 @@ extraResources:
       - "!**/*.log"
       - "!tests/**"
       - "!data/**"
-  - from: python-runtime
-    to: python
+  - from: python-runtime.zip
+    to: python-runtime.zip
   - from: .env.production
     to: .env.production
 win:

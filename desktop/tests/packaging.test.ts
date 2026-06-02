@@ -12,6 +12,9 @@ describe('electron-builder backend packaging filters', () => {
     expect(config).toContain('!**/*.pyc');
     expect(config).toContain('!**/.venv/**');
     expect(config).toContain('!**/venv/**');
+    expect(config).toContain('from: python-runtime.zip');
+    expect(config).toContain('to: python-runtime.zip');
+    expect(config).not.toContain('to: python\n');
   });
 
   it('builds NSIS assets suitable for public GitHub electron-updater releases', () => {
