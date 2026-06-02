@@ -110,7 +110,7 @@ async function installDownloadedUpdate(): Promise<boolean> {
   }
 
   console.log('[updater] Installing downloaded update after user approval.');
-  autoUpdater.quitAndInstall(false, true);
+  autoUpdater.quitAndInstall(true, true);
   return true;
 }
 

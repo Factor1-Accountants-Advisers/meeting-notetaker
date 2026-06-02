@@ -73,7 +73,7 @@ async function installDownloadedUpdate() {
         return false;
     }
     console.log('[updater] Installing downloaded update after user approval.');
-    electron_updater_1.autoUpdater.quitAndInstall(false, true);
+    electron_updater_1.autoUpdater.quitAndInstall(true, true);
     return true;
 }
 function registerUpdaterHandlers() {

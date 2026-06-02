@@ -62,7 +62,7 @@ describe('prompt-only updater', () => {
       type: 'info',
       buttons: ['Restart now', 'Later'],
     }));
-    expect(mockQuitAndInstall).toHaveBeenCalledWith(false, true);
+    expect(mockQuitAndInstall).toHaveBeenCalledWith(true, true);
   });
 
   it('keeps the update pending when the user chooses Later', async () => {
