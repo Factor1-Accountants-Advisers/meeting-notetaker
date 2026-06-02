@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.loadRuntimeOverrideEnv = loadRuntimeOverrideEnv;
 exports.buildBackendEnv = buildBackendEnv;
 exports.startBackend = startBackend;
+exports.stopProcessTreeForWindows = stopProcessTreeForWindows;
 exports.stopBackend = stopBackend;
 const child_process_1 = require("child_process");
 const runtime_paths_1 = require("./runtime-paths");
@@ -112,15 +113,29 @@ async function startBackend(timeoutMs = 30000) {
     // Wait for /health to respond
     await waitForHealth((0, runtime_paths_1.getBackendUrl)(), timeoutMs);
 }
+function stopProcessTreeForWindows(pid, run = child_process_1.spawnSync) {
+    const result = run('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
+        windowsHide: true,
+        encoding: 'utf8',
+    });
+    if (result.status !== 0 && result.error) {
+        throw result.error;
+    }
+    return result;
+}
 /** Stop the backend process. Safe to call multiple times. */
-function stopBackend() {
+function stopBackend(options = {}) {
     if (!backendProcess)
         return;
-    console.log('[backend] Stopping backend process...');
+    const pid = backendProcess.pid;
+    console.log(`[backend] Stopping backend process${options.forceTree ? ' tree' : ''}...`);
     try {
-        // On Windows, child_process.kill() sends taskkill by default.
-        // tree-kill would be better, but for a single uvicorn process this works.
-        backendProcess.kill();
+        if (options.forceTree && process.platform === 'win32' && pid) {
+            stopProcessTreeForWindows(pid);
+        }
+        else {
+            backendProcess.kill();
+        }
     }
     catch (err) {
         console.warn('[backend] Error killing backend process:', err);

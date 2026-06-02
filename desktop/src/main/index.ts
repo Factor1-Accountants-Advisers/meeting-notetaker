@@ -141,6 +141,20 @@ app.on('before-quit', () => {
   isQuitting = true;
 });
 
+export function prepareForUpdateInstall(): void {
+  console.log('[shutdown] Preparing deterministic shutdown for updater install...');
+  isQuitting = true;
+  stopScheduler();
+  destroyTray();
+  destroyCaptureWindow();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.destroy();
+    mainWindow = null;
+  }
+  stopBackend({ forceTree: true });
+  console.log('[shutdown] Updater shutdown preparation complete.');
+}
+
 app.whenReady().then(async () => {
   registerIpcHandlers();
 
@@ -191,6 +205,7 @@ app.whenReady().then(async () => {
   const updater = initUpdater({
     isPackaged: app.isPackaged,
     isRecording,
+    prepareForInstall: prepareForUpdateInstall,
     onStateChange: () => syncTrayToRecordingState(),
   });
   setTrayUpdater(updater);

@@ -1,4 +1,4 @@
-import { ChildProcess, spawn } from 'child_process';
+import { ChildProcess, spawn, spawnSync, SpawnSyncReturns } from 'child_process';
 import { getPythonPath, getBackendDir, getBackendPort, getBackendUrl, getBackendDataDir } from './runtime-paths';
 import * as http from 'http';
 import * as fs from 'fs';
@@ -97,14 +97,35 @@ export async function startBackend(timeoutMs = 30_000): Promise<void> {
   await waitForHealth(getBackendUrl(), timeoutMs);
 }
 
+type ProcessTreeRunner = typeof spawnSync;
+
+export function stopProcessTreeForWindows(
+  pid: number,
+  run: ProcessTreeRunner = spawnSync,
+): SpawnSyncReturns<string> {
+  const result = run('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
+    windowsHide: true,
+    encoding: 'utf8',
+  });
+
+  if (result.status !== 0 && result.error) {
+    throw result.error;
+  }
+
+  return result;
+}
+
 /** Stop the backend process. Safe to call multiple times. */
-export function stopBackend(): void {
+export function stopBackend(options: { forceTree?: boolean } = {}): void {
   if (!backendProcess) return;
-  console.log('[backend] Stopping backend process...');
+  const pid = backendProcess.pid;
+  console.log(`[backend] Stopping backend process${options.forceTree ? ' tree' : ''}...`);
   try {
-    // On Windows, child_process.kill() sends taskkill by default.
-    // tree-kill would be better, but for a single uvicorn process this works.
-    backendProcess.kill();
+    if (options.forceTree && process.platform === 'win32' && pid) {
+      stopProcessTreeForWindows(pid);
+    } else {
+      backendProcess.kill();
+    }
   } catch (err) {
     console.warn('[backend] Error killing backend process:', err);
   }

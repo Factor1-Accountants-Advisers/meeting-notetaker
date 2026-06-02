@@ -52,7 +52,8 @@ describe('prompt-only updater', () => {
 
   it('prompts once when an update is downloaded and installs only when accepted', async () => {
     mockShowMessageBox.mockResolvedValue({ response: 0 });
-    initUpdater({ isPackaged: true, isRecording: () => false, checkIntervalMs: 0 });
+    const prepareForInstall = jest.fn().mockResolvedValue(undefined);
+    initUpdater({ isPackaged: true, isRecording: () => false, checkIntervalMs: 0, prepareForInstall });
 
     await handlerFor('update-downloaded')({ version: '1.1.6' });
     await handlerFor('update-downloaded')({ version: '1.1.6' });
@@ -62,6 +63,7 @@ describe('prompt-only updater', () => {
       type: 'info',
       buttons: ['Restart now', 'Later'],
     }));
+    expect(prepareForInstall).toHaveBeenCalledTimes(1);
     expect(mockQuitAndInstall).toHaveBeenCalledWith(true, true);
   });
 
@@ -87,6 +89,23 @@ describe('prompt-only updater', () => {
     expect(mockShowMessageBox).toHaveBeenCalledWith(expect.objectContaining({
       type: 'warning',
       message: expect.stringContaining('Finish your recording first'),
+    }));
+  });
+
+  it('does not launch the installer when shutdown preparation fails', async () => {
+    const prepareForInstall = jest.fn().mockRejectedValue(new Error('backend still running'));
+    const controller = initUpdater({ isPackaged: true, isRecording: () => false, checkIntervalMs: 0, prepareForInstall });
+
+    await handlerFor('update-downloaded')({ version: '1.1.6' });
+    const installed = await controller.installDownloadedUpdate();
+
+    expect(installed).toBe(false);
+    expect(prepareForInstall).toHaveBeenCalledTimes(1);
+    expect(mockQuitAndInstall).not.toHaveBeenCalled();
+    expect(mockShowMessageBox).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'error',
+      title: 'Update restart failed',
+      message: expect.stringContaining('backend still running'),
     }));
   });
 

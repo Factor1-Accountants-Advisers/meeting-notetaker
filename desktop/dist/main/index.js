@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.createMainWindow = createMainWindow;
 exports.showMainWindow = showMainWindow;
 exports.getMainWindow = getMainWindow;
+exports.prepareForUpdateInstall = prepareForUpdateInstall;
 const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
 const electron_1 = require("electron");
@@ -167,6 +168,19 @@ electron_1.app.on('window-all-closed', (e) => {
 electron_1.app.on('before-quit', () => {
     isQuitting = true;
 });
+function prepareForUpdateInstall() {
+    console.log('[shutdown] Preparing deterministic shutdown for updater install...');
+    isQuitting = true;
+    (0, scheduler_1.stopScheduler)();
+    (0, tray_1.destroyTray)();
+    (0, wasapi_capture_1.destroyCaptureWindow)();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.destroy();
+        mainWindow = null;
+    }
+    (0, backend_runtime_1.stopBackend)({ forceTree: true });
+    console.log('[shutdown] Updater shutdown preparation complete.');
+}
 electron_1.app.whenReady().then(async () => {
     (0, ipc_1.registerIpcHandlers)();
     // Initialize WASAPI capture (hidden renderer window + permission handlers).
@@ -208,6 +222,7 @@ electron_1.app.whenReady().then(async () => {
     const updater = (0, updater_1.initUpdater)({
         isPackaged: electron_1.app.isPackaged,
         isRecording: recorder_1.isRecording,
+        prepareForInstall: prepareForUpdateInstall,
         onStateChange: () => (0, tray_1.syncTrayToRecordingState)(),
     });
     (0, tray_1.setTrayUpdater)(updater);

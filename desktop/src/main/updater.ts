@@ -29,6 +29,7 @@ export interface UpdaterOptions {
   isRecording: () => boolean;
   checkIntervalMs?: number;
   onStateChange?: (state: UpdaterState) => void;
+  prepareForInstall?: () => void | Promise<void>;
 }
 
 const DEFAULT_CHECK_INTERVAL_MS = 4 * 3600000;
@@ -39,6 +40,7 @@ let promptShownForDownloadedUpdate = false;
 let manualCheckActive = false;
 let notifyStateChange: (state: UpdaterState) => void = () => {};
 let recordingGuard: () => boolean = () => false;
+let prepareForUpdateInstall: () => void | Promise<void> = () => {};
 
 function cloneState(): UpdaterState {
   return { ...state };
@@ -109,6 +111,22 @@ async function installDownloadedUpdate(): Promise<boolean> {
     return false;
   }
 
+  console.log('[updater] Preparing app shutdown for downloaded update.');
+  try {
+    await prepareForUpdateInstall();
+  } catch (err) {
+    const message = describeError(err);
+    console.warn('[updater] Update shutdown preparation failed:', message);
+    await dialog.showMessageBox({
+      type: 'error',
+      title: 'Update restart failed',
+      message: `Meeting Note-Taker could not safely restart for the update: ${message}`,
+      buttons: ['OK'],
+      defaultId: 0,
+    });
+    return false;
+  }
+
   console.log('[updater] Installing downloaded update after user approval.');
   autoUpdater.quitAndInstall(true, true);
   return true;
@@ -172,10 +190,12 @@ export function resetUpdaterStateForTests(): void {
   manualCheckActive = false;
   notifyStateChange = () => {};
   recordingGuard = () => false;
+  prepareForUpdateInstall = () => {};
 }
 
 export function initUpdater(options: UpdaterOptions): UpdaterController {
   recordingGuard = options.isRecording;
+  prepareForUpdateInstall = options.prepareForInstall ?? (() => {});
   notifyStateChange = options.onStateChange ?? (() => {});
 
   if (!initialized) {

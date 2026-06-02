@@ -7,7 +7,7 @@ jest.mock('electron', () => ({
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { buildBackendEnv, loadRuntimeOverrideEnv } from '../src/main/backend-runtime';
+import { buildBackendEnv, loadRuntimeOverrideEnv, stopProcessTreeForWindows } from '../src/main/backend-runtime';
 
 describe('backend-runtime environment loading', () => {
   const originalEnv = process.env;
@@ -52,5 +52,16 @@ describe('backend-runtime environment loading', () => {
     expect(env.OPENAI_API_KEY).toBe('openai-test-key');
     expect(env.DATABASE_URL).toContain('meetings.db');
     expect(env.STORAGE_BACKEND).toBe('local');
+  });
+
+  it('uses taskkill to stop a backend process tree on Windows update shutdown', () => {
+    const run = jest.fn(() => ({ status: 0, error: undefined, stderr: '' }));
+
+    stopProcessTreeForWindows(1234, run as any);
+
+    expect(run).toHaveBeenCalledWith('taskkill.exe', ['/PID', '1234', '/T', '/F'], expect.objectContaining({
+      windowsHide: true,
+      encoding: 'utf8',
+    }));
   });
 });

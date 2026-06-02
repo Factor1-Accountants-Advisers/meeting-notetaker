@@ -11,6 +11,7 @@ let promptShownForDownloadedUpdate = false;
 let manualCheckActive = false;
 let notifyStateChange = () => { };
 let recordingGuard = () => false;
+let prepareForUpdateInstall = () => { };
 function cloneState() {
     return { ...state };
 }
@@ -72,6 +73,22 @@ async function installDownloadedUpdate() {
         });
         return false;
     }
+    console.log('[updater] Preparing app shutdown for downloaded update.');
+    try {
+        await prepareForUpdateInstall();
+    }
+    catch (err) {
+        const message = describeError(err);
+        console.warn('[updater] Update shutdown preparation failed:', message);
+        await electron_1.dialog.showMessageBox({
+            type: 'error',
+            title: 'Update restart failed',
+            message: `Meeting Note-Taker could not safely restart for the update: ${message}`,
+            buttons: ['OK'],
+            defaultId: 0,
+        });
+        return false;
+    }
     console.log('[updater] Installing downloaded update after user approval.');
     electron_updater_1.autoUpdater.quitAndInstall(true, true);
     return true;
@@ -127,9 +144,11 @@ function resetUpdaterStateForTests() {
     manualCheckActive = false;
     notifyStateChange = () => { };
     recordingGuard = () => false;
+    prepareForUpdateInstall = () => { };
 }
 function initUpdater(options) {
     recordingGuard = options.isRecording;
+    prepareForUpdateInstall = options.prepareForInstall ?? (() => { });
     notifyStateChange = options.onStateChange ?? (() => { });
     if (!initialized) {
         registerUpdaterHandlers();
