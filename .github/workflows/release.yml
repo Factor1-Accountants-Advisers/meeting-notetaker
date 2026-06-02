@@ -412,23 +412,21 @@ jobs:
           }
           Write-Host "  ✓ resources/.env.production contains public config only"
 
-          # Verify the size of resources/python/ in win-unpacked. This is the
-          # real test that Python made it through electron-builder's pipeline.
-          # Installer file size is NOT a reliable proxy for completeness —
-          # compressed installers can vary widely for the same unpacked resources.
-          # Trust the unpacked contents, not the compressed size.
+          # Verify the packaged Python runtime archive in win-unpacked. We ship
+          # the runtime as one archive to avoid NSIS hanging while moving/deleting
+          # thousands of Python files during updater installs.
           $resourcesSizeMB = [Math]::Round(
             (Get-ChildItem $resourcesDir -Recurse -File | Measure-Object Length -Sum).Sum / 1MB,
             2
           )
-          $pythonSizeMB = if (Test-Path (Join-Path $resourcesDir "python")) {
-            [Math]::Round((Get-ChildItem (Join-Path $resourcesDir "python") -Recurse -File | Measure-Object Length -Sum).Sum / 1MB, 2)
+          $pythonArchiveSizeMB = if (Test-Path $pythonArchiveInInstaller) {
+            [Math]::Round((Get-Item $pythonArchiveInInstaller).Length / 1MB, 2)
           } else { 0 }
-          Write-Host "  resources/ total   : $resourcesSizeMB MB"
-          Write-Host "  resources/python/  : $pythonSizeMB MB"
+          Write-Host "  resources/ total           : $resourcesSizeMB MB"
+          Write-Host "  resources/python-runtime.zip: $pythonArchiveSizeMB MB"
 
-          if ($pythonSizeMB -lt 80) {
-            throw "resources/python/ is only $pythonSizeMB MB in win-unpacked — Python runtime is incomplete"
+          if ($pythonArchiveSizeMB -lt 40) {
+            throw "resources/python-runtime.zip is only $pythonArchiveSizeMB MB in win-unpacked — Python runtime archive is incomplete"
           }
 
           # Verify NSIS updater assets exist. latest.yml and blockmap are what
