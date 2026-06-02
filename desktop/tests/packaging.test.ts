@@ -17,6 +17,7 @@ describe('electron-builder backend packaging filters', () => {
     expect(config).toContain('target: nsis');
     expect(config).toContain('provider: github');
     expect(config).toContain('repo: meeting-notetaker');
+    expect(config).toContain('oneClick: true');
     expect(config).toContain('perMachine: false');
     expect(config).toContain('artifactName: "${productName} Setup ${version}.${ext}"');
     expect(config).not.toContain('target: msi');

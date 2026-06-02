@@ -38,7 +38,7 @@ win:
       arch: [x64]
   icon: assets/icon-installer.png
 nsis:
-  oneClick: false
+  oneClick: true
   perMachine: false
   allowToChangeInstallationDirectory: false
   artifactName: "${productName} Setup ${version}.${ext}"
