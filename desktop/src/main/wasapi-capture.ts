@@ -118,6 +118,18 @@ export function initializeWasapiCapture(): void {
 
   captureWindow.webContents.on('render-process-gone', (_e, details) => {
     console.error('[wasapi] capture window render-process-gone:', details);
+    // Recreate the capture window so recording can resume without an app restart.
+    // Without this, any subsequent record attempt fails with "capture window is not available".
+    // Only recreate when there is no active recording — if a recording was in progress,
+    // the wasapi:error IPC will fire next and handle cleanup.
+    const wasRecording = activeRecording !== null;
+    captureWindow = null;
+    captureWindowReady = null;
+    if (!wasRecording) {
+      initializeWasapiCapture();
+    } else {
+      console.log('[wasapi] recording was active during crash — deferring window recreate until after cleanup');
+    }
   });
 
   // IPC from the capture renderer
@@ -137,6 +149,15 @@ export function initializeWasapiCapture(): void {
       activeRecording.reject(new Error(message));
       cleanupRecording();
     }
+    // The capture window's renderer may be in a bad state. Recreate it so the
+    // next record attempt starts fresh instead of hitting "capture window is
+    // not available".
+    if (captureWindow && !captureWindow.isDestroyed()) {
+      captureWindow.destroy();
+    }
+    captureWindow = null;
+    captureWindowReady = null;
+    initializeWasapiCapture();
   });
 
   if (!app.isPackaged && process.env.OPEN_WASAPI_DEVTOOLS === '1') {
@@ -151,7 +172,19 @@ export function initializeWasapiCapture(): void {
  */
 export async function startWasapiCapture(wavOutputPath: string): Promise<void> {
   if (!captureWindow || captureWindow.isDestroyed()) {
-    throw new Error('[wasapi] capture window is not available');
+    // Capture window was destroyed (likely renderer crash). Recreate it and try again.
+    console.log('[wasapi] capture window not available — recreating');
+    initializeWasapiCapture();
+    // Wait for the new window to be ready before proceeding
+    if (captureWindowReady) {
+      await captureWindowReady;
+    }
+    if (!captureWindow) {
+      throw new Error('[wasapi] capture window is not available');
+    }
+    if (captureWindow.isDestroyed()) {
+      throw new Error('[wasapi] capture window is not available');
+    }
   }
   if (activeRecording) {
     throw new Error('[wasapi] a recording is already active');
