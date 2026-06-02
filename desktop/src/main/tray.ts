@@ -4,6 +4,7 @@ import { startRecording, stopRecording, isRecording, getRecordingStatus } from '
 import { acquireIdToken } from './auth';
 import { uploadRecording, AttendeeMetadata, MeetingMetadata } from './uploader';
 import { getMainWindow } from './index';
+import type { UpdaterController } from './updater';
 
 const IDLE_ICON = path.join(__dirname, '../../assets/icon-idle.png');
 const RECORDING_ICON = path.join(__dirname, '../../assets/icon-recording.png');
@@ -19,6 +20,7 @@ let _loopbackName = '';
 let _pendingTitle = '';
 let _pendingAttendees: AttendeeMetadata[] = [];
 let _pendingScheduledTime: string | undefined;
+let _updater: UpdaterController | null = null;
 
 export interface TrayConfig {
   backendUrl: string;
@@ -46,6 +48,11 @@ export function setPendingMeeting(title: string, attendees: AttendeeMetadata[], 
   _pendingScheduledTime = scheduledTime;
 }
 
+export function setTrayUpdater(controller: UpdaterController): void {
+  _updater = controller;
+  rebuildMenu();
+}
+
 export function createTray(config: TrayConfig): Tray {
   _backendUrl = config.backendUrl;
   _onOpenApp = config.onOpenApp;
@@ -63,10 +70,28 @@ export function createTray(config: TrayConfig): Tray {
 function rebuildMenu(): void {
   if (!tray) return;
   const recording = isRecording();
+  const updaterState = _updater?.getState();
+  const updateItems = _updater
+    ? [
+        {
+          label: updaterState?.downloaded ? 'Restart to update' : 'Check for updates',
+          click: () => {
+            if (updaterState?.downloaded) {
+              void _updater?.installDownloadedUpdate();
+            } else {
+              void _updater?.checkForUpdates(true);
+            }
+          },
+        },
+      ]
+    : [];
+
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Start Recording', enabled: !recording, click: handleStartRecording },
     { label: 'Stop Recording', enabled: recording, click: handleStopRecording },
     { type: 'separator' },
+    ...updateItems,
+    ...(updateItems.length ? [{ type: 'separator' } as const] : []),
     { label: 'Open App', click: () => _onOpenApp() },
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },

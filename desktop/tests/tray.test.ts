@@ -43,7 +43,7 @@ jest.mock('../src/main/uploader', () => ({
   uploadRecording: jest.fn(),
 }));
 
-import { createTray, setPendingMeeting } from '../src/main/tray';
+import { createTray, setPendingMeeting, setTrayUpdater } from '../src/main/tray';
 import { acquireIdToken } from '../src/main/auth';
 import { startRecording, stopRecording } from '../src/main/recorder';
 import { uploadRecording } from '../src/main/uploader';
@@ -110,5 +110,40 @@ describe('tray recording flow', () => {
         scheduled_time: '2026-03-30T03:00:00Z',
       },
     });
+  });
+
+  it('adds update actions to the tray menu and switches to restart when downloaded', async () => {
+    const checkForUpdates = jest.fn();
+    const installDownloadedUpdate = jest.fn();
+    let downloaded = false;
+
+    createTray({
+      backendUrl: 'http://localhost:8000',
+      recordingOutputDir: 'C:/tmp',
+      micName: 'Mic',
+      loopbackName: 'Loop',
+      onOpenApp: jest.fn(),
+    });
+
+    setTrayUpdater({
+      checkForUpdates,
+      installDownloadedUpdate,
+      getState: () => ({ status: downloaded ? 'downloaded' : 'idle', downloaded }),
+    });
+
+    let template = mockBuildFromTemplate.mock.calls.at(-1)?.[0];
+    await template.find((item: { label: string }) => item.label === 'Check for updates').click();
+    expect(checkForUpdates).toHaveBeenCalledWith(true);
+
+    downloaded = true;
+    setTrayUpdater({
+      checkForUpdates,
+      installDownloadedUpdate,
+      getState: () => ({ status: 'downloaded', downloaded: true }),
+    });
+
+    template = mockBuildFromTemplate.mock.calls.at(-1)?.[0];
+    await template.find((item: { label: string }) => item.label === 'Restart to update').click();
+    expect(installDownloadedUpdate).toHaveBeenCalled();
   });
 });

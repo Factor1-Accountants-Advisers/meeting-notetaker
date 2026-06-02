@@ -1,14 +1,15 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import { app, BrowserWindow, protocol } from 'electron';
-import { autoUpdater } from 'electron-updater';
-import { createTray, destroyTray, updateTrayDevices } from './tray';
+import { createTray, destroyTray, updateTrayDevices, setTrayUpdater, syncTrayToRecordingState } from './tray';
 import { registerIpcHandlers, listAudioDevices, pickDefaultDevices } from './ipc';
 import { registerAppProtocol } from './protocol';
 import { startScheduler, stopScheduler } from './scheduler';
 import { getBackendUrl, loadEnv } from './runtime-paths';
 import { startBackend, stopBackend } from './backend-runtime';
 import { initializeWasapiCapture, destroyCaptureWindow } from './wasapi-capture';
+import { isRecording } from './recorder';
+import { initUpdater } from './updater';
 
 // Load environment — must happen before anything reads process.env
 loadEnv();
@@ -187,13 +188,12 @@ app.whenReady().then(async () => {
 
   startScheduler();
 
-  if (app.isPackaged) {
-    autoUpdater.on('error', (err) => {
-      console.warn('[updater] Auto-update check failed (non-fatal):', err.message);
-    });
-    void autoUpdater.checkForUpdatesAndNotify();
-    setInterval(() => void autoUpdater.checkForUpdatesAndNotify(), 4 * 3600000);
-  }
+  const updater = initUpdater({
+    isPackaged: app.isPackaged,
+    isRecording,
+    onStateChange: () => syncTrayToRecordingState(),
+  });
+  setTrayUpdater(updater);
 });
 
 app.on('will-quit', () => {

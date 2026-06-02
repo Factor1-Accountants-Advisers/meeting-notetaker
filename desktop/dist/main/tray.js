@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.destroyTray = destroyTray;
 exports.updateTrayDevices = updateTrayDevices;
 exports.setPendingMeeting = setPendingMeeting;
+exports.setTrayUpdater = setTrayUpdater;
 exports.createTray = createTray;
 exports.syncTrayToRecordingState = syncTrayToRecordingState;
 exports.handleStartRecording = handleStartRecording;
@@ -57,6 +58,7 @@ let _loopbackName = '';
 let _pendingTitle = '';
 let _pendingAttendees = [];
 let _pendingScheduledTime;
+let _updater = null;
 function destroyTray() {
     if (tray && !tray.isDestroyed()) {
         tray.destroy();
@@ -71,6 +73,10 @@ function setPendingMeeting(title, attendees, scheduledTime) {
     _pendingTitle = title;
     _pendingAttendees = attendees;
     _pendingScheduledTime = scheduledTime;
+}
+function setTrayUpdater(controller) {
+    _updater = controller;
+    rebuildMenu();
 }
 function createTray(config) {
     _backendUrl = config.backendUrl;
@@ -88,10 +94,28 @@ function rebuildMenu() {
     if (!tray)
         return;
     const recording = (0, recorder_1.isRecording)();
+    const updaterState = _updater?.getState();
+    const updateItems = _updater
+        ? [
+            {
+                label: updaterState?.downloaded ? 'Restart to update' : 'Check for updates',
+                click: () => {
+                    if (updaterState?.downloaded) {
+                        void _updater?.installDownloadedUpdate();
+                    }
+                    else {
+                        void _updater?.checkForUpdates(true);
+                    }
+                },
+            },
+        ]
+        : [];
     tray.setContextMenu(electron_1.Menu.buildFromTemplate([
         { label: 'Start Recording', enabled: !recording, click: handleStartRecording },
         { label: 'Stop Recording', enabled: recording, click: handleStopRecording },
         { type: 'separator' },
+        ...updateItems,
+        ...(updateItems.length ? [{ type: 'separator' }] : []),
         { label: 'Open App', click: () => _onOpenApp() },
         { type: 'separator' },
         { label: 'Quit', click: () => electron_1.app.quit() },

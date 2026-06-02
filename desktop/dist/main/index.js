@@ -39,7 +39,6 @@ exports.getMainWindow = getMainWindow;
 const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
 const electron_1 = require("electron");
-const electron_updater_1 = require("electron-updater");
 const tray_1 = require("./tray");
 const ipc_1 = require("./ipc");
 const protocol_1 = require("./protocol");
@@ -47,6 +46,8 @@ const scheduler_1 = require("./scheduler");
 const runtime_paths_1 = require("./runtime-paths");
 const backend_runtime_1 = require("./backend-runtime");
 const wasapi_capture_1 = require("./wasapi-capture");
+const recorder_1 = require("./recorder");
+const updater_1 = require("./updater");
 // Load environment — must happen before anything reads process.env
 (0, runtime_paths_1.loadEnv)();
 // Mirror console output to a file in packaged mode. On Windows, console.log
@@ -204,13 +205,12 @@ electron_1.app.whenReady().then(async () => {
     })).catch((err) => console.warn('[startup] Audio device detection failed:', err));
     mainWindow = createMainWindow();
     (0, scheduler_1.startScheduler)();
-    if (electron_1.app.isPackaged) {
-        electron_updater_1.autoUpdater.on('error', (err) => {
-            console.warn('[updater] Auto-update check failed (non-fatal):', err.message);
-        });
-        void electron_updater_1.autoUpdater.checkForUpdatesAndNotify();
-        setInterval(() => void electron_updater_1.autoUpdater.checkForUpdatesAndNotify(), 4 * 3600000);
-    }
+    const updater = (0, updater_1.initUpdater)({
+        isPackaged: electron_1.app.isPackaged,
+        isRecording: recorder_1.isRecording,
+        onStateChange: () => (0, tray_1.syncTrayToRecordingState)(),
+    });
+    (0, tray_1.setTrayUpdater)(updater);
 });
 electron_1.app.on('will-quit', () => {
     (0, scheduler_1.stopScheduler)();
