@@ -1,6 +1,6 @@
 {
   "name": "meeting-notetaker-desktop",
-  "version": "1.1.14",
+  "version": "1.1.15",
   "description": "Meeting Note-Taker desktop agent",
   "main": "dist/main/index.js",
   "scripts": {
