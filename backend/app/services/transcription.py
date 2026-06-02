@@ -73,6 +73,7 @@ def download_audio(blob_path: str) -> str:
 def transcribe_audio(
     audio_path: str,
     participant_names: Optional[List[str]] = None,
+    speakers_expected: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Transcribe audio file using AssemblyAI with speaker diarisation.
 
@@ -83,6 +84,8 @@ def transcribe_audio(
     Args:
         audio_path: Path to the local audio file
         participant_names: Optional list of attendee names for speaker identification
+        speakers_expected: Optional exact number of speakers to hint to AssemblyAI.
+            Only set when the actual speaker count is strongly expected.
 
     Returns:
         Dictionary with 'text', 'segments', and 'speaker_identified' keys.
@@ -102,6 +105,9 @@ def transcribe_audio(
         "language_code": "en",
         "speech_models": ["universal-2"],
     }
+
+    if speakers_expected is not None:
+        config_kwargs["speakers_expected"] = speakers_expected
 
     # When we know participant names, enable Speaker Identification
     # so AssemblyAI returns real names instead of generic A/B/C labels.
@@ -213,6 +219,123 @@ def _add_detected_speaker_count(meeting: Meeting, detected_speaker_count: int) -
     cast(Any, meeting).diarization_diagnostics = diagnostics
 
 
+def _detected_speaker_count(transcription_result: Dict[str, Any]) -> int:
+    """Count distinct speaker labels returned by transcription, preserving safety for malformed data."""
+    labels: list[str] = []
+    for segment in transcription_result.get("segments") or []:
+        if not isinstance(segment, dict):
+            continue
+        speaker = segment.get("speaker")
+        if isinstance(speaker, str) and speaker.strip() and speaker not in labels:
+            labels.append(speaker)
+    return len(labels)
+
+
+def _set_diarization_retry_diagnostics(
+    meeting: Meeting,
+    *,
+    expected_speaker_count: int,
+    retry_used: bool,
+    reason: str,
+) -> None:
+    """Record why an AssemblyAI speaker-count retry did or did not replace the first result."""
+    diagnostics = dict(cast(Any, meeting).diarization_diagnostics or {})
+    diagnostics["expected_speaker_count"] = expected_speaker_count
+    diagnostics["diarization_retry_used"] = retry_used
+    diagnostics["diarization_retry_reason"] = reason
+    cast(Any, meeting).diarization_diagnostics = diagnostics
+
+
+def _retry_diagnostic_fields(meeting: Meeting) -> dict[str, Any]:
+    """Return retry diagnostics that should survive speaker-mapping refreshes."""
+    diagnostics = cast(Any, meeting).diarization_diagnostics or {}
+    if not isinstance(diagnostics, dict):
+        return {}
+    keys = {
+        "expected_speaker_count",
+        "diarization_retry_used",
+        "diarization_retry_reason",
+    }
+    return {key: diagnostics[key] for key in keys if key in diagnostics}
+
+
+def _restore_retry_diagnostic_fields(meeting: Meeting, retry_fields: dict[str, Any]) -> None:
+    if not retry_fields:
+        return
+    diagnostics = dict(cast(Any, meeting).diarization_diagnostics or {})
+    diagnostics.update(retry_fields)
+    cast(Any, meeting).diarization_diagnostics = diagnostics
+
+
+def _maybe_retry_two_participant_under_detection(
+    *,
+    meeting: Meeting,
+    local_audio_path: str,
+    participant_names: List[str],
+    participant_count: int,
+    transcription_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Retry AssemblyAI once when a 2-attendee meeting collapses into 1 speaker.
+
+    AssemblyAI supports `speakers_expected`, but its docs warn to use exact counts
+    only when confident. This guarded retry keeps the default open-ended diarization
+    first, then applies the exact-count hint only for the common two-person
+    under-detection case. The retry replaces the original only if it finds more
+    speaker labels.
+    """
+    expected_speaker_count = 2
+    detected = _detected_speaker_count(transcription_result)
+    if participant_count != expected_speaker_count or detected != 1:
+        return transcription_result
+
+    logger.info(
+        "Meeting %s: retrying AssemblyAI with speakers_expected=2 after detecting 1 speaker for 2 attendees",
+        meeting.id,
+    )
+    try:
+        retry_result = transcribe_audio(
+            local_audio_path,
+            participant_names=participant_names,
+            speakers_expected=expected_speaker_count,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Meeting %s: AssemblyAI speakers_expected retry failed; keeping original transcript: %s",
+            meeting.id,
+            exc,
+        )
+        _set_diarization_retry_diagnostics(
+            meeting,
+            expected_speaker_count=expected_speaker_count,
+            retry_used=False,
+            reason="retry_failed",
+        )
+        return transcription_result
+
+    retry_detected = _detected_speaker_count(retry_result)
+    if retry_detected > detected:
+        _set_diarization_retry_diagnostics(
+            meeting,
+            expected_speaker_count=expected_speaker_count,
+            retry_used=True,
+            reason="two_participants_one_speaker_detected",
+        )
+        return retry_result
+
+    logger.info(
+        "Meeting %s: speakers_expected retry still detected %s speaker(s); keeping original transcript",
+        meeting.id,
+        retry_detected,
+    )
+    _set_diarization_retry_diagnostics(
+        meeting,
+        expected_speaker_count=expected_speaker_count,
+        retry_used=False,
+        reason="retry_did_not_improve_speaker_count",
+    )
+    return transcription_result
+
+
 def _persist_initial_speaker_mapping_diagnostics(
     db: Session,
     meeting: Meeting,
@@ -228,6 +351,7 @@ def _persist_initial_speaker_mapping_diagnostics(
     mappings. All other labels remain unmapped so the review diagnostics flag
     them for human review without rewriting transcript segments.
     """
+    retry_fields = _retry_diagnostic_fields(meeting)
     labels = extract_speaker_labels(cast(Any, transcript).segments)
     detected_speaker_count = len(labels)
 
@@ -267,6 +391,7 @@ def _persist_initial_speaker_mapping_diagnostics(
     else:
         refresh_speaker_mapping_diagnostics(db, meeting)
 
+    _restore_retry_diagnostic_fields(meeting, retry_fields)
     _add_detected_speaker_count(meeting, detected_speaker_count)
     db.add(meeting)
     db.commit()
@@ -343,9 +468,18 @@ def process_transcription(db: Session, meeting_id: int) -> Transcript:
         logger.info(f"Downloading audio for meeting {meeting_id}")
         local_audio_path = download_audio(meeting.audio_blob_url)
 
-        # Transcribe + diarise via AssemblyAI (with speaker identification if names available)
+        # Transcribe + diarise via AssemblyAI (with speaker identification if names available).
+        # Run open-ended diarization first. If a simple two-attendee meeting collapses
+        # into one speaker label, retry once with AssemblyAI's exact speaker-count hint.
         logger.info(f"Transcribing meeting {meeting_id} via AssemblyAI")
         transcription_result = transcribe_audio(local_audio_path, participant_names=participant_names)
+        transcription_result = _maybe_retry_two_participant_under_detection(
+            meeting=meeting,
+            local_audio_path=local_audio_path,
+            participant_names=participant_names,
+            participant_count=len(participants),
+            transcription_result=transcription_result,
+        )
 
         # Save results
         transcript = save_transcript(db, meeting_id, transcription_result)

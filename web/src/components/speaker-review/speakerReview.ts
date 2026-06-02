@@ -3,7 +3,12 @@ import type { SpeakerMapping, TranscriptSegment } from "@/types";
 export type SpeakerReviewGroup = {
   speakerLabel: string;
   mapping: SpeakerMapping | null;
-  quotes: string[];
+  quotes: RepresentativeQuote[];
+};
+
+export type RepresentativeQuote = {
+  text: string;
+  start: number;
 };
 
 function resolveSpeakerLabel(segment: TranscriptSegment): string {
@@ -13,15 +18,18 @@ function resolveSpeakerLabel(segment: TranscriptSegment): string {
   return rawLabel || displayLabel || "Unknown speaker";
 }
 
-export function getRepresentativeQuotes(segments: TranscriptSegment[], max = 3): string[] {
+export function getRepresentativeQuotes(segments: TranscriptSegment[], max = 3): RepresentativeQuote[] {
   if (max <= 0) {
     return [];
   }
 
   return [...segments]
-    .map((segment) => segment.text.trim())
-    .filter((text) => text.length > 0)
-    .sort((a, b) => b.length - a.length)
+    .map((segment) => ({
+      text: segment.text.trim(),
+      start: segment.start,
+    }))
+    .filter((quote) => quote.text.length > 0)
+    .sort((a, b) => b.text.length - a.text.length)
     .slice(0, max);
 }
 

@@ -63,6 +63,11 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof SpeakerRevie
   return { onSave, rerender: result.rerender, props };
 }
 
+function chooseMapping(label: string, optionName: string | RegExp) {
+  fireEvent.click(screen.getByLabelText(`Mapping for ${label}`));
+  fireEvent.click(screen.getByRole("option", { name: optionName }));
+}
+
 describe("SpeakerReviewPanel", () => {
   it("renders one card per speaker label", () => {
     renderPanel();
@@ -72,9 +77,11 @@ describe("SpeakerReviewPanel", () => {
     expect(screen.getByRole("heading", { name: "SPEAKER_01" })).toBeVisible();
   });
 
-  it("shows representative quotes", () => {
+  it("shows representative quotes with timestamps", () => {
     renderPanel();
 
+    expect(screen.getByText("0:00")).toBeVisible();
+    expect(screen.getByText("0:05")).toBeVisible();
     expect(
       screen.getByText("We should launch the pilot with the existing customer group next week.")
     ).toBeVisible();
@@ -95,24 +102,20 @@ describe("SpeakerReviewPanel", () => {
   it("dropdown contains participants and current candidates", () => {
     renderPanel();
 
-    const speakerSelect = screen.getByLabelText("Mapping for SPEAKER_00");
-    expect(within(speakerSelect).getByRole("option", { name: "Unknown" })).toBeInTheDocument();
-    expect(
-      within(speakerSelect).getByRole("option", { name: "Alex Rivera (alex@example.com)" })
-    ).toBeInTheDocument();
-    expect(
-      within(speakerSelect).getByRole("option", { name: "Jordan Kim (jordan@example.com)" })
-    ).toBeInTheDocument();
-    expect(within(speakerSelect).getByRole("option", { name: "Custom name" })).toBeInTheDocument();
-    expect(speakerSelect).toHaveValue("participant:alex@example.com");
+    const speakerButton = screen.getByLabelText("Mapping for SPEAKER_00");
+    expect(speakerButton).toHaveTextContent("Alex Rivera (alex@example.com)");
+
+    fireEvent.click(speakerButton);
+    expect(screen.getByRole("option", { name: "Unknown" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /Alex Rivera/i })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /Jordan Kim/i })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Custom name" })).toBeInTheDocument();
   });
 
   it("save calls onSave with mapping updates", async () => {
     const { onSave } = renderPanel();
 
-    fireEvent.change(screen.getByLabelText("Mapping for SPEAKER_01"), {
-      target: { value: "participant:jordan@example.com" },
-    });
+    chooseMapping("SPEAKER_01", /Jordan Kim/i);
     fireEvent.click(screen.getByRole("button", { name: "Save mappings" }));
 
     await waitFor(() => {
@@ -140,9 +143,7 @@ describe("SpeakerReviewPanel", () => {
   it("allows Unknown mapping", async () => {
     const { onSave } = renderPanel();
 
-    fireEvent.change(screen.getByLabelText("Mapping for SPEAKER_00"), {
-      target: { value: "unknown" },
-    });
+    chooseMapping("SPEAKER_00", "Unknown");
     fireEvent.click(screen.getByRole("button", { name: "Save mappings" }));
 
     await waitFor(() => {
@@ -164,9 +165,7 @@ describe("SpeakerReviewPanel", () => {
   it("saves a custom display name without an email", async () => {
     const { onSave } = renderPanel();
 
-    fireEvent.change(screen.getByLabelText("Mapping for SPEAKER_01"), {
-      target: { value: "custom" },
-    });
+    chooseMapping("SPEAKER_01", "Custom name");
     fireEvent.change(screen.getByLabelText("Custom display name"), {
       target: { value: "Morgan Lee" },
     });
@@ -208,20 +207,19 @@ describe("SpeakerReviewPanel", () => {
     });
 
     const card = screen.getByRole("article", { name: /SPEAKER_01/i });
-    const speakerSelect = within(card).getByLabelText("Mapping for SPEAKER_01");
+    const speakerButton = within(card).getByLabelText("Mapping for SPEAKER_01");
 
     expect(within(card).getByText("Outside Consultant")).toBeVisible();
-    expect(within(speakerSelect).getAllByRole("option", { name: "Custom name" })).toHaveLength(1);
-    expect(within(speakerSelect).queryByRole("option", { name: "Outside Consultant" })).not.toBeInTheDocument();
-    expect(speakerSelect).toHaveValue("custom");
+    expect(speakerButton).toHaveTextContent("Custom name");
+    fireEvent.click(speakerButton);
+    expect(screen.getAllByRole("option", { name: "Custom name" })).toHaveLength(1);
+    expect(screen.queryByRole("option", { name: "Outside Consultant" })).not.toBeInTheDocument();
   });
 
   it("preserves dirty user edits when refreshed with new mapping props for the same speakers", () => {
     const { props, rerender } = renderPanel();
 
-    fireEvent.change(screen.getByLabelText("Mapping for SPEAKER_01"), {
-      target: { value: "custom" },
-    });
+    chooseMapping("SPEAKER_01", "Custom name");
     fireEvent.change(screen.getByLabelText("Custom display name"), {
       target: { value: "Morgan Lee" },
     });
@@ -247,7 +245,33 @@ describe("SpeakerReviewPanel", () => {
       />
     );
 
-    expect(screen.getByLabelText("Mapping for SPEAKER_01")).toHaveValue("custom");
+    expect(screen.getByLabelText("Mapping for SPEAKER_01")).toHaveTextContent("Custom name");
     expect(screen.getByLabelText("Custom display name")).toHaveValue("Morgan Lee");
+  });
+
+  it("warns users when one detected speaker is available for multiple attendees", () => {
+    renderPanel({
+      segments: [
+        {
+          speaker: "Joseph Miguel Guerrero",
+          raw_speaker: "SPEAKER_00",
+          start: 65,
+          end: 72,
+          text: "Hey, just give me one second while I set up the meeting room.",
+        },
+      ],
+      mappings: [],
+      participants: [
+        { id: 1, name: "Joseph Miguel Guerrero", email: "joseph@example.com" },
+        { id: 2, name: "Daniel Vucetic", email: "daniel@example.com" },
+      ],
+    });
+
+    expect(screen.getByRole("heading", { name: "Confirm who spoke" })).toBeVisible();
+    expect(screen.getByText(/1 speaker label detected for 2 attendees/i)).toBeVisible();
+    expect(screen.getByText(/Audio may be merged/i)).toBeVisible();
+    expect(screen.queryByText(/Choose Unknown unless you are sure/i)).not.toBeInTheDocument();
+    expect(screen.getByText("1:05")).toBeVisible();
+    expect(screen.getByLabelText("Mapping for SPEAKER_00")).toHaveTextContent("Unknown");
   });
 });

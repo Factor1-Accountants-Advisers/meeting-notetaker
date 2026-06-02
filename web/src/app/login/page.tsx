@@ -4,11 +4,13 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { PenTool } from "lucide-react";
 import { useAuth } from "@/lib/useAuth";
+import { isElectron } from "@/lib/electron-bridge";
 
 export default function LoginPage() {
   const { login, isAuthenticated, isLoading } = useAuth();
   const [signingIn, setSigningIn] = useState(false);
   const router = useRouter();
+  const runningInElectron = isElectron();
 
   // Redirect to dashboard if already authenticated
   useEffect(() => {
@@ -22,6 +24,10 @@ export default function LoginPage() {
   }
 
   const handleLogin = async () => {
+    if (!runningInElectron) {
+      return;
+    }
+
     setSigningIn(true);
     try {
       await login();
@@ -46,12 +52,17 @@ export default function LoginPage() {
           <div className="mt-8">
             <button
               onClick={handleLogin}
-              disabled={signingIn}
+              disabled={signingIn || !runningInElectron}
               className="inline-flex h-12 items-center rounded-full bg-[color:var(--surface-inverse)] px-8 text-sm font-medium text-[color:var(--text-inverse)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {signingIn ? "Signing in..." : "Sign in"}
+              {!runningInElectron ? "Open in desktop app" : signingIn ? "Signing in..." : "Sign in"}
             </button>
           </div>
+          {!runningInElectron ? (
+            <p className="mx-auto mt-4 max-w-md text-sm leading-6 text-[color:var(--text-secondary)]">
+              Sign-in is only available in the desktop app. For local browser checks, open the preview route directly.
+            </p>
+          ) : null}
           {signingIn && (
             <p className="mx-auto mt-4 max-w-md text-sm leading-6 text-[color:var(--text-secondary)]">
               Opening your browser to sign in with Microsoft. Complete the sign-in, then return here.

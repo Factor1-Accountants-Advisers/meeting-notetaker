@@ -49,6 +49,13 @@ function safeDomId(value: string): string {
   return encodeURIComponent(value).replace(/%/g, "-") || "speaker";
 }
 
+function formatTimestamp(seconds: number): string {
+  const safeSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+  const min = Math.floor(safeSeconds / 60);
+  const sec = Math.floor(safeSeconds % 60);
+  return `${min}:${String(sec).padStart(2, "0")}`;
+}
+
 function findParticipantForMapping(
   mapping: SpeakerMapping | null,
   participants: Participant[]
@@ -125,8 +132,11 @@ export default function SpeakerReviewPanel({
     createInitialSelections(mappings, participants, speakerLabels)
   );
   const [isDirty, setIsDirty] = useState(false);
+  const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   const speakerLabelsKey = useMemo(() => speakerLabels.join("\u001f"), [speakerLabels]);
   const previousSpeakerLabelsKey = useRef(speakerLabelsKey);
+  const detectedFewerSpeakersThanAttendees =
+    speakerLabels.length > 0 && participants.length > 1 && speakerLabels.length < participants.length;
 
   useEffect(() => {
     const speakerLabelsChanged = previousSpeakerLabelsKey.current !== speakerLabelsKey;
@@ -145,6 +155,7 @@ export default function SpeakerReviewPanel({
 
   function updateSelection(speakerLabel: string, value: string) {
     setIsDirty(true);
+    setOpenDropdown(null);
     setSelections((current) => ({
       ...current,
       [speakerLabel]: {
@@ -163,6 +174,23 @@ export default function SpeakerReviewPanel({
         customName,
       },
     }));
+  }
+
+  function selectionLabel(value: string): string {
+    if (value === UNKNOWN_VALUE) {
+      return "Unknown";
+    }
+
+    if (value === CUSTOM_VALUE) {
+      return "Custom name";
+    }
+
+    const participant = participantByValue.get(value);
+    if (!participant) {
+      return "Unknown";
+    }
+
+    return participant.email ? `${participant.name} (${participant.email})` : participant.name;
   }
 
   async function handleSave() {
@@ -223,11 +251,20 @@ export default function SpeakerReviewPanel({
   return (
     <section aria-label="Speaker review" className="space-y-4">
       <div>
-        <h2 className="text-lg font-semibold text-[color:var(--text-primary)]">Review speakers</h2>
+        <h2 className="text-lg font-semibold text-[color:var(--text-primary)]">Confirm who spoke</h2>
         <p className="mt-1 text-sm text-[color:var(--text-secondary)]">
-          Map diarized speaker labels to attendees or mark them as unknown.
+          Use the quotes to match each detected speaker label to an attendee.
         </p>
       </div>
+
+      {detectedFewerSpeakersThanAttendees ? (
+        <div className="rounded-[20px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="font-semibold">
+            {speakerLabels.length} speaker label detected for {participants.length} attendees.
+          </p>
+          <p className="mt-1">Audio may be merged, so only map it if the quotes are clear.</p>
+        </div>
+      ) : null}
 
       <div className="grid gap-4">
         {reviewGroups.map((group) => {
@@ -277,36 +314,87 @@ export default function SpeakerReviewPanel({
                   <ul className="mt-2 space-y-2">
                     {group.quotes.map((quote, quoteIndex) => (
                       <li
-                        key={`${group.speakerLabel}-${quoteIndex}-${quote}`}
+                        key={`${group.speakerLabel}-${quoteIndex}-${quote.start}-${quote.text}`}
                         className="rounded-2xl border border-[color:var(--border-subtle)] bg-[color:var(--surface-soft)] px-3 py-2 text-sm text-[color:var(--text-secondary)]"
                       >
-                        {quote}
+                        <span className="mb-1 block text-xs font-semibold text-[color:var(--text-muted)]">
+                          {formatTimestamp(quote.start)}
+                        </span>
+                        {quote.text}
                       </li>
                     ))}
                   </ul>
                 </div>
 
                 <div className="space-y-3">
-                  <label className="block text-sm font-medium text-[color:var(--text-primary)]">
-                    <span>Mapping for {group.speakerLabel}</span>
-                    <select
-                      aria-label={`Mapping for ${group.speakerLabel}`}
-                      className="mt-1 h-11 w-full rounded-2xl border border-[color:var(--border-subtle)] bg-[color:var(--surface-soft)] px-3 text-sm text-[color:var(--text-primary)] outline-none focus:border-[color:var(--border-strong)] focus:ring-2 focus:ring-[color:var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-60"
-                      disabled={isSaving}
-                      value={selection.value}
-                      onChange={(event) => updateSelection(group.speakerLabel, event.target.value)}
-                    >
-                      <option value={UNKNOWN_VALUE}>Unknown</option>
-                      {participants.map((participant) => (
-                        <option key={participant.id} value={participantValue(participant)}>
-                          {participant.email
-                            ? `${participant.name} (${participant.email})`
-                            : participant.name}
-                        </option>
-                      ))}
-                      <option value={CUSTOM_VALUE}>Custom name</option>
-                    </select>
-                  </label>
+                  <div className="block text-sm font-medium text-[color:var(--text-primary)]">
+                    <span id={`mapping-label-${safeSpeakerId}`}>Mapping for {group.speakerLabel}</span>
+                    <div className="relative mt-1">
+                      <button
+                        aria-controls={`mapping-options-${safeSpeakerId}`}
+                        aria-expanded={openDropdown === group.speakerLabel}
+                        aria-haspopup="listbox"
+                        aria-label={`Mapping for ${group.speakerLabel}`}
+                        aria-labelledby={`mapping-label-${safeSpeakerId}`}
+                        className="flex h-11 w-full items-center justify-between rounded-2xl border border-[color:var(--border-subtle)] bg-[color:var(--surface-soft)] px-3 text-left text-sm text-[color:var(--text-primary)] shadow-sm outline-none transition hover:border-[color:var(--border-strong)] focus:border-[color:var(--border-strong)] focus:ring-2 focus:ring-[color:var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={isSaving}
+                        type="button"
+                        onClick={() =>
+                          setOpenDropdown((current) =>
+                            current === group.speakerLabel ? null : group.speakerLabel
+                          )
+                        }
+                      >
+                        <span className="truncate">{selectionLabel(selection.value)}</span>
+                        <span aria-hidden="true" className="ml-3 text-[color:var(--text-muted)]">⌄</span>
+                      </button>
+                      {openDropdown === group.speakerLabel ? (
+                        <div
+                          id={`mapping-options-${safeSpeakerId}`}
+                          role="listbox"
+                          aria-label={`Mapping options for ${group.speakerLabel}`}
+                          className="mt-2 w-full overflow-hidden rounded-2xl border border-[color:var(--border-subtle)] bg-[color:var(--surface)] p-1 shadow-[var(--shadow-panel)]"
+                        >
+                          <button
+                            role="option"
+                            aria-selected={selection.value === UNKNOWN_VALUE}
+                            className="flex w-full rounded-xl px-3 py-2 text-left text-sm text-[color:var(--text-primary)] transition hover:bg-[color:var(--surface-soft)] aria-selected:bg-[color:var(--accent-soft)] aria-selected:text-[color:var(--accent-text)]"
+                            type="button"
+                            onClick={() => updateSelection(group.speakerLabel, UNKNOWN_VALUE)}
+                          >
+                            Unknown
+                          </button>
+                          {participants.map((participant) => {
+                            const value = participantValue(participant);
+                            return (
+                              <button
+                                key={participant.id}
+                                role="option"
+                                aria-selected={selection.value === value}
+                                className="flex w-full flex-col rounded-xl px-3 py-2 text-left text-sm text-[color:var(--text-primary)] transition hover:bg-[color:var(--surface-soft)] aria-selected:bg-[color:var(--accent-soft)] aria-selected:text-[color:var(--accent-text)]"
+                                type="button"
+                                onClick={() => updateSelection(group.speakerLabel, value)}
+                              >
+                                <span>{participant.name}</span>
+                                {participant.email ? (
+                                  <span className="text-xs text-[color:var(--text-muted)]">{participant.email}</span>
+                                ) : null}
+                              </button>
+                            );
+                          })}
+                          <button
+                            role="option"
+                            aria-selected={selection.value === CUSTOM_VALUE}
+                            className="flex w-full rounded-xl px-3 py-2 text-left text-sm text-[color:var(--text-primary)] transition hover:bg-[color:var(--surface-soft)] aria-selected:bg-[color:var(--accent-soft)] aria-selected:text-[color:var(--accent-text)]"
+                            type="button"
+                            onClick={() => updateSelection(group.speakerLabel, CUSTOM_VALUE)}
+                          >
+                            Custom name
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
 
                   {selection.value === CUSTOM_VALUE ? (
                     <label

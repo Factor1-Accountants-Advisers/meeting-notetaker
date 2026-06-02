@@ -33,16 +33,16 @@ function makeMapping(overrides: Partial<SpeakerMapping>): SpeakerMapping {
 describe("getRepresentativeQuotes", () => {
   it("selects up to 3 representative quotes", () => {
     const segments = [
-      makeSegment({ text: "one" }),
-      makeSegment({ text: "two two" }),
-      makeSegment({ text: "three three three" }),
-      makeSegment({ text: "four four four four" }),
+      makeSegment({ start: 1, text: "one" }),
+      makeSegment({ start: 2, text: "two two" }),
+      makeSegment({ start: 3, text: "three three three" }),
+      makeSegment({ start: 4, text: "four four four four" }),
     ];
 
     expect(getRepresentativeQuotes(segments)).toEqual([
-      "four four four four",
-      "three three three",
-      "two two",
+      { start: 4, text: "four four four four" },
+      { start: 3, text: "three three three" },
+      { start: 2, text: "two two" },
     ]);
   });
 
@@ -55,8 +55,8 @@ describe("getRepresentativeQuotes", () => {
     ];
 
     expect(getRepresentativeQuotes(segments, 2)).toEqual([
-      "a much longer representative quote",
-      "medium quote",
+      { start: 0, text: "a much longer representative quote" },
+      { start: 0, text: "medium quote" },
     ]);
   });
 });
@@ -73,8 +73,11 @@ describe("groupSegmentsForReview", () => {
 
     expect(groups).toHaveLength(2);
     expect(groups.map((group) => group.speakerLabel)).toEqual(["SPEAKER_00", "SPEAKER_01"]);
-    expect(groups[0].quotes).toEqual(["Follow-up owners and deadlines", "Opening project status update"]);
-    expect(groups[1].quotes).toEqual(["Budget approval discussion"]);
+    expect(groups[0].quotes).toEqual([
+      { start: 0, text: "Follow-up owners and deadlines" },
+      { start: 0, text: "Opening project status update" },
+    ]);
+    expect(groups[1].quotes).toEqual([{ start: 0, text: "Budget approval discussion" }]);
   });
 
   it("resolves current mapping display", () => {
@@ -89,12 +92,12 @@ describe("groupSegmentsForReview", () => {
     expect(groups[0]).toMatchObject({
       speakerLabel: "SPEAKER_00",
       mapping: alexMapping,
-      quotes: ["We need to validate the rollout plan"],
+      quotes: [{ start: 0, text: "We need to validate the rollout plan" }],
     });
     expect(groups[1]).toMatchObject({
       speakerLabel: "SPEAKER_01",
       mapping: null,
-      quotes: ["I can own the dashboard updates"],
+      quotes: [{ start: 0, text: "I can own the dashboard updates" }],
     });
   });
 });
