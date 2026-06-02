@@ -37,14 +37,6 @@ function participantValue(participant: Participant): string {
   return `participant-id:${participant.id}`;
 }
 
-function formatSource(source: SpeakerMapping["source"]): string {
-  return source.replace(/_/g, " ");
-}
-
-function formatConfidence(confidence: number): string {
-  return `${Math.round(confidence * 100)}% confidence`;
-}
-
 function safeDomId(value: string): string {
   return encodeURIComponent(value).replace(/%/g, "-") || "speaker";
 }
@@ -253,7 +245,7 @@ export default function SpeakerReviewPanel({
       <div>
         <h2 className="text-lg font-semibold text-[color:var(--text-primary)]">Confirm who spoke</h2>
         <p className="mt-1 text-sm text-[color:var(--text-secondary)]">
-          Use the quotes to match each detected speaker label to an attendee.
+          Use the quotes as evidence. Leave it Unknown if it is not clear.
         </p>
       </div>
 
@@ -267,7 +259,7 @@ export default function SpeakerReviewPanel({
       ) : null}
 
       <div className="grid gap-4">
-        {reviewGroups.map((group) => {
+        {reviewGroups.map((group, groupIndex) => {
           const selection = selections[group.speakerLabel] ?? {
             value: UNKNOWN_VALUE,
             customName: "",
@@ -282,34 +274,19 @@ export default function SpeakerReviewPanel({
               aria-labelledby={headingId}
               className="rounded-[24px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] p-5 shadow-[var(--shadow-soft)]"
             >
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <h3 id={headingId} className="text-base font-semibold text-[color:var(--text-primary)]">
-                    {group.speakerLabel}
-                  </h3>
-                  {group.mapping ? (
-                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[color:var(--text-secondary)]">
-                      <span className="rounded-full bg-[color:var(--surface-soft)] px-2.5 py-1 font-medium text-[color:var(--text-primary)]">
-                        {group.mapping.display_name ?? "Unknown"}
-                      </span>
-                      {group.mapping.email ? <span>{group.mapping.email}</span> : null}
-                      <span className="rounded-full bg-[color:var(--accent-soft)] px-2.5 py-1 text-[color:var(--accent-text)]">
-                        {formatConfidence(group.mapping.confidence)}
-                      </span>
-                      <span className="rounded-full bg-[color:var(--surface-soft)] px-2.5 py-1">
-                        {formatSource(group.mapping.source)}
-                      </span>
-                    </div>
-                  ) : (
-                    <p className="mt-2 text-xs text-[color:var(--text-muted)]">No current mapping</p>
-                  )}
-                </div>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <h3 id={headingId} className="text-base font-semibold text-[color:var(--text-primary)]">
+                  Speaker {groupIndex + 1}
+                </h3>
+                <span className="w-fit rounded-full bg-[color:var(--surface-soft)] px-2.5 py-1 text-xs font-medium text-[color:var(--text-muted)]">
+                  Detected label: {group.speakerLabel}
+                </span>
               </div>
 
-              <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(240px,320px)]">
+              <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(260px,340px)]">
                 <div>
                   <h4 className="text-xs font-semibold uppercase tracking-wide text-[color:var(--text-muted)]">
-                    Representative quotes
+                    What they said
                   </h4>
                   <ul className="mt-2 space-y-2">
                     {group.quotes.map((quote, quoteIndex) => (
@@ -328,14 +305,13 @@ export default function SpeakerReviewPanel({
 
                 <div className="space-y-3">
                   <div className="block text-sm font-medium text-[color:var(--text-primary)]">
-                    <span id={`mapping-label-${safeSpeakerId}`}>Mapping for {group.speakerLabel}</span>
+                    <span id={`mapping-label-${safeSpeakerId}`}>Who said this?</span>
                     <div className="relative mt-1">
                       <button
                         aria-controls={`mapping-options-${safeSpeakerId}`}
                         aria-expanded={openDropdown === group.speakerLabel}
                         aria-haspopup="listbox"
-                        aria-label={`Mapping for ${group.speakerLabel}`}
-                        aria-labelledby={`mapping-label-${safeSpeakerId}`}
+                        aria-label={`Who said Speaker ${groupIndex + 1}`}
                         className="flex h-11 w-full items-center justify-between rounded-2xl border border-[color:var(--border-subtle)] bg-[color:var(--surface-soft)] px-3 text-left text-sm text-[color:var(--text-primary)] shadow-sm outline-none transition hover:border-[color:var(--border-strong)] focus:border-[color:var(--border-strong)] focus:ring-2 focus:ring-[color:var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-60"
                         disabled={isSaving}
                         type="button"

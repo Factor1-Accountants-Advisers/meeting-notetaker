@@ -64,7 +64,8 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof SpeakerRevie
 }
 
 function chooseMapping(label: string, optionName: string | RegExp) {
-  fireEvent.click(screen.getByLabelText(`Mapping for ${label}`));
+  const speakerIndex = label.endsWith("00") ? 1 : 2;
+  fireEvent.click(screen.getByLabelText(`Who said Speaker ${speakerIndex}`));
   fireEvent.click(screen.getByRole("option", { name: optionName }));
 }
 
@@ -73,8 +74,10 @@ describe("SpeakerReviewPanel", () => {
     renderPanel();
 
     expect(screen.getAllByRole("article")).toHaveLength(2);
-    expect(screen.getByRole("heading", { name: "SPEAKER_00" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "SPEAKER_01" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Speaker 1" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Speaker 2" })).toBeVisible();
+    expect(screen.getByText("Detected label: SPEAKER_00")).toBeVisible();
+    expect(screen.getByText("Detected label: SPEAKER_01")).toBeVisible();
   });
 
   it("shows representative quotes with timestamps", () => {
@@ -89,20 +92,21 @@ describe("SpeakerReviewPanel", () => {
     expect(screen.getByText("I can prepare the rollout dashboard before Friday.")).toBeVisible();
   });
 
-  it("shows current mapping, confidence, and source", () => {
+  it("shows the selected attendee without using it as the card title", () => {
     renderPanel();
-    const card = screen.getByRole("article", { name: /SPEAKER_00/i });
+    const card = screen.getByRole("article", { name: /Speaker 1/i });
 
-    expect(within(card).getByText("Alex Rivera")).toBeVisible();
-    expect(within(card).getByText("alex@example.com")).toBeVisible();
-    expect(within(card).getByText("87% confidence")).toBeVisible();
-    expect(within(card).getByText("llm inference")).toBeVisible();
+    expect(within(card).getByRole("heading", { name: "Speaker 1" })).toBeVisible();
+    expect(within(card).getByLabelText("Who said Speaker 1")).toHaveTextContent(
+      "Alex Rivera (alex@example.com)"
+    );
+    expect(within(card).queryByText("No current mapping")).not.toBeInTheDocument();
   });
 
   it("dropdown contains participants and current candidates", () => {
     renderPanel();
 
-    const speakerButton = screen.getByLabelText("Mapping for SPEAKER_00");
+    const speakerButton = screen.getByLabelText("Who said Speaker 1");
     expect(speakerButton).toHaveTextContent("Alex Rivera (alex@example.com)");
 
     fireEvent.click(speakerButton);
@@ -206,10 +210,9 @@ describe("SpeakerReviewPanel", () => {
       ],
     });
 
-    const card = screen.getByRole("article", { name: /SPEAKER_01/i });
-    const speakerButton = within(card).getByLabelText("Mapping for SPEAKER_01");
+    const card = screen.getByRole("article", { name: /Speaker 2/i });
+    const speakerButton = within(card).getByLabelText("Who said Speaker 2");
 
-    expect(within(card).getByText("Outside Consultant")).toBeVisible();
     expect(speakerButton).toHaveTextContent("Custom name");
     fireEvent.click(speakerButton);
     expect(screen.getAllByRole("option", { name: "Custom name" })).toHaveLength(1);
@@ -245,7 +248,7 @@ describe("SpeakerReviewPanel", () => {
       />
     );
 
-    expect(screen.getByLabelText("Mapping for SPEAKER_01")).toHaveTextContent("Custom name");
+    expect(screen.getByLabelText("Who said Speaker 2")).toHaveTextContent("Custom name");
     expect(screen.getByLabelText("Custom display name")).toHaveValue("Morgan Lee");
   });
 
@@ -272,6 +275,10 @@ describe("SpeakerReviewPanel", () => {
     expect(screen.getByText(/Audio may be merged/i)).toBeVisible();
     expect(screen.queryByText(/Choose Unknown unless you are sure/i)).not.toBeInTheDocument();
     expect(screen.getByText("1:05")).toBeVisible();
-    expect(screen.getByLabelText("Mapping for SPEAKER_00")).toHaveTextContent("Unknown");
+    expect(screen.getByRole("heading", { name: "Speaker 1" })).toBeVisible();
+    expect(screen.getByText("Detected label: SPEAKER_00")).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Joseph Miguel Guerrero" })).not.toBeInTheDocument();
+    expect(screen.queryByText("No current mapping")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Who said Speaker 1")).toHaveTextContent("Unknown");
   });
 });

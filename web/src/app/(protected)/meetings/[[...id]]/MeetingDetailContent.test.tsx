@@ -116,15 +116,12 @@ afterEach(() => {
 });
 
 describe("MeetingDetailContent speaker review", () => {
-  it("shows a review banner and speaker review panel when speaker labels need review", () => {
+  it("shows the speaker review panel without the old verbose review banner", () => {
     renderDetail(makeMeetingDetail({ needs_speaker_review: true }));
 
-    expect(
-      screen.getByText("Some speaker labels are uncertain. Review them to improve action item ownership.")
-    ).toBeVisible();
-    expect(screen.getByText(/Some speaker labels are uncertain/)).toBeVisible();
+    expect(screen.queryByText(/Some speaker labels are uncertain/)).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Speaker review" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Review speakers" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Confirm who spoke" })).toBeVisible();
   });
 
   it("shows concise diarization diagnostics when available", () => {

@@ -224,12 +224,6 @@ export default function MeetingDetailContent({
 
       {m.needs_speaker_review && (
         <div className="surface-card mb-6 rounded-[28px] border border-[color:var(--border-strong)] p-5 shadow-[var(--shadow-soft)]">
-          <p className="text-sm font-medium text-[color:var(--text-primary)]">
-            Some speaker labels are uncertain. Review them to improve action item ownership.
-          </p>
-          <h2 className="mt-1 text-lg font-semibold text-[color:var(--text-primary)]">
-            Review speakers
-          </h2>
           {speakerReviewError ? (
             <p className="mt-2 text-sm text-[color:var(--danger)]" role="alert">
               {speakerReviewError}
