@@ -60,11 +60,15 @@ function registerAppProtocol(staticDir, backendUrl) {
         // Proxy API requests to the backend
         if (url.pathname.startsWith('/api/')) {
             const backendTarget = `${backendUrl}${url.pathname}${url.search}`;
-            return electron_1.net.fetch(backendTarget, {
+            const fetchOptions = {
                 method: request.method,
                 headers: request.headers,
                 body: request.body,
-            });
+            };
+            if (request.body) {
+                fetchOptions.duplex = 'half';
+            }
+            return electron_1.net.fetch(backendTarget, fetchOptions);
         }
         // Serve static files (async reads to avoid blocking main process)
         let filePath = path.join(staticDir, url.pathname);

@@ -28,11 +28,15 @@ export function registerAppProtocol(staticDir: string, backendUrl: string): void
     // Proxy API requests to the backend
     if (url.pathname.startsWith('/api/')) {
       const backendTarget = `${backendUrl}${url.pathname}${url.search}`;
-      return net.fetch(backendTarget, {
+      const fetchOptions: Record<string, unknown> = {
         method: request.method,
         headers: request.headers,
         body: request.body,
-      });
+      };
+      if (request.body) {
+        fetchOptions.duplex = 'half';
+      }
+      return net.fetch(backendTarget, fetchOptions);
     }
 
     // Serve static files (async reads to avoid blocking main process)
