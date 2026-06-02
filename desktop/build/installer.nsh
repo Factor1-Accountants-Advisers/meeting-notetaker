@@ -1,20 +1,18 @@
 !macro customRemoveFiles
   ${if} ${isUpdated}
-    DetailPrint "Meeting Note-Taker update: removing previous install directory directly."
+    DetailPrint "Meeting Note-Taker update: removing previous install directory with cmd rmdir."
   ${else}
-    DetailPrint "Meeting Note-Taker uninstall: removing install directory directly."
+    DetailPrint "Meeting Note-Taker uninstall: removing install directory with cmd rmdir."
   ${endif}
 
-  ClearErrors
-  RMDir /r "$INSTDIR"
-  ${if} ${Errors}
-    DetailPrint "Meeting Note-Taker uninstall: initial remove failed; retrying after a short delay."
+  ExecWait '"$SYSDIR\\cmd.exe" /C rmdir /S /Q "$INSTDIR"' $0
+  ${if} $0 != 0
+    DetailPrint "Meeting Note-Taker uninstall: cmd rmdir failed with code $0; retrying after a short delay."
     Sleep 2000
-    ClearErrors
-    RMDir /r "$INSTDIR"
+    ExecWait '"$SYSDIR\\cmd.exe" /C rmdir /S /Q "$INSTDIR"' $0
   ${endif}
 
-  ${if} ${Errors}
+  ${if} $0 != 0
     Abort `Can't remove "$INSTDIR".`
   ${endif}
 !macroend

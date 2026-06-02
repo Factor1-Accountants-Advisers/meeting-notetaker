@@ -32,7 +32,8 @@ describe('electron-builder backend packaging filters', () => {
 
     expect(nsisInclude).toContain('!macro customRemoveFiles');
     expect(nsisInclude).toContain('${isUpdated}');
-    expect(nsisInclude).toContain('RMDir /r "$INSTDIR"');
+    expect(nsisInclude).toContain('cmd.exe');
+    expect(nsisInclude).toContain('rmdir /S /Q "$INSTDIR"');
     expect(nsisInclude).not.toContain('old-install');
   });
 });
