@@ -84,7 +84,7 @@ def test_process_transcription_retries_two_participant_under_detection(
     assert diagnostics["detected_speaker_count"] == 2
     assert diagnostics["expected_speaker_count"] == 2
     assert diagnostics["diarization_retry_used"] is True
-    assert diagnostics["diarization_retry_reason"] == "two_participants_one_speaker_detected"
+    assert diagnostics["diarization_retry_reason"] == "under_detection_retry_improved"
 
 
 def test_process_transcription_keeps_original_when_retry_does_not_improve(

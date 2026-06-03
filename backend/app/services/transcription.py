@@ -267,7 +267,7 @@ def _restore_retry_diagnostic_fields(meeting: Meeting, retry_fields: dict[str, A
     cast(Any, meeting).diarization_diagnostics = diagnostics
 
 
-def _maybe_retry_two_participant_under_detection(
+def _maybe_retry_under_detection(
     *,
     meeting: Meeting,
     local_audio_path: str,
@@ -275,22 +275,30 @@ def _maybe_retry_two_participant_under_detection(
     participant_count: int,
     transcription_result: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Retry AssemblyAI once when a 2-attendee meeting collapses into 1 speaker.
+    """Retry AssemblyAI when fewer speakers are detected than participants exist.
 
     AssemblyAI supports `speakers_expected`, but its docs warn to use exact counts
     only when confident. This guarded retry keeps the default open-ended diarization
-    first, then applies the exact-count hint only for the common two-person
-    under-detection case. The retry replaces the original only if it finds more
-    speaker labels.
+    first, then applies the exact-count hint when the first pass under-detects.
+    The retry replaces the original only if it finds more speaker labels.
     """
-    expected_speaker_count = 2
+    _ASSEMBLYAI_MAX_SPEAKERS_EXPECTED = 10
     detected = _detected_speaker_count(transcription_result)
-    if participant_count != expected_speaker_count or detected != 1:
+
+    # Only retry when we have 2+ participants and detected fewer speakers than
+    # participants. Single-participant meetings and already-accurate detections
+    # pass through unchanged.
+    if participant_count < 2 or detected >= participant_count:
         return transcription_result
 
+    expected_speaker_count = min(participant_count, _ASSEMBLYAI_MAX_SPEAKERS_EXPECTED)
+
     logger.info(
-        "Meeting %s: retrying AssemblyAI with speakers_expected=2 after detecting 1 speaker for 2 attendees",
+        "Meeting %s: retrying AssemblyAI with speakers_expected=%s after detecting %s speaker(s) for %s attendees",
         meeting.id,
+        expected_speaker_count,
+        detected,
+        participant_count,
     )
     try:
         retry_result = transcribe_audio(
@@ -318,7 +326,7 @@ def _maybe_retry_two_participant_under_detection(
             meeting,
             expected_speaker_count=expected_speaker_count,
             retry_used=True,
-            reason="two_participants_one_speaker_detected",
+            reason="under_detection_retry_improved",
         )
         return retry_result
 
@@ -469,11 +477,11 @@ def process_transcription(db: Session, meeting_id: int) -> Transcript:
         local_audio_path = download_audio(meeting.audio_blob_url)
 
         # Transcribe + diarise via AssemblyAI (with speaker identification if names available).
-        # Run open-ended diarization first. If a simple two-attendee meeting collapses
-        # into one speaker label, retry once with AssemblyAI's exact speaker-count hint.
+        # Run open-ended diarization first. If fewer speakers are detected than
+        # participants exist, retry once with AssemblyAI's exact speaker-count hint.
         logger.info(f"Transcribing meeting {meeting_id} via AssemblyAI")
         transcription_result = transcribe_audio(local_audio_path, participant_names=participant_names)
-        transcription_result = _maybe_retry_two_participant_under_detection(
+        transcription_result = _maybe_retry_under_detection(
             meeting=meeting,
             local_audio_path=local_audio_path,
             participant_names=participant_names,
