@@ -1,5 +1,7 @@
-import { dialog } from 'electron';
+import { app, dialog } from 'electron';
 import { autoUpdater } from 'electron-updater';
+import { join } from 'path';
+import { rm } from 'fs/promises';
 
 export type UpdaterStatus =
   | 'idle'
@@ -62,6 +64,32 @@ function getVersion(info: unknown): string | undefined {
 function describeError(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+/**
+ * Remove stale cached installer files left by previous updates.
+ *
+ * electron-updater downloads to `%LOCALAPPDATA%/<appName>-updater/pending/`
+ * and NSIS drops a copy at the cache root. Neither is cleaned automatically,
+ * so every update leaves ~143 MB behind. Call this on startup (before any new
+ * update check) so old installers don't accumulate indefinitely.
+ */
+async function cleanupUpdaterCache(): Promise<void> {
+  try {
+    const cacheDir = join(app.getPath('userData'), '..', 'meeting-notetaker-desktop-updater');
+    const filesToRemove = ['installer.exe', 'current.blockmap'];
+
+    for (const name of filesToRemove) {
+      const fullPath = join(cacheDir, name);
+      try {
+        await rm(fullPath, { force: true, maxRetries: 2 });
+      } catch {
+        // File may not exist or be locked; that's fine.
+      }
+    }
+  } catch {
+    // Updater cache directory may not exist yet; that's fine.
+  }
 }
 
 async function showManualDialog(type: 'info' | 'error', title: string, message: string): Promise<void> {
@@ -237,7 +265,7 @@ export function initUpdater(options: UpdaterOptions): UpdaterController {
   };
 
   if (options.isPackaged && options.checkIntervalMs !== 0) {
-    void controller.checkForUpdates(false);
+    void cleanupUpdaterCache().then(() => controller.checkForUpdates(false));
     setInterval(() => void controller.checkForUpdates(false), options.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS);
   }
 
