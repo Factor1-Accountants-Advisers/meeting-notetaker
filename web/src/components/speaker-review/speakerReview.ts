@@ -1,4 +1,5 @@
 import type { SpeakerMapping, TranscriptSegment } from "@/types";
+import { splitTextIntoEvidenceSnippets } from "@/lib/transcript-display";
 
 export type SpeakerReviewGroup = {
   speakerLabel: string;
@@ -23,14 +24,25 @@ export function getRepresentativeQuotes(segments: TranscriptSegment[], max = 3):
     return [];
   }
 
-  return [...segments]
-    .map((segment) => ({
-      text: segment.text.trim(),
-      start: segment.start,
-    }))
-    .filter((quote) => quote.text.length > 0)
-    .sort((a, b) => b.text.length - a.text.length)
-    .slice(0, max);
+  const quoteCandidates = segments.flatMap((segment) => {
+    const text = segment.text.trim();
+    if (!text) {
+      return [];
+    }
+
+    return splitTextIntoEvidenceSnippets(text, 220).map((chunk, index, chunks) => ({
+      text: chunk,
+      start: chunks.length > 1
+        ? segment.start + (Math.max(0, segment.end - segment.start) * index) / chunks.length
+        : segment.start,
+    }));
+  });
+
+  const sortedQuotes = segments.length === 1
+    ? quoteCandidates.sort((a, b) => a.start - b.start)
+    : quoteCandidates.sort((a, b) => b.text.length - a.text.length || a.start - b.start);
+
+  return sortedQuotes.slice(0, max).map(({ text, start }) => ({ text, start }));
 }
 
 export function groupSegmentsForReview(

@@ -59,6 +59,25 @@ describe("getRepresentativeQuotes", () => {
       { start: 0, text: "medium quote" },
     ]);
   });
+
+  it("turns one long provider segment into a few short evidence snippets", () => {
+    const segments = [
+      makeSegment({
+        start: 22,
+        end: 620,
+        text:
+          "Hey, just give me one second while I set up the meeting room. Everything is ready now and we can start the APR conversation. You have been doing a fantastic job delivering projects and helping the team. I would like you to keep taking on development opportunities when they come up. With the new manager, we can continue tracking progress together over the next quarter.",
+      }),
+    ];
+
+    const quotes = getRepresentativeQuotes(segments, 3);
+
+    expect(quotes).toHaveLength(3);
+    expect(quotes.every((quote) => quote.text.length <= 220)).toBe(true);
+    expect(quotes[0].text).toBe("Hey, just give me one second while I set up the meeting room.");
+    expect(quotes[1].text).toContain("Everything is ready now");
+    expect(quotes[2].start).toBeGreaterThan(quotes[0].start);
+  });
 });
 
 describe("groupSegmentsForReview", () => {

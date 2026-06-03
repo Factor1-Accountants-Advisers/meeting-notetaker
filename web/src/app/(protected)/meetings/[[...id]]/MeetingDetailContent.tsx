@@ -17,6 +17,7 @@ import StatusBadge from "@/components/StatusBadge";
 import ProcessingProgress from "@/components/ProcessingProgress";
 import SpeakerLabel from "@/components/SpeakerLabel";
 import SpeakerReviewPanel from "@/components/speaker-review/SpeakerReviewPanel";
+import { splitTranscriptSegmentsForDisplay } from "@/lib/transcript-display";
 import type { SpeakerMappingUpdate } from "@/types";
 
 const SPEAKER_COLORS = [
@@ -106,15 +107,16 @@ export default function MeetingDetailContent({
 
   // Must be above early returns — hooks cannot be called conditionally
   const segments = useMemo(() => m?.transcript?.segments ?? [], [m?.transcript?.segments]);
+  const displaySegments = useMemo(() => splitTranscriptSegmentsForDisplay(segments), [segments]);
 
   const handleTimeUpdate = useCallback(
     (currentTime: number) => {
       let lo = 0;
-      let hi = segments.length - 1;
+      let hi = displaySegments.length - 1;
       let found: number | null = null;
       while (lo <= hi) {
         const mid = (lo + hi) >> 1;
-        const seg = segments[mid];
+        const seg = displaySegments[mid];
         if (currentTime < seg.start) {
           hi = mid - 1;
         } else if (currentTime >= seg.end) {
@@ -126,7 +128,7 @@ export default function MeetingDetailContent({
       }
       setActiveSegmentIndex(found);
     },
-    [segments],
+    [displaySegments],
   );
 
   if (!numericId) return <div className="text-[color:var(--text-secondary)]">No meeting selected.</div>;
@@ -134,11 +136,11 @@ export default function MeetingDetailContent({
   if (error || !m) return <div className="text-[color:var(--danger)]">Meeting not found.</div>;
 
   const visibleSegments = transcriptExpanded
-    ? segments
-    : segments.slice(0, INITIAL_SEGMENTS);
+    ? displaySegments
+    : displaySegments.slice(0, INITIAL_SEGMENTS);
 
   const speakerColors: Record<string, string> = {};
-  const uniqueSpeakers = Array.from(new Set(segments.map((s) => s.speaker)));
+  const uniqueSpeakers = Array.from(new Set(displaySegments.map((s) => s.speaker)));
   uniqueSpeakers.forEach((speaker, i) => {
     speakerColors[speaker] = SPEAKER_COLORS[i % SPEAKER_COLORS.length];
   });
@@ -384,7 +386,7 @@ export default function MeetingDetailContent({
                 </p>
               </div>
             ))}
-            {segments.length > INITIAL_SEGMENTS && (
+            {displaySegments.length > INITIAL_SEGMENTS && (
               <button
                 onClick={() => setTranscriptExpanded(!transcriptExpanded)}
                 className="mt-2 flex items-center gap-1 text-xs font-medium text-[color:var(--accent-text)] transition-colors hover:opacity-80"
@@ -396,7 +398,7 @@ export default function MeetingDetailContent({
                 ) : (
                   <>
                     <ChevronDown className="w-3 h-3" /> Show full transcript (
-                    {segments.length} segments)
+                    {displaySegments.length} segments)
                   </>
                 )}
               </button>
