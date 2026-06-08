@@ -26,6 +26,28 @@ class UserResponse(UserBase):
 
 
 # ============================================================================
+# Voiceprint Schemas
+# ============================================================================
+
+class VoiceprintResponse(BaseModel):
+    """Voiceprint registry response."""
+    id: int
+    user_id: int
+    provider: str
+    display_name: str
+    email: Optional[EmailStr] = None
+    status: str
+    consent_recorded_at: Optional[datetime] = None
+    sample_duration_seconds: Optional[float] = None
+    sample_source: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================================================
 # Participant Schemas
 # ============================================================================
 

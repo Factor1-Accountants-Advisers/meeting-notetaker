@@ -36,10 +36,11 @@ app.add_middleware(
 )
 
 # Include routers
-from app.routers import users, meetings, action_items
+from app.routers import users, meetings, action_items, voiceprints
 app.include_router(users.router)
 app.include_router(meetings.router)
 app.include_router(action_items.router)
+app.include_router(voiceprints.router)
 
 
 # Serve local audio files when using LocalFileStorage

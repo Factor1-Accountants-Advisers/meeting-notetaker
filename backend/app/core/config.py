@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     # AssemblyAI (transcription + diarisation)
     assemblyai_api_key: str = ""
 
+    # pyannoteAI (voiceprint speaker identification)
+    pyannote_api_key: str = ""
+
     # HuggingFace (legacy, kept for reference)
     hf_token: str = ""
 
