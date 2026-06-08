@@ -8,7 +8,7 @@ from sqlalchemy.pool import StaticPool
 from app.api.dependencies import get_current_user
 from app.core.database import Base, get_db
 from app.main import app
-from app.models import User, Voiceprint
+from app.models import User, Voiceprint, VoiceprintStatus
 from app.services.pyannote_voiceprint_provider import get_pyannote_voiceprint_provider
 
 
@@ -118,3 +118,130 @@ async def test_create_voiceprint_requires_consent(voiceprint_api_client):
     assert provider.calls == 0
     result = await db.execute(select(Voiceprint))
     assert result.scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_list_voiceprints_returns_only_current_user_records(voiceprint_api_client):
+    client, db, _provider = voiceprint_api_client
+    other = User(
+        id=2,
+        email="other@example.com",
+        name="Other User",
+        azure_ad_id="other-azure-id",
+        role="user",
+    )
+    db.add(other)
+    await db.flush()
+    db.add_all([
+        Voiceprint(
+            user_id=1,
+            provider="pyannote",
+            provider_voiceprint_id="vp_current",
+            display_name="Test User",
+            email="test@example.com",
+            status=VoiceprintStatus.ACTIVE,
+        ),
+        Voiceprint(
+            user_id=2,
+            provider="pyannote",
+            provider_voiceprint_id="vp_other",
+            display_name="Other User",
+            email="other@example.com",
+            status=VoiceprintStatus.ACTIVE,
+        ),
+    ])
+    await db.commit()
+
+    response = await client.get("/api/voiceprints")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["display_name"] == "Test User"
+    assert payload["items"][0]["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_disable_voiceprint_marks_current_user_record_disabled(voiceprint_api_client):
+    client, db, _provider = voiceprint_api_client
+    voiceprint = Voiceprint(
+        user_id=1,
+        provider="pyannote",
+        provider_voiceprint_id="vp_current",
+        display_name="Test User",
+        email="test@example.com",
+        status=VoiceprintStatus.ACTIVE,
+    )
+    db.add(voiceprint)
+    await db.commit()
+    await db.refresh(voiceprint)
+
+    response = await client.post(
+        f"/api/voiceprints/{voiceprint.id}/disable",
+        json={"reason": "bad_sample"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "disabled"
+    await db.refresh(voiceprint)
+    assert voiceprint.status == VoiceprintStatus.DISABLED
+    assert voiceprint.disabled_reason == "bad_sample"
+
+
+@pytest.mark.asyncio
+async def test_delete_voiceprint_soft_deletes_current_user_record(voiceprint_api_client):
+    client, db, _provider = voiceprint_api_client
+    voiceprint = Voiceprint(
+        user_id=1,
+        provider="pyannote",
+        provider_voiceprint_id="vp_current",
+        display_name="Test User",
+        email="test@example.com",
+        status=VoiceprintStatus.ACTIVE,
+    )
+    db.add(voiceprint)
+    await db.commit()
+    await db.refresh(voiceprint)
+
+    response = await client.delete(f"/api/voiceprints/{voiceprint.id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "deleted"
+    await db.refresh(voiceprint)
+    assert voiceprint.status == VoiceprintStatus.DELETED
+    assert voiceprint.deleted_at is not None
+
+
+@pytest.mark.asyncio
+async def test_voiceprint_lifecycle_endpoints_do_not_cross_user_boundary(voiceprint_api_client):
+    client, db, _provider = voiceprint_api_client
+    other = User(
+        id=2,
+        email="other@example.com",
+        name="Other User",
+        azure_ad_id="other-azure-id",
+        role="user",
+    )
+    db.add(other)
+    await db.flush()
+    voiceprint = Voiceprint(
+        user_id=2,
+        provider="pyannote",
+        provider_voiceprint_id="vp_other",
+        display_name="Other User",
+        email="other@example.com",
+        status=VoiceprintStatus.ACTIVE,
+    )
+    db.add(voiceprint)
+    await db.commit()
+    await db.refresh(voiceprint)
+
+    disable_response = await client.post(f"/api/voiceprints/{voiceprint.id}/disable")
+    delete_response = await client.delete(f"/api/voiceprints/{voiceprint.id}")
+
+    assert disable_response.status_code == 404
+    assert delete_response.status_code == 404
+    await db.refresh(voiceprint)
+    assert voiceprint.status == VoiceprintStatus.ACTIVE

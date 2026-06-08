@@ -19,6 +19,26 @@ export interface ActionItemCreate {
   status?: string;
 }
 
+export interface Voiceprint {
+  id: number;
+  user_id: number;
+  provider: string;
+  display_name: string;
+  email?: string | null;
+  status: "active" | "disabled" | "deleted" | "needs_refresh" | string;
+  consent_recorded_at?: string | null;
+  sample_duration_seconds?: number | null;
+  sample_source?: string | null;
+  disabled_reason?: string | null;
+  deleted_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface VoiceprintListResponse {
+  items: Voiceprint[];
+}
+
 // --- Token injection ---
 
 let _getIdToken: (() => Promise<string>) | null = null;
@@ -131,6 +151,10 @@ export function useActionItems(
   return useSWR(`/api/action-items?${params}`, fetcher);
 }
 
+export function useVoiceprints(): SWRResponse<VoiceprintListResponse> {
+  return useSWR("/api/voiceprints", fetcher);
+}
+
 // --- Upload ---
 
 export interface UploadMeetingParams {
@@ -173,6 +197,26 @@ export async function uploadMeeting(
   return res.json();
 }
 
+export async function uploadVoiceprintSample(file: File): Promise<Voiceprint> {
+  const headers = await authHeaders();
+  const formData = new FormData();
+  formData.append("sample_file", file);
+  formData.append("consent_confirmed", "true");
+  formData.append("sample_source", "self_service_upload");
+
+  const res = await fetch("/api/voiceprints", {
+    method: "POST",
+    headers,
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail || `Voiceprint upload failed: ${res.status}`);
+  }
+  return res.json();
+}
+
 // --- Mutations ---
 
 export async function retryMeeting(id: number): Promise<{ meeting_id: number; status: string }> {
@@ -198,6 +242,26 @@ export async function deleteMeeting(id: number): Promise<void> {
     const body = await res.json().catch(() => null);
     throw new Error(body?.detail || `Delete failed: ${res.status}`);
   }
+}
+
+export async function disableVoiceprint(id: number, reason = "disabled_by_user"): Promise<Voiceprint> {
+  return apiFetch<Voiceprint>(`/api/voiceprints/${id}/disable`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export async function deleteVoiceprint(id: number): Promise<Voiceprint> {
+  const headers = await authHeaders();
+  const res = await fetch(`/api/voiceprints/${id}`, {
+    method: "DELETE",
+    headers,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail || `Delete voiceprint failed: ${res.status}`);
+  }
+  return res.json();
 }
 
 export async function updateActionItem(

@@ -40,11 +40,23 @@ class VoiceprintResponse(BaseModel):
     consent_recorded_at: Optional[datetime] = None
     sample_duration_seconds: Optional[float] = None
     sample_source: Optional[str] = None
+    disabled_reason: Optional[str] = None
+    deleted_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class VoiceprintListResponse(BaseModel):
+    """List of voiceprints visible to the current user."""
+    items: List[VoiceprintResponse]
+
+
+class VoiceprintDisableRequest(BaseModel):
+    """Request to disable a voiceprint without deleting its audit record."""
+    reason: Optional[str] = None
 
 
 # ============================================================================
