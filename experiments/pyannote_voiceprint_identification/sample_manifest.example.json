@@ -1,0 +1,34 @@
+{
+  "meeting": {
+    "label": "ias-sync-10min-smoke",
+    "audio_path": "audio/ias-sync-10min.wav",
+    "duration_seconds": 600,
+    "expected_speakers": 4,
+    "notes": "Use local ignored audio. Do not commit real meeting audio."
+  },
+  "pyannote": {
+    "media_key_prefix": "notetaker/pyannote-spike",
+    "matching_threshold": 60,
+    "exclusive_matching": true,
+    "poll_interval_seconds": 10,
+    "poll_timeout_seconds": 1800
+  },
+  "speakers": [
+    {
+      "label": "Joseph",
+      "display_name": "Joseph",
+      "email": "joseph@example.com",
+      "sample_path": "samples/joseph-30s.wav",
+      "expected_attendee": true,
+      "notes": "Use 20-30 seconds of clean single-speaker audio."
+    },
+    {
+      "label": "David",
+      "display_name": "David",
+      "email": "david@example.com",
+      "sample_path": "samples/david-30s.wav",
+      "expected_attendee": true,
+      "notes": "Replace example email/name in local manifest."
+    }
+  ]
+}

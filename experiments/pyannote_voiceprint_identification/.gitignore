@@ -1,0 +1,25 @@
+# Local sensitive inputs
+sample_manifest.local.json
+samples/
+audio/
+*.wav
+*.mp3
+*.m4a
+*.mp4
+*.mov
+*.flac
+*.ogg
+
+# Generated sensitive outputs
+outputs/
+*.voiceprint.json
+*.identification.json
+*.transcript.json
+*.merged.json
+*.report.md
+
+# Runtime caches
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
