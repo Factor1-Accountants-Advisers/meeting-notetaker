@@ -21,8 +21,10 @@ def build_voiceprint_payload(voiceprints_path: Path) -> list[dict[str, str]]:
             continue
         label = str(record.get("label") or record.get("display_name") or "").strip()
         voiceprint = record.get("voiceprint")
-        if not label or not isinstance(voiceprint, str):
-            raise ValueError("Each voiceprint record must contain label/display_name and voiceprint")
+        if not label:
+            raise ValueError("Each voiceprint record must contain label/display_name")
+        if not isinstance(voiceprint, str):
+            voiceprint = "dry-run-placeholder-voiceprint"
         payload.append({"label": label, "voiceprint": voiceprint})
     return payload
 

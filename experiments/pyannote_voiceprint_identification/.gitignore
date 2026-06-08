@@ -1,5 +1,6 @@
 # Local sensitive inputs
 sample_manifest.local.json
+sample_segments.local.json
 samples/
 audio/
 *.wav
