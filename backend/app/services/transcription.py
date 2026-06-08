@@ -27,6 +27,11 @@ from app.services.speaker_mapping import (
     upsert_speaker_mappings,
 )
 from app.services.storage import get_storage
+from app.services.voiceprint_identification import apply_voiceprint_identification
+from app.services.pyannote_voiceprint_provider import (
+    PyannoteVoiceprintError,
+    get_pyannote_voiceprint_provider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -344,6 +349,45 @@ def _maybe_retry_under_detection(
     return transcription_result
 
 
+def _pyannote_key_configured() -> bool:
+    return bool(settings.pyannote_api_key or os.environ.get("PYANNOTE_API_KEY"))
+
+
+def _maybe_apply_voiceprint_identification(
+    db: Session,
+    *,
+    meeting: Meeting,
+    transcript: Transcript,
+    local_audio_path: str,
+) -> Transcript:
+    """Best-effort pyannote voiceprint identification.
+
+    Transcription remains useful even when pyannote is not configured, has no
+    candidates, or fails. Those cases should fall back to the existing speaker
+    review/LLM path rather than failing the whole meeting.
+    """
+    if not _pyannote_key_configured():
+        logger.info("Meeting %s: pyannote key not configured; skipping voiceprint identification", meeting.id)
+        return transcript
+
+    try:
+        provider = get_pyannote_voiceprint_provider()
+        return apply_voiceprint_identification(
+            db,
+            meeting=meeting,
+            transcript=transcript,
+            local_audio_path=local_audio_path,
+            provider=provider,
+        )
+    except (PyannoteVoiceprintError, FileNotFoundError, ValueError) as exc:
+        logger.warning(
+            "Meeting %s: voiceprint identification skipped after provider error: %s",
+            meeting.id,
+            type(exc).__name__,
+        )
+        return transcript
+
+
 def _persist_initial_speaker_mapping_diagnostics(
     db: Session,
     meeting: Meeting,
@@ -377,7 +421,37 @@ def _persist_initial_speaker_mapping_diagnostics(
         else:
             candidates_by_display_name[normalized_display_name] = candidate
 
-    proposed_mappings = [
+    segments = cast(list[dict[str, Any]], cast(Any, transcript).segments or [])
+    pyannote_labels = {
+        segment.get("speaker")
+        for segment in segments
+        if segment.get("speaker_source") == "pyannote" and segment.get("speaker")
+    }
+
+    pyannote_mappings = [
+        {
+            "speaker_label": label,
+            "display_name": label,
+            "email": next(
+                (
+                    segment.get("matched_email")
+                    for segment in segments
+                    if segment.get("speaker") == label and segment.get("matched_email")
+                ),
+                None,
+            ),
+            "confidence": max(
+                float(segment.get("match_confidence") or 0.0)
+                for segment in segments
+                if segment.get("speaker") == label
+            ),
+            "reason": "pyannote voiceprint identification matched this speaker label",
+        }
+        for label in labels
+        if label in pyannote_labels
+    ]
+
+    assemblyai_mappings = [
         {
             "speaker_label": label,
             "display_name": candidate["display_name"],
@@ -386,17 +460,25 @@ def _persist_initial_speaker_mapping_diagnostics(
             "reason": "AssemblyAI speaker label exactly matched a unique candidate display name",
         }
         for label in labels
-        if (candidate := candidates_by_display_name.get(label)) is not None
+        if label not in pyannote_labels
+        and (candidate := candidates_by_display_name.get(label)) is not None
     ]
 
-    if proposed_mappings:
+    if pyannote_mappings:
         upsert_speaker_mappings(
             db=db,
             meeting=meeting,
-            proposed=proposed_mappings,
+            proposed=pyannote_mappings,
+            source=SpeakerMappingSource.PYANNOTE,
+        )
+    if assemblyai_mappings:
+        upsert_speaker_mappings(
+            db=db,
+            meeting=meeting,
+            proposed=assemblyai_mappings,
             source=SpeakerMappingSource.ASSEMBLYAI,
         )
-    else:
+    if not pyannote_mappings and not assemblyai_mappings:
         refresh_speaker_mapping_diagnostics(db, meeting)
 
     _restore_retry_diagnostic_fields(meeting, retry_fields)
@@ -491,6 +573,16 @@ def process_transcription(db: Session, meeting_id: int) -> Transcript:
 
         # Save results
         transcript = save_transcript(db, meeting_id, transcription_result)
+
+        # Best-effort pyannote voiceprint speaker identification. This can
+        # rewrite high-confidence transcript segment speakers to known names
+        # before the existing speaker-review/LLM reconciliation step runs.
+        transcript = _maybe_apply_voiceprint_identification(
+            db,
+            meeting=meeting,
+            transcript=transcript,
+            local_audio_path=local_audio_path,
+        )
 
         # Persist initial speaker mapping diagnostics without modifying
         # transcript segments. Generic labels remain unmapped and require review;

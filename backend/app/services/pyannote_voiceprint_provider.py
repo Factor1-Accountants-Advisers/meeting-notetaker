@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -47,6 +48,60 @@ class PyannoteVoiceprintProvider:
         if not isinstance(voiceprint, str) or not voiceprint:
             raise PyannoteVoiceprintError("pyannoteAI did not return a voiceprint")
         return voiceprint
+
+    def identify_speakers(
+        self,
+        audio_path: str | Path,
+        *,
+        voiceprints: list[dict[str, str]],
+        num_speakers: int | None = None,
+        matching_threshold: int = 60,
+        exclusive_matching: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Identify known speakers in meeting audio and return normalized segments."""
+        path = Path(audio_path)
+        if not path.exists():
+            raise FileNotFoundError(path)
+        if not voiceprints:
+            return []
+
+        media_url = f"media://meeting-identification/{uuid4().hex}{path.suffix or '.wav'}"
+        self._upload_media_file(path, media_url)
+        payload: dict[str, Any] = {
+            "url": media_url,
+            "model": "precision-2",
+            "voiceprints": [
+                {"label": item["label"], "voiceprint": item["voiceprint"]}
+                for item in voiceprints
+            ],
+            "matching": {
+                "threshold": matching_threshold,
+                "exclusive": exclusive_matching,
+            },
+        }
+        if num_speakers is not None:
+            payload["numSpeakers"] = num_speakers
+
+        job = self._request("POST", "/v1/identify", payload)
+        job_id = job.get("jobId") or job.get("id")
+        if not isinstance(job_id, str) or not job_id:
+            raise PyannoteVoiceprintError("pyannoteAI identify did not return a job id")
+        result = self._wait_for_job(job_id)
+        if str(result.get("status") or "").lower() != "succeeded":
+            raise PyannoteVoiceprintError("pyannoteAI identify job did not succeed")
+        return _normalize_identity_segments(result, voiceprints)
+
+    def _wait_for_job(self, job_id: str, *, interval_seconds: int = 10, timeout_seconds: int = 1800) -> dict[str, Any]:
+        deadline = time.time() + timeout_seconds
+        terminal_statuses = {"succeeded", "failed", "canceled"}
+        while True:
+            result = self._request("GET", f"/v1/jobs/{job_id}")
+            status = str(result.get("status") or "").lower()
+            if status in terminal_statuses:
+                return result
+            if time.time() >= deadline:
+                raise PyannoteVoiceprintError(f"Timed out waiting for pyannoteAI job {job_id}")
+            time.sleep(interval_seconds)
 
     def _upload_media_file(self, sample_path: Path, media_url: str) -> None:
         response = self._request("POST", "/v1/media/input", {"url": media_url})
@@ -97,6 +152,36 @@ class PyannoteVoiceprintProvider:
 
 def get_pyannote_voiceprint_provider() -> PyannoteVoiceprintProvider:
     return PyannoteVoiceprintProvider()
+
+
+def _normalize_identity_segments(
+    result: dict[str, Any],
+    voiceprints: list[dict[str, str]],
+) -> list[dict[str, Any]]:
+    label_to_email = {item.get("label"): item.get("email") for item in voiceprints}
+    raw_segments = result.get("diarization") or result.get("identification") or result.get("segments") or []
+    normalized: list[dict[str, Any]] = []
+    if not isinstance(raw_segments, list):
+        return normalized
+
+    for item in raw_segments:
+        if not isinstance(item, dict):
+            continue
+        label = item.get("label") or item.get("speaker") or item.get("display_name")
+        confidence = item.get("confidence")
+        if isinstance(confidence, dict) and label in confidence:
+            confidence = confidence[label]
+        elif isinstance(confidence, dict) and confidence:
+            # Use the selected speaker score when available; otherwise max score.
+            confidence = max(confidence.values())
+        normalized.append({
+            "start": item.get("start", 0.0),
+            "end": item.get("end", 0.0),
+            "display_name": label,
+            "email": label_to_email.get(label),
+            "confidence": confidence if confidence is not None else 0.0,
+        })
+    return normalized
 
 
 def _safe_label(label: str) -> str:

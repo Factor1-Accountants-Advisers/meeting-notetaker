@@ -50,6 +50,7 @@ class ActionItemStatus(str, enum.Enum):
 class SpeakerMappingSource(str, enum.Enum):
     """Source for resolved speaker identity mappings."""
     ASSEMBLYAI = "assemblyai"
+    PYANNOTE = "pyannote"
     LLM_INFERENCE = "llm_inference"
     USER_CORRECTED = "user_corrected"
 
