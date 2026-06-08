@@ -224,6 +224,103 @@ class TestMigration004SpeakerMappings:
             }
 
 
+class TestMigration005Voiceprints:
+    """Verify central voiceprint registry schema."""
+
+    @pytest.mark.asyncio
+    async def test_voiceprints_table_exists_with_privacy_fields(self, inspected_engine):
+        async with inspected_engine.connect() as conn:
+            tables = await conn.run_sync(lambda c: inspect(c).get_table_names())
+            columns = await conn.run_sync(
+                lambda c: {col["name"] for col in inspect(c).get_columns("voiceprints")}
+            )
+            indexes = await conn.run_sync(
+                lambda c: {index["name"] for index in inspect(c).get_indexes("voiceprints")}
+            )
+
+        assert "voiceprints" in tables
+        for column in (
+            "user_id",
+            "provider",
+            "provider_voiceprint_id",
+            "display_name",
+            "email",
+            "status",
+            "consent_recorded_at",
+            "raw_sample_path",
+            "sample_duration_seconds",
+            "sample_source",
+            "metadata_json",
+            "disabled_reason",
+            "deleted_at",
+            "created_at",
+            "updated_at",
+        ):
+            assert column in columns
+        assert "ix_voiceprints_user_id" in indexes
+        assert "ix_voiceprints_email" in indexes
+        assert "ix_voiceprints_status" in indexes
+        assert "ix_voiceprints_provider_voiceprint_id" in indexes
+
+    def test_upgrade_and_downgrade_on_sqlite(self):
+        migration_path = (
+            Path(__file__).resolve().parents[1]
+            / "alembic"
+            / "versions"
+            / "005_add_voiceprint_registry.py"
+        )
+        assert migration_path.exists(), "migration 005 file is missing"
+
+        spec = importlib.util.spec_from_file_location("migration_005", migration_path)
+        assert spec is not None and spec.loader is not None
+        migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(migration)
+
+        engine = sa.create_engine("sqlite:///:memory:")
+        metadata = sa.MetaData()
+        sa.Table("users", metadata, sa.Column("id", sa.Integer(), primary_key=True))
+        metadata.create_all(engine)
+
+        def run_migration(connection, function_name):
+            context = MigrationContext.configure(connection)
+            operations = Operations(context)
+            original_op = getattr(migration, "op")
+            setattr(migration, "op", operations)
+            try:
+                getattr(migration, function_name)()
+            finally:
+                setattr(migration, "op", original_op)
+
+        with engine.begin() as connection:
+            run_migration(connection, "upgrade")
+            inspector = inspect(connection)
+            assert "voiceprints" in inspector.get_table_names()
+            columns = {column["name"]: column for column in inspector.get_columns("voiceprints")}
+            assert columns["raw_sample_path"]["nullable"] is True
+            assert columns["provider_voiceprint_id"]["nullable"] is False
+            assert columns["status"]["nullable"] is False
+            defaults = str(columns["status"].get("default") or "")
+            assert "active" in defaults
+
+            connection.execute(text("INSERT INTO users (id) VALUES (1)"))
+            connection.execute(
+                text(
+                    "INSERT INTO voiceprints "
+                    "(user_id, provider_voiceprint_id, display_name, email, consent_recorded_at) "
+                    "VALUES (1, 'vp_1', 'Joseph', 'joseph@example.com', CURRENT_TIMESTAMP)"
+                )
+            )
+            stored = connection.execute(
+                text("SELECT provider, status, raw_sample_path FROM voiceprints WHERE provider_voiceprint_id = 'vp_1'")
+            ).one()
+            assert stored.provider == "pyannote"
+            assert stored.status == "active"
+            assert stored.raw_sample_path is None
+
+            run_migration(connection, "downgrade")
+            assert "voiceprints" not in inspect(connection).get_table_names()
+
+
 class TestMigration002IdentityHintsAndIsOrganizer:
     """Verify columns added in migration 002 are present."""
 

@@ -34,6 +34,13 @@ class MeetingStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class VoiceprintStatus(str, enum.Enum):
+    """Lifecycle status for a stored speaker voiceprint."""
+    ACTIVE = "active"
+    DISABLED = "disabled"
+    DELETED = "deleted"
+    NEEDS_REFRESH = "needs_refresh"
+
 class ActionItemStatus(str, enum.Enum):
     """Action item status."""
     OPEN = "open"
@@ -69,6 +76,47 @@ class User(Base):
 
     # Relationships
     meetings = relationship("Meeting", back_populates="user", cascade="all, delete-orphan")
+    voiceprints = relationship("Voiceprint", back_populates="user", cascade="all, delete-orphan")
+
+
+class Voiceprint(Base):
+    """Central firm voiceprint registry entry for known-speaker identification.
+
+    Raw sample audio should be temporary. Production code should normally store
+    only the provider voiceprint identifier plus consent/quality metadata here.
+    """
+    __tablename__ = "voiceprints"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "provider_voiceprint_id",
+            name="uq_voiceprints_provider_voiceprint_id",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    provider = Column(String, default="pyannote", nullable=False)
+    provider_voiceprint_id = Column(String, nullable=False, index=True)
+    display_name = Column(String, nullable=False)
+    email = Column(String, nullable=True, index=True)
+    status = Column(
+        Enum(VoiceprintStatus, values_callable=lambda e: [x.value for x in e]),
+        default=VoiceprintStatus.ACTIVE,
+        nullable=False,
+        index=True,
+    )
+    consent_recorded_at = Column(DateTime, nullable=True)
+    raw_sample_path = Column(String, nullable=True)
+    sample_duration_seconds = Column(Float, nullable=True)
+    sample_source = Column(String, nullable=True)
+    metadata_json = Column(JSONType, nullable=True)
+    disabled_reason = Column(Text, nullable=True)
+    deleted_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="voiceprints")
 
 
 class Meeting(Base):

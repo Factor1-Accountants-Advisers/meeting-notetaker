@@ -184,6 +184,56 @@ def upgrade_sqlite_schema(connection: Connection) -> None:
             "CREATE INDEX ix_speaker_mappings_source ON speaker_mappings (source)",
         )
 
+    if _sqlite_table_exists(connection, "users") and not _sqlite_table_exists(connection, "voiceprints"):
+        connection.execute(text("""
+            CREATE TABLE voiceprints (
+                id INTEGER NOT NULL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                provider VARCHAR NOT NULL DEFAULT 'pyannote',
+                provider_voiceprint_id VARCHAR NOT NULL,
+                display_name VARCHAR NOT NULL,
+                email VARCHAR,
+                status VARCHAR NOT NULL DEFAULT 'active',
+                consent_recorded_at DATETIME,
+                raw_sample_path VARCHAR,
+                sample_duration_seconds FLOAT,
+                sample_source VARCHAR,
+                metadata_json JSON,
+                disabled_reason TEXT,
+                deleted_at DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users (id),
+                CONSTRAINT uq_voiceprints_provider_voiceprint_id UNIQUE (provider, provider_voiceprint_id)
+            )
+        """))
+
+    if _sqlite_table_exists(connection, "voiceprints"):
+        _sqlite_create_index_if_missing(
+            connection,
+            "voiceprints",
+            "ix_voiceprints_user_id",
+            "CREATE INDEX ix_voiceprints_user_id ON voiceprints (user_id)",
+        )
+        _sqlite_create_index_if_missing(
+            connection,
+            "voiceprints",
+            "ix_voiceprints_email",
+            "CREATE INDEX ix_voiceprints_email ON voiceprints (email)",
+        )
+        _sqlite_create_index_if_missing(
+            connection,
+            "voiceprints",
+            "ix_voiceprints_status",
+            "CREATE INDEX ix_voiceprints_status ON voiceprints (status)",
+        )
+        _sqlite_create_index_if_missing(
+            connection,
+            "voiceprints",
+            "ix_voiceprints_provider_voiceprint_id",
+            "CREATE INDEX ix_voiceprints_provider_voiceprint_id ON voiceprints (provider_voiceprint_id)",
+        )
+
 
 async def create_tables():
     """Create all tables if they don't exist (used for SQLite dev mode)."""
