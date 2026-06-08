@@ -64,7 +64,7 @@ export interface ActionItem {
   updated_at: string;
 }
 
-export type SpeakerMappingSource = "assemblyai" | "llm_inference" | "user_corrected";
+export type SpeakerMappingSource = "assemblyai" | "pyannote" | "llm_inference" | "user_corrected";
 
 export type ActionOwnerSource =
   | "speaker_mapping"
