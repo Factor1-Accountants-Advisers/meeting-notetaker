@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from datetime import datetime
 import logging
+from pathlib import Path
+import tempfile
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy import select
@@ -10,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_active_user
 from app.core.database import get_db
-from app.models import User, Voiceprint
+from app.models import User, Voiceprint, VoiceprintStatus
 from app.schemas import VoiceprintDisableRequest, VoiceprintListResponse, VoiceprintResponse
 from app.services.pyannote_voiceprint_provider import (
     PyannoteVoiceprintError,
@@ -112,28 +115,48 @@ async def create_voiceprint(
     sample_bytes = await sample_file.read()
     consent_recorded_at = datetime.utcnow()
 
+    # Determine safe temp suffix
+    suffix = Path(sample_file.filename or "sample.wav").suffix.lower()
+    if suffix not in {".wav", ".mp3", ".m4a", ".mp4", ".aac", ".flac", ".ogg"}:
+        suffix = ".wav"
+
+    temp_path = Path(tempfile.gettempdir()) / f"voiceprint-sample-{uuid4().hex}{suffix}"
+    temp_path.write_bytes(sample_bytes)
     try:
-        return await db.run_sync(
-            lambda sync_db: onboard_voiceprint_sample(
-                sync_db,
-                user=current_user,
-                sample_bytes=sample_bytes,
-                original_filename=sample_file.filename or "voice-sample.wav",
-                content_type=sample_file.content_type,
-                provider=provider,
-                consent_recorded_at=consent_recorded_at,
-                sample_duration_seconds=sample_duration_seconds,
-                sample_source=sample_source,
-            )
-        )
-    except VoiceprintOnboardingError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
-    except PyannoteVoiceprintError as exc:
-        logger.warning("pyannote voiceprint creation failed: %s", type(exc).__name__)
+        provider_voiceprint_id = provider.create_voiceprint(temp_path, label=current_user.name)
+    except PyannoteVoiceprintError:
+        temp_path.unlink(missing_ok=True)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Voiceprint provider failed",
-        ) from exc
+        )
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+    if not provider_voiceprint_id:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Voiceprint provider returned empty ID",
+        )
+
+    # Create registry record in the async session (not db.run_sync)
+    from app.services.voiceprint_registry import normalize_email
+    vp = Voiceprint(
+        user_id=current_user.id,
+        provider="pyannote",
+        provider_voiceprint_id=provider_voiceprint_id,
+        display_name=current_user.name.strip(),
+        email=normalize_email(current_user.email),
+        status=VoiceprintStatus.ACTIVE,
+        consent_recorded_at=consent_recorded_at,
+        sample_duration_seconds=sample_duration_seconds,
+        sample_source=sample_source,
+        metadata_json={
+            "original_filename": sample_file.filename or "voice-sample.wav",
+            "content_type": sample_file.content_type,
+        },
+    )
+    db.add(vp)
+    await db.commit()
+    # model_validate while session is fresh (expire_on_commit refreshes on access)
+    return VoiceprintResponse.model_validate(vp)
