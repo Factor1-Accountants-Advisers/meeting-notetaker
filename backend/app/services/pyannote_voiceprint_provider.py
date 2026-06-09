@@ -29,7 +29,8 @@ class PyannoteVoiceprintProvider:
 
     def __init__(self, api_key: str | None = None, base_url: str = API_BASE_URL):
         self.api_key = api_key or settings.pyannote_api_key or os.environ.get("PYANNOTE_API_KEY")
-        if not self.api_key:
+        self._mock = os.environ.get("DEV_MOCK_PYANNOTE") == "1"
+        if not self.api_key and not self._mock:
             raise PyannoteVoiceprintError("PYANNOTE_API_KEY is not configured")
         self.base_url = base_url.rstrip("/")
 
@@ -39,6 +40,8 @@ class PyannoteVoiceprintProvider:
         pyannote's voiceprint endpoint returns a provider-specific voiceprint
         value. Treat it as opaque and never log it.
         """
+        if self._mock:
+            return f"dev-mock-voiceprint-{uuid4().hex[:8]}"
         if not sample_path.exists():
             raise FileNotFoundError(sample_path)
         media_url = f"media://voiceprint-samples/{_safe_label(label)}-{uuid4().hex}{sample_path.suffix}"

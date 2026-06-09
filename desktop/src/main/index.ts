@@ -199,6 +199,9 @@ app.whenReady().then(async () => {
   ).catch((err) => console.warn('[startup] Audio device detection failed:', err));
 
   mainWindow = createMainWindow();
+  if (!app.isPackaged && process.env.SHOW_WINDOW_ON_START === '1') {
+    showMainWindow();
+  }
 
   startScheduler();
 

@@ -218,6 +218,9 @@ electron_1.app.whenReady().then(async () => {
         }
     })).catch((err) => console.warn('[startup] Audio device detection failed:', err));
     mainWindow = createMainWindow();
+    if (!electron_1.app.isPackaged && process.env.SHOW_WINDOW_ON_START === '1') {
+        showMainWindow();
+    }
     (0, scheduler_1.startScheduler)();
     const updater = (0, updater_1.initUpdater)({
         isPackaged: electron_1.app.isPackaged,
