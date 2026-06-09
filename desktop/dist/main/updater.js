@@ -4,6 +4,8 @@ exports.resetUpdaterStateForTests = resetUpdaterStateForTests;
 exports.initUpdater = initUpdater;
 const electron_1 = require("electron");
 const electron_updater_1 = require("electron-updater");
+const path_1 = require("path");
+const promises_1 = require("fs/promises");
 const DEFAULT_CHECK_INTERVAL_MS = 4 * 3600000;
 let initialized = false;
 let state = { status: 'idle', downloaded: false };
@@ -30,6 +32,32 @@ function describeError(err) {
     if (err instanceof Error)
         return err.message;
     return String(err);
+}
+/**
+ * Remove stale cached installer files left by previous updates.
+ *
+ * electron-updater downloads to `%LOCALAPPDATA%/<appName>-updater/pending/`
+ * and NSIS drops a copy at the cache root. Neither is cleaned automatically,
+ * so every update leaves ~143 MB behind. Call this on startup (before any new
+ * update check) so old installers don't accumulate indefinitely.
+ */
+async function cleanupUpdaterCache() {
+    try {
+        const cacheDir = (0, path_1.join)(electron_1.app.getPath('userData'), '..', 'meeting-notetaker-desktop-updater');
+        const filesToRemove = ['installer.exe', 'current.blockmap'];
+        for (const name of filesToRemove) {
+            const fullPath = (0, path_1.join)(cacheDir, name);
+            try {
+                await (0, promises_1.rm)(fullPath, { force: true, maxRetries: 2 });
+            }
+            catch {
+                // File may not exist or be locked; that's fine.
+            }
+        }
+    }
+    catch {
+        // Updater cache directory may not exist yet; that's fine.
+    }
 }
 async function showManualDialog(type, title, message) {
     await electron_1.dialog.showMessageBox({
@@ -186,7 +214,7 @@ function initUpdater(options) {
         },
     };
     if (options.isPackaged && options.checkIntervalMs !== 0) {
-        void controller.checkForUpdates(false);
+        void cleanupUpdaterCache().then(() => controller.checkForUpdates(false));
         setInterval(() => void controller.checkForUpdates(false), options.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS);
     }
     return controller;
