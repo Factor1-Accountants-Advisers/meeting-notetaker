@@ -36,8 +36,8 @@ export default function VoiceprintPreviewPage() {
       });
 
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error((data as any).detail || `Upload failed (${res.status})`);
+        const data: Record<string, unknown> = await res.json().catch(() => ({}));
+        throw new Error((data.detail as string) || `Upload failed (${res.status})`);
       }
 
       const result = await res.json();

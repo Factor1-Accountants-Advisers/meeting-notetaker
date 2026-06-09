@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 import logging
 from pathlib import Path
 import tempfile
@@ -24,7 +25,7 @@ from app.services.voiceprint_onboarding import (
     VoiceprintProvider,
     onboard_voiceprint_sample,
 )
-from app.services.voiceprint_registry import disable_voiceprint, mark_voiceprint_deleted
+from app.services.voiceprint_registry import disable_voiceprint, mark_voiceprint_deleted, normalize_email
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/voiceprints", tags=["voiceprints"])
@@ -69,7 +70,7 @@ async def disable_current_user_voiceprint(
     request: VoiceprintDisableRequest | None = None,
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
-) -> Voiceprint:
+) -> VoiceprintResponse:
     """Disable a current user's voiceprint while keeping audit metadata."""
     voiceprint = await _get_owned_voiceprint_or_404(db, voiceprint_id, current_user)
     reason = request.reason if request else None
@@ -81,7 +82,7 @@ async def delete_current_user_voiceprint(
     voiceprint_id: int,
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
-) -> Voiceprint:
+) -> VoiceprintResponse:
     """Soft-delete a current user's voiceprint.
 
     Provider deletion/revocation can be added later if pyannote exposes a delete
@@ -100,7 +101,7 @@ async def create_voiceprint(
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
     provider: VoiceprintProvider = Depends(get_pyannote_voiceprint_provider),
-) -> Voiceprint:
+) -> VoiceprintResponse:
     """Create a voiceprint for the current user.
 
     Raw sample bytes are temporary only. The service deletes the temp file after
@@ -139,24 +140,49 @@ async def create_voiceprint(
             detail="Voiceprint provider returned empty ID",
         )
 
-    # Create registry record in the async session (not db.run_sync)
-    from app.services.voiceprint_registry import normalize_email
-    vp = Voiceprint(
+    # Insert via raw SQL to avoid aiosqlite session refresh issue
+    from sqlalchemy import text
+    now = datetime.utcnow()
+    result = await db.execute(
+        text(
+            "INSERT INTO voiceprints (user_id, provider, provider_voiceprint_id, "
+            "display_name, email, status, consent_recorded_at, "
+            "sample_duration_seconds, sample_source, metadata_json, "
+            "created_at, updated_at) "
+            "VALUES (:uid, :prov, :vpid, :dname, :email, :status, :consent_at, "
+            ":dur, :src, :meta, :now, :now) RETURNING id"
+        ),
+        {
+            "uid": current_user.id,
+            "prov": "pyannote",
+            "vpid": provider_voiceprint_id,
+            "dname": current_user.name.strip() if current_user.name else "Unknown",
+            "email": normalize_email(current_user.email),
+            "status": "active",
+            "consent_at": consent_recorded_at,
+            "dur": sample_duration_seconds,
+            "src": sample_source,
+            "meta": json.dumps({
+                "original_filename": sample_file.filename or "voice-sample.wav",
+                "content_type": sample_file.content_type,
+            }),
+            "now": now,
+        },
+    )
+    await db.commit()
+    row = result.fetchone()
+    vp_id = row[0] if row else 0
+
+    return VoiceprintResponse(
+        id=vp_id,
         user_id=current_user.id,
         provider="pyannote",
-        provider_voiceprint_id=provider_voiceprint_id,
-        display_name=current_user.name.strip(),
+        display_name=current_user.name.strip() if current_user.name else "Unknown",
         email=normalize_email(current_user.email),
-        status=VoiceprintStatus.ACTIVE,
+        status="active",
         consent_recorded_at=consent_recorded_at,
         sample_duration_seconds=sample_duration_seconds,
         sample_source=sample_source,
-        metadata_json={
-            "original_filename": sample_file.filename or "voice-sample.wav",
-            "content_type": sample_file.content_type,
-        },
+        created_at=now,
+        updated_at=now,
     )
-    db.add(vp)
-    await db.commit()
-    # model_validate while session is fresh (expire_on_commit refreshes on access)
-    return VoiceprintResponse.model_validate(vp)
