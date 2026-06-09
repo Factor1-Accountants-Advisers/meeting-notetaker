@@ -8,7 +8,7 @@ import * as dotenv from 'dotenv';
 let backendProcess: ChildProcess | null = null;
 
 const RUNTIME_ENV_FILE = '.env.production.local';
-const RUNTIME_ENV_KEYS = ['ASSEMBLYAI_API_KEY', 'OPENAI_API_KEY'] as const;
+const RUNTIME_ENV_KEYS = ['ASSEMBLYAI_API_KEY', 'OPENAI_API_KEY', 'PYANNOTE_API_KEY'] as const;
 
 type RuntimeEnvKey = typeof RUNTIME_ENV_KEYS[number];
 type RuntimeOverrideEnv = Partial<Record<RuntimeEnvKey, string>>;

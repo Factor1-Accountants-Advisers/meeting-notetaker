@@ -46,7 +46,7 @@ const path = __importStar(require("path"));
 const dotenv = __importStar(require("dotenv"));
 let backendProcess = null;
 const RUNTIME_ENV_FILE = '.env.production.local';
-const RUNTIME_ENV_KEYS = ['ASSEMBLYAI_API_KEY', 'OPENAI_API_KEY'];
+const RUNTIME_ENV_KEYS = ['ASSEMBLYAI_API_KEY', 'OPENAI_API_KEY', 'PYANNOTE_API_KEY'];
 function loadRuntimeOverrideEnv(userDataDir) {
     const envPath = path.join(userDataDir, RUNTIME_ENV_FILE);
     if (!fs.existsSync(envPath)) {
