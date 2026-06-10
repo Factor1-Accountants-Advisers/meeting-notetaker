@@ -7,3 +7,4 @@ recordings
 .env
 .env.*
 !.env.example
+dist

@@ -12,6 +12,10 @@ win:
   target:
     - nsis
   # Code-signing certificate to be supplied before first release (see requirements §8.1).
+  # Dev-machine note: exe metadata editing needs the winCodeSign cache, whose
+  # extraction requires Windows symlink privilege (Developer Mode). Disabled for
+  # local dry runs; release builds happen in CI where this is enabled + signed.
+  signAndEditExecutable: false
 nsis:
   oneClick: true
   perMachine: false
