@@ -1,0 +1,22 @@
+appId: com.factor1.notetaker
+productName: Meeting Notetaker
+directories:
+  buildResources: build
+files:
+  - '!**/.vscode/*'
+  - '!{electron.vite.config.ts,.gitignore}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!{tailwind.config.js,postcss.config.js}'
+  - '!docs/*'
+win:
+  target:
+    - nsis
+  # Code-signing certificate to be supplied before first release (see requirements §8.1).
+nsis:
+  oneClick: true
+  perMachine: false
+  artifactName: ${productName}-${version}-setup.${ext}
+# electron-updater feed: static Azure Blob container (configured at release time).
+publish:
+  provider: generic
+  url: https://REPLACE_ME.blob.core.windows.net/updates/
