@@ -1,8 +1,10 @@
-import { Mic, RefreshCw, ShieldCheck } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { CloudOff, Mic, RefreshCw, ShieldCheck } from 'lucide-react'
 import { Card } from '@renderer/components/ui/Card'
 import { Pill } from '@renderer/components/ui/Pill'
 import { Avatar } from '@renderer/components/ui/Avatar'
-import { staff, type EnrollmentState, type StaffMember } from '@renderer/data/mock'
+import { fetchPeople } from '@renderer/lib/api'
+import { staff as sampleStaff, type EnrollmentState, type StaffMember } from '@renderer/data/mock'
 import type { Tone } from '@renderer/components/ui/tones'
 
 const enrollmentLabel: Record<EnrollmentState, { text: string; tone: Tone }> = {
@@ -12,6 +14,21 @@ const enrollmentLabel: Record<EnrollmentState, { text: string; tone: Tone }> = {
 }
 
 export function PeopleScreen(): JSX.Element {
+  const [staff, setStaff] = useState<StaffMember[]>(sampleStaff)
+  const [offline, setOffline] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    fetchPeople().then((live) => {
+      if (cancelled) return
+      if (live) setStaff(live)
+      else setOffline(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const enrolledCount = staff.filter((s) => s.enrollment === 'enrolled').length
 
   return (
@@ -28,6 +45,12 @@ export function PeopleScreen(): JSX.Element {
           Staff only. Voiceprints are stored as encrypted embeddings and deleted on
           offboarding; clients and external attendees are never enrolled.
         </p>
+        {offline && (
+          <p className="mt-1.5 flex items-center gap-1.5 text-[12px] text-content-warning">
+            <CloudOff size={13} strokeWidth={1.75} />
+            Backend unavailable — showing sample data.
+          </p>
+        )}
       </div>
 
       <Card className="!py-1">

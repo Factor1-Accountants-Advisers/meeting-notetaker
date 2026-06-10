@@ -100,6 +100,7 @@ class ActionItemUpdate(BaseModel):
 class PersonEnrollment(BaseModel):
     employee_id: str
     display_name: str
+    role: str = ""
     enrolled: bool
     model_version: str | None = None
     reenrollment_required: bool = False

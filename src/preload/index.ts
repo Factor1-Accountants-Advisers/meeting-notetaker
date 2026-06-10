@@ -1,9 +1,23 @@
-import { contextBridge } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 
-// Custom APIs for renderer. Backend access (FastAPI) will be wired here later;
-// the renderer never touches the DB or Azure directly.
-const api = {}
+export interface ApiResponse<T = unknown> {
+  ok: boolean
+  status: number // 0 = backend unreachable
+  body: T | null
+}
+
+// Single funnel to the FastAPI backend via the main process. The renderer
+// never touches the network or any credentials directly.
+const api = {
+  request: <T = unknown>(
+    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    path: string,
+    body?: unknown
+  ): Promise<ApiResponse<T>> => ipcRenderer.invoke('api:request', { method, path, body })
+}
+
+export type Api = typeof api
 
 if (process.contextIsolated) {
   try {
