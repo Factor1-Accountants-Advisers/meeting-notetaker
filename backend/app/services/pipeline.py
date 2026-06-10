@@ -122,6 +122,9 @@ async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
     except Exception:
         logger.exception("pipeline failed for %s", meeting_id)
         _set_status(meeting_id, PipelineStatus.failed)
+    finally:
+        # Async task runs outside any request, so persist explicitly.
+        store.save_snapshot()
 
 
 def kick_pipeline(meeting_id: UUID, audio_path: Path) -> None:

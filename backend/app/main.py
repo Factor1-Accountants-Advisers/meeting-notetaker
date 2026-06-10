@@ -1,6 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
+from app import store
 from app.config import get_settings
 from app.routers import action_items, health, meetings, people
 
@@ -21,6 +22,14 @@ def create_app() -> FastAPI:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+    @app.middleware("http")
+    async def snapshot_after_mutation(request: Request, call_next) -> Response:  # type: ignore[no-untyped-def]
+        response = await call_next(request)
+        # Persist store state after any successful mutation (Postgres stand-in).
+        if request.method != "GET" and response.status_code < 400:
+            store.save_snapshot()
+        return response
 
     app.include_router(health.router)
     app.include_router(meetings.router, prefix=settings.api_v1_prefix)
