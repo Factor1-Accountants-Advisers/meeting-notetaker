@@ -33,7 +33,10 @@ export interface ActionItem {
   id: string
   description: string
   sourceMeeting: string
+  meetingId: string | null // null when the source meeting has no review data yet
+  owner: string | null // null = owned by an unnamed Unknown speaker
   dueLabel: string
+  dueISO: string
   overdue: boolean
   priority: Priority
   status: Status
@@ -119,7 +122,10 @@ export const myActionItems: ActionItem[] = [
     id: 'a1',
     description: "Reconcile Smith's Bakery accounts",
     sourceMeeting: 'Accounts review',
+    meetingId: null,
+    owner: 'Gerd Guerrero',
     dueLabel: 'due 6 Jun',
+    dueISO: '2026-06-06',
     overdue: true,
     priority: 'High',
     status: 'Overdue'
@@ -128,7 +134,10 @@ export const myActionItems: ActionItem[] = [
     id: 'a2',
     description: 'Update depreciation schedule',
     sourceMeeting: 'Q2 review — Henderson',
+    meetingId: 'm1',
+    owner: 'Gerd Guerrero',
     dueLabel: 'due 13 Jun',
+    dueISO: '2026-06-13',
     overdue: false,
     priority: 'Medium',
     status: 'Open'
@@ -137,7 +146,10 @@ export const myActionItems: ActionItem[] = [
     id: 'a3',
     description: 'Send FY25 provisional tax estimate',
     sourceMeeting: 'Tax compliance — Henderson',
+    meetingId: 'm1',
+    owner: 'Gerd Guerrero',
     dueLabel: 'due 16 Jun',
+    dueISO: '2026-06-16',
     overdue: false,
     priority: 'Medium',
     status: 'Open'
@@ -146,11 +158,75 @@ export const myActionItems: ActionItem[] = [
     id: 'a4',
     description: 'Draft payroll summary for HR',
     sourceMeeting: 'Payroll discussion',
+    meetingId: 'm4',
+    owner: 'Gerd Guerrero',
     dueLabel: 'due 18 Jun',
+    dueISO: '2026-06-18',
     overdue: false,
     priority: 'Low',
     status: 'Open'
   }
+]
+
+/** Cross-meeting items (§5.4): everything the user can see, not just their own. */
+export const allActionItems: ActionItem[] = [
+  ...myActionItems,
+  {
+    id: 'a5',
+    description: 'Chase missing Q2 invoices from Acme Retail',
+    sourceMeeting: 'Tax compliance — Acme Retail',
+    meetingId: 'm3',
+    owner: 'M. Santos',
+    dueLabel: 'due 11 Jun',
+    dueISO: '2026-06-11',
+    overdue: false,
+    priority: 'High',
+    status: 'Open'
+  },
+  {
+    id: 'a6',
+    description: 'Circulate stand-up notes to accounting',
+    sourceMeeting: 'Daily stand-up',
+    meetingId: 'm2',
+    owner: 'R. Abad',
+    dueLabel: 'due 9 Jun',
+    dueISO: '2026-06-09',
+    overdue: false,
+    priority: 'Low',
+    status: 'Done'
+  },
+  {
+    id: 'a7',
+    description: 'Confirm BIR filing deadline with Henderson board',
+    sourceMeeting: 'Q2 review — Henderson',
+    meetingId: 'm1',
+    owner: null, // owned by Unknown 1 — unassigned until named
+    dueLabel: 'due 12 Jun',
+    dueISO: '2026-06-12',
+    overdue: false,
+    priority: 'Medium',
+    status: 'Open'
+  }
+]
+
+export type EnrollmentState = 'enrolled' | 'not_enrolled' | 'reenroll_required'
+
+export interface StaffMember {
+  id: string
+  name: string
+  role: string
+  tone: Tone
+  enrollment: EnrollmentState
+  modelVersion: string | null
+}
+
+export const staff: StaffMember[] = [
+  { id: 'gerd', name: 'Gerd Guerrero', role: 'AI engineer', tone: 'info', enrollment: 'enrolled', modelVersion: 'pyannote/embedding-3.1' },
+  { id: 'msantos', name: 'M. Santos', role: 'Senior accountant', tone: 'success', enrollment: 'enrolled', modelVersion: 'pyannote/embedding-3.1' },
+  { id: 'jlim', name: 'J. Lim', role: 'Accountant', tone: 'warning', enrollment: 'not_enrolled', modelVersion: null },
+  { id: 'rabad', name: 'R. Abad', role: 'Adviser', tone: 'secondary', enrollment: 'reenroll_required', modelVersion: 'pyannote/embedding-3.0' },
+  { id: 'lperez', name: 'L. Perez', role: 'HR manager', tone: 'danger', enrollment: 'not_enrolled', modelVersion: null },
+  { id: 'swong', name: 'S. Wong', role: 'Payroll officer', tone: 'success', enrollment: 'enrolled', modelVersion: 'pyannote/embedding-3.1' }
 ]
 
 export interface TranscriptSegment {
