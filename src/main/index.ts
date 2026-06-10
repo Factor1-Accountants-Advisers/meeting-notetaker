@@ -68,7 +68,13 @@ function createWindow(): void {
 ipcMain.handle(
   'recording:save',
   async (_event, name: string, data: ArrayBuffer): Promise<{ path: string }> => {
-    const dir = join(app.getPath('userData'), 'recordings')
+    // Dev: save inside the repo — when the app is launched from a sandboxed
+    // shell (e.g. Claude's MSIX package), AppData writes get virtualized into
+    // the package's LocalCache and become invisible in Explorer. Repo paths
+    // are not redirected. Production keeps userData.
+    const dir = is.dev
+      ? join(app.getAppPath(), 'recordings')
+      : join(app.getPath('userData'), 'recordings')
     await mkdir(dir, { recursive: true })
     // Keep the name strictly ours: id + extension only.
     const safe = name.replace(/[^a-zA-Z0-9._-]/g, '_')
