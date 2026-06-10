@@ -4,7 +4,13 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, HTTPException, status
 
 from app import store
-from app.schemas import Meeting, MeetingCreate, MeetingStatus
+from app.schemas import (
+    Meeting,
+    MeetingCreate,
+    MeetingReview,
+    MeetingStatus,
+    NameSpeakerRequest,
+)
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 
@@ -37,6 +43,61 @@ async def create_meeting(body: MeetingCreate) -> Meeting:
     )
     store.MEETINGS[meeting.id] = meeting
     return meeting
+
+
+def _build_review(meeting: Meeting) -> MeetingReview:
+    items = [
+        a.model_copy(update={"meeting_title": meeting.title})
+        for a in store.ACTION_ITEMS.values()
+        if a.meeting_id == meeting.id
+    ]
+    return MeetingReview(
+        meeting=meeting,
+        summary_text=store.SUMMARIES.get(meeting.id),
+        participants=store.PARTICIPANTS.get(meeting.id, []),
+        segments=store.TRANSCRIPTS.get(meeting.id, []),
+        action_items=items,
+    )
+
+
+@router.get("/{meeting_id}/review", response_model=MeetingReview)
+async def get_review(meeting_id: UUID) -> MeetingReview:
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    return _build_review(meeting)
+
+
+@router.post("/{meeting_id}/name-speaker", response_model=MeetingReview)
+async def name_speaker(meeting_id: UUID, body: NameSpeakerRequest) -> MeetingReview:
+    """Manually name an unknown diarized speaker (requirements §4.4).
+
+    Renames the speaker across transcript and participants and decrements the
+    meeting's unknown count. Audit logging attaches here later.
+    """
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+
+    participants = store.PARTICIPANTS.get(meeting_id, [])
+    target = next((p for p in participants if p.name == body.label and not p.known), None)
+    if target is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, f"No unknown speaker labelled '{body.label}'"
+        )
+
+    target.name = body.name
+    target.known = True
+    for seg in store.TRANSCRIPTS.get(meeting_id, []):
+        if seg.speaker == body.label:
+            seg.speaker = body.name
+            seg.speaker_known = True
+
+    updated = meeting.model_copy(
+        update={"unknown_speaker_count": max(0, meeting.unknown_speaker_count - 1)}
+    )
+    store.MEETINGS[meeting_id] = updated
+    return _build_review(updated)
 
 
 @router.post("/{meeting_id}/finalize", response_model=Meeting)

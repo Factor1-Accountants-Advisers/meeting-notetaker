@@ -1,10 +1,12 @@
 import { useState } from 'react'
-import { ArrowUpDown, ChevronRight, Plus } from 'lucide-react'
+import { ArrowUpDown, ChevronRight, CloudOff, Plus } from 'lucide-react'
 import { Card } from '@renderer/components/ui/Card'
 import { Pill } from '@renderer/components/ui/Pill'
 import { AvatarStack } from '@renderer/components/ui/Avatar'
 import { toneClasses } from '@renderer/components/ui/tones'
-import { meetings, type Meeting, type MeetingStatus } from '@renderer/data/mock'
+import { fetchMeetings } from '@renderer/lib/api'
+import { useLive } from '@renderer/lib/useLive'
+import { meetings as sampleMeetings, type Meeting, type MeetingStatus } from '@renderer/data/mock'
 
 type Filter = 'All' | 'Drafts' | 'Finalized'
 const FILTERS: Filter[] = ['All', 'Drafts', 'Finalized']
@@ -20,10 +22,11 @@ export function MeetingsScreen({
   onOpenMeeting: (id: string) => void
 }): JSX.Element {
   const [filter, setFilter] = useState<Filter>('All')
+  const { data: meetings, offline } = useLive(fetchMeetings, sampleMeetings)
 
   const visible =
     filter === 'All' ? meetings : meetings.filter((m) => m.status === filterToStatus[filter])
-  const groups = (['Today', 'Earlier this week'] as const)
+  const groups = (['Today', 'Earlier this week', 'Older'] as const)
     .map((g) => ({ name: g, items: visible.filter((m) => m.group === g) }))
     .filter((g) => g.items.length > 0)
 
@@ -33,6 +36,12 @@ export function MeetingsScreen({
         <h1 className="text-[22px] font-medium text-content-primary">
           Meetings{' '}
           <span className="text-[14px] font-normal text-content-tertiary">· {meetings.length}</span>
+          {offline && (
+            <span className="ml-2 inline-flex items-center gap-1 align-middle text-[12px] font-normal text-content-warning">
+              <CloudOff size={13} strokeWidth={1.75} />
+              sample data
+            </span>
+          )}
         </h1>
         <button
           type="button"

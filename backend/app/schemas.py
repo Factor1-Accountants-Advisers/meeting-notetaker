@@ -82,6 +82,7 @@ class Summary(BaseModel):
 class ActionItem(BaseModel):
     id: UUID
     meeting_id: UUID
+    meeting_title: str = ""  # denormalised for list views; filled by routers
     owner: str | None = None  # None when owned by an unnamed Unknown speaker
     description: str
     deadline: date | None = None
@@ -95,6 +96,26 @@ class ActionItemUpdate(BaseModel):
     deadline: date | None = None
     priority: Priority | None = None
     status: ActionItemStatus | None = None
+
+
+class MeetingParticipant(BaseModel):
+    name: str  # display name, or "Unknown N" until manually named
+    known: bool
+
+
+class MeetingReview(BaseModel):
+    """Everything the review screen needs in one response."""
+
+    meeting: "Meeting"
+    summary_text: str | None = None
+    participants: list[MeetingParticipant] = []
+    segments: list[TranscriptSegment] = []
+    action_items: list[ActionItem] = []
+
+
+class NameSpeakerRequest(BaseModel):
+    label: str = Field(min_length=1)  # e.g. "Unknown 1"
+    name: str = Field(min_length=1)
 
 
 class PersonEnrollment(BaseModel):

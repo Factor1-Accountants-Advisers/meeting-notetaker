@@ -14,7 +14,16 @@ import { Card, SectionHeader } from '@renderer/components/ui/Card'
 import { Pill, priorityTone, statusTone } from '@renderer/components/ui/Pill'
 import { AvatarStack } from '@renderer/components/ui/Avatar'
 import { toneClasses } from '@renderer/components/ui/tones'
-import { upcomingMeetings, recordings, myActionItems } from '@renderer/data/mock'
+import { fetchActionItems } from '@renderer/lib/api'
+import { useLive } from '@renderer/lib/useLive'
+import { upcomingMeetings, recordings, myActionItems as sampleMyItems } from '@renderer/data/mock'
+
+const CURRENT_USER = 'Gerd Guerrero' // from Entra ID once auth lands
+
+async function fetchMyOpenItems(): Promise<typeof sampleMyItems | null> {
+  const all = await fetchActionItems()
+  return all ? all.filter((a) => a.owner === CURRENT_USER && a.status !== 'Done') : null
+}
 
 export function HomeScreen(): JSX.Element {
   return (
@@ -188,6 +197,7 @@ function RecordingsCard(): JSX.Element {
 }
 
 function ActionItemsCard(): JSX.Element {
+  const { data: myActionItems } = useLive(fetchMyOpenItems, sampleMyItems)
   const [done, setDone] = useState<Set<string>>(new Set())
   const open = myActionItems.filter((a) => !done.has(a.id))
   const overdueCount = open.filter((a) => a.overdue).length

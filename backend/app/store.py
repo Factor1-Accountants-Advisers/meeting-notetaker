@@ -11,10 +11,12 @@ from app.schemas import (
     ActionItem,
     ActionItemStatus,
     Meeting,
+    MeetingParticipant,
     MeetingSource,
     MeetingStatus,
     PersonEnrollment,
     Priority,
+    TranscriptSegment,
 )
 
 
@@ -75,13 +77,61 @@ MEETINGS: dict[UUID, Meeting] = {
     ]
 }
 
+SUMMARIES: dict[UUID, str] = {
+    _mid("q2-henderson"): (
+        "Quarterly review of Henderson & Co accounts. Revenue is tracking 8% ahead "
+        "of forecast; depreciation schedule needs updating before the FY25 "
+        "provisional tax estimate goes out. Client asked for a reconciliation of "
+        "the Smith's Bakery subsidiary accounts by end of week. Next review booked "
+        "for early September."
+    ),
+}
+
+PARTICIPANTS: dict[UUID, list[MeetingParticipant]] = {
+    _mid("q2-henderson"): [
+        MeetingParticipant(name="Gerd Guerrero", known=True),
+        MeetingParticipant(name="M. Santos", known=True),
+        MeetingParticipant(name="Unknown 1", known=False),
+    ],
+}
+
+TRANSCRIPTS: dict[UUID, list[TranscriptSegment]] = {
+    _mid("q2-henderson"): [
+        TranscriptSegment(
+            speaker="Gerd Guerrero", speaker_known=True, start_ms=12_000, end_ms=24_000,
+            text="Thanks for joining. Agenda today is the Q2 numbers, the depreciation "
+                 "schedule, and the provisional tax estimate for FY25.",
+        ),
+        TranscriptSegment(
+            speaker="M. Santos", speaker_known=True, start_ms=65_000, end_ms=89_000,
+            text="Revenue is sitting about eight percent ahead of forecast. Margins are "
+                 "flat — the cost increases in logistics ate the gains.",
+        ),
+        TranscriptSegment(
+            speaker="Unknown 1", speaker_known=False, start_ms=221_000, end_ms=240_000,
+            text="On our side we'd like the Smith's Bakery accounts reconciled before "
+                 "Friday, if that's workable. The board meets Monday.",
+        ),
+        TranscriptSegment(
+            speaker="Gerd Guerrero", speaker_known=True, start_ms=242_000, end_ms=260_000,
+            text="Workable. I'll take that one. We'll also need the updated depreciation "
+                 "schedule before the estimate — Marco, can you own that?",
+        ),
+        TranscriptSegment(
+            speaker="M. Santos", speaker_known=True, start_ms=258_000, end_ms=275_000,
+            text="Yes — I'll have it by the 13th. The FY25 provisional estimate can "
+                 "follow on the 16th.",
+        ),
+    ],
+}
+
 ACTION_ITEMS: dict[UUID, ActionItem] = {
     a.id: a
     for a in [
         ActionItem(
             id=_aid("reconcile-smiths"),
             meeting_id=_mid("q2-henderson"),
-            owner="Gerd",
+            owner="Gerd Guerrero",
             description="Reconcile Smith's Bakery accounts",
             deadline=date(2026, 6, 6),
             priority=Priority.high,
@@ -90,7 +140,7 @@ ACTION_ITEMS: dict[UUID, ActionItem] = {
         ActionItem(
             id=_aid("depreciation"),
             meeting_id=_mid("q2-henderson"),
-            owner="Gerd",
+            owner="Gerd Guerrero",
             description="Update depreciation schedule",
             deadline=date(2026, 6, 13),
             priority=Priority.medium,
@@ -99,7 +149,7 @@ ACTION_ITEMS: dict[UUID, ActionItem] = {
         ActionItem(
             id=_aid("fy25-estimate"),
             meeting_id=_mid("q2-henderson"),
-            owner="Gerd",
+            owner="Gerd Guerrero",
             description="Send FY25 provisional tax estimate",
             deadline=date(2026, 6, 16),
             priority=Priority.medium,
@@ -108,10 +158,37 @@ ACTION_ITEMS: dict[UUID, ActionItem] = {
         ActionItem(
             id=_aid("payroll-summary"),
             meeting_id=_mid("payroll-hr"),
-            owner="Gerd",
+            owner="Gerd Guerrero",
             description="Draft payroll summary for HR",
             deadline=date(2026, 6, 18),
             priority=Priority.low,
+            status=ActionItemStatus.open,
+        ),
+        ActionItem(
+            id=_aid("acme-invoices"),
+            meeting_id=_mid("tax-acme"),
+            owner="M. Santos",
+            description="Chase missing Q2 invoices from Acme Retail",
+            deadline=date(2026, 6, 11),
+            priority=Priority.high,
+            status=ActionItemStatus.open,
+        ),
+        ActionItem(
+            id=_aid("standup-notes"),
+            meeting_id=_mid("standup-0608"),
+            owner="R. Abad",
+            description="Circulate stand-up notes to accounting",
+            deadline=date(2026, 6, 9),
+            priority=Priority.low,
+            status=ActionItemStatus.done,
+        ),
+        ActionItem(
+            id=_aid("bir-deadline"),
+            meeting_id=_mid("q2-henderson"),
+            owner=None,  # owned by Unknown 1 — unassigned until named
+            description="Confirm BIR filing deadline with Henderson board",
+            deadline=date(2026, 6, 12),
+            priority=Priority.medium,
             status=ActionItemStatus.open,
         ),
     ]

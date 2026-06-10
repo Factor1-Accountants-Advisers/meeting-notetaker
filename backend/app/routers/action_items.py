@@ -21,6 +21,16 @@ async def list_action_items(
         items = [a for a in items if a.status == status_filter]
     if owner is not None:
         items = [a for a in items if a.owner == owner]
+    items = [
+        a.model_copy(
+            update={
+                "meeting_title": (
+                    m.title if (m := store.MEETINGS.get(a.meeting_id)) else ""
+                )
+            }
+        )
+        for a in items
+    ]
     return sorted(items, key=lambda a: (a.deadline is None, a.deadline))
 
 

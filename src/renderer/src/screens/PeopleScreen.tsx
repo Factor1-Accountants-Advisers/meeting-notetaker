@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react'
 import { CloudOff, Mic, RefreshCw, ShieldCheck } from 'lucide-react'
 import { Card } from '@renderer/components/ui/Card'
 import { Pill } from '@renderer/components/ui/Pill'
 import { Avatar } from '@renderer/components/ui/Avatar'
 import { fetchPeople } from '@renderer/lib/api'
+import { useLive } from '@renderer/lib/useLive'
 import { staff as sampleStaff, type EnrollmentState, type StaffMember } from '@renderer/data/mock'
 import type { Tone } from '@renderer/components/ui/tones'
 
@@ -14,20 +14,7 @@ const enrollmentLabel: Record<EnrollmentState, { text: string; tone: Tone }> = {
 }
 
 export function PeopleScreen(): JSX.Element {
-  const [staff, setStaff] = useState<StaffMember[]>(sampleStaff)
-  const [offline, setOffline] = useState(false)
-
-  useEffect(() => {
-    let cancelled = false
-    fetchPeople().then((live) => {
-      if (cancelled) return
-      if (live) setStaff(live)
-      else setOffline(true)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  const { data: staff, offline } = useLive(fetchPeople, sampleStaff)
 
   const enrolledCount = staff.filter((s) => s.enrollment === 'enrolled').length
 

@@ -56,7 +56,7 @@ export interface Meeting {
   icon: LucideIcon
   tone: Tone
   attendees: Person[]
-  group: 'Today' | 'Earlier this week'
+  group: 'Today' | 'Earlier this week' | 'Older'
 }
 
 export const upcomingMeetings: UpcomingMeeting[] = [

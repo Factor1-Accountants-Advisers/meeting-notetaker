@@ -1,8 +1,17 @@
 import { useMemo, useState } from 'react'
-import { ArrowUpDown, CheckCircle2, Circle, ChevronRight, UserRoundSearch } from 'lucide-react'
+import {
+  ArrowUpDown,
+  CheckCircle2,
+  Circle,
+  ChevronRight,
+  CloudOff,
+  UserRoundSearch
+} from 'lucide-react'
 import { Card } from '@renderer/components/ui/Card'
 import { Pill, priorityTone, statusTone, type Priority } from '@renderer/components/ui/Pill'
-import { allActionItems, type ActionItem } from '@renderer/data/mock'
+import { fetchActionItems } from '@renderer/lib/api'
+import { useLive } from '@renderer/lib/useLive'
+import { allActionItems as sampleItems, type ActionItem } from '@renderer/data/mock'
 
 type StatusFilter = 'All' | 'Open' | 'Overdue' | 'Done'
 const STATUS_FILTERS: StatusFilter[] = ['All', 'Open', 'Overdue', 'Done']
@@ -16,8 +25,13 @@ export function ActionItemsScreen({ onOpenMeeting }: Props): JSX.Element {
   const [owner, setOwner] = useState('All')
   const [priority, setPriority] = useState<'All' | Priority>('All')
   const [dueAsc, setDueAsc] = useState(true)
-  const [done, setDone] = useState<Set<string>>(
-    new Set(allActionItems.filter((a) => a.status === 'Done').map((a) => a.id))
+  const { data: allActionItems, offline } = useLive(fetchActionItems, sampleItems)
+  const [done, setDone] = useState<Set<string> | null>(null)
+
+  // Seed done-state once data arrives (live ids differ from sample ids).
+  const doneSet = useMemo(
+    () => done ?? new Set(allActionItems.filter((a) => a.status === 'Done').map((a) => a.id)),
+    [done, allActionItems]
   )
 
   const owners = useMemo(
@@ -25,11 +39,11 @@ export function ActionItemsScreen({ onOpenMeeting }: Props): JSX.Element {
       'All',
       ...Array.from(new Set(allActionItems.map((a) => a.owner ?? 'Unassigned')))
     ],
-    []
+    [allActionItems]
   )
 
   const effectiveStatus = (a: ActionItem): StatusFilter =>
-    done.has(a.id) ? 'Done' : a.overdue ? 'Overdue' : 'Open'
+    doneSet.has(a.id) ? 'Done' : a.overdue ? 'Overdue' : 'Open'
 
   const visible = allActionItems
     .filter((a) => status === 'All' || effectiveStatus(a) === status)
@@ -39,8 +53,8 @@ export function ActionItemsScreen({ onOpenMeeting }: Props): JSX.Element {
       dueAsc ? a.dueISO.localeCompare(b.dueISO) : b.dueISO.localeCompare(a.dueISO)
     )
 
-  const openCount = allActionItems.filter((a) => !done.has(a.id)).length
-  const overdueCount = allActionItems.filter((a) => a.overdue && !done.has(a.id)).length
+  const openCount = allActionItems.filter((a) => !doneSet.has(a.id)).length
+  const overdueCount = allActionItems.filter((a) => a.overdue && !doneSet.has(a.id)).length
 
   return (
     <div>
@@ -50,6 +64,12 @@ export function ActionItemsScreen({ onOpenMeeting }: Props): JSX.Element {
           <span className="text-[14px] font-normal text-content-tertiary">
             · {openCount} open
           </span>
+          {offline && (
+            <span className="ml-2 inline-flex items-center gap-1 align-middle text-[12px] font-normal text-content-warning">
+              <CloudOff size={13} strokeWidth={1.75} />
+              sample data
+            </span>
+          )}
         </h1>
         {overdueCount > 0 && <Pill tone="danger">{`${overdueCount} overdue`}</Pill>}
       </div>
@@ -114,10 +134,10 @@ export function ActionItemsScreen({ onOpenMeeting }: Props): JSX.Element {
             key={a.id}
             item={a}
             divider={i > 0}
-            isDone={done.has(a.id)}
+            isDone={doneSet.has(a.id)}
             onToggle={() =>
-              setDone((prev) => {
-                const next = new Set(prev)
+              setDone(() => {
+                const next = new Set(doneSet)
                 if (next.has(a.id)) next.delete(a.id)
                 else next.add(a.id)
                 return next
