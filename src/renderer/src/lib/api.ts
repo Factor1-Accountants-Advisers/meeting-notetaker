@@ -181,6 +181,19 @@ export async function finalizeMeeting(meetingId: string): Promise<MeetingDto | n
   return call<MeetingDto>('POST', `/meetings/${meetingId}/finalize`)
 }
 
+export async function createMeeting(
+  title: string,
+  meetingLink: string | null
+): Promise<MeetingDto | null> {
+  // Link present implies an online meeting (loopback + mic); otherwise in-person.
+  // The link itself is only used for Graph title/attendee auto-fill later.
+  return call<MeetingDto>('POST', '/meetings', {
+    title,
+    source: meetingLink ? 'online' : 'in_person',
+    meeting_link: meetingLink
+  })
+}
+
 function enrollmentState(dto: PersonEnrollmentDto): EnrollmentState {
   if (dto.reenrollment_required) return 'reenroll_required'
   return dto.enrolled ? 'enrolled' : 'not_enrolled'

@@ -8,9 +8,18 @@ import type { Theme } from '@renderer/lib/theme'
 interface Props {
   theme: Theme
   onToggleTheme: () => void
+  userName: string
+  userEmail: string
+  onSignOut: () => void
 }
 
-export function SettingsScreen({ theme, onToggleTheme }: Props): JSX.Element {
+export function SettingsScreen({
+  theme,
+  onToggleTheme,
+  userName,
+  userEmail,
+  onSignOut
+}: Props): JSX.Element {
   const [inputDevice, setInputDevice] = useState('default')
   const [language, setLanguage] = useState('auto')
 
@@ -21,15 +30,24 @@ export function SettingsScreen({ theme, onToggleTheme }: Props): JSX.Element {
       <Card>
         <SectionHeader icon={User} title="Account" />
         <div className="flex items-center gap-2.5">
-          <Avatar initials="GG" tone="info" />
+          <Avatar
+            initials={userName
+              .split(' ')
+              .map((p) => p[0])
+              .join('')
+              .toUpperCase()
+              .slice(0, 2)}
+            tone="info"
+          />
           <div className="min-w-0 flex-1">
-            <div className="text-[14px] text-content-primary">Gerd Guerrero</div>
+            <div className="text-[14px] text-content-primary">{userName}</div>
             <div className="text-[11px] text-content-tertiary">
-              gerd@factor1.ph · signed in with Microsoft
+              {userEmail} · signed in with Microsoft
             </div>
           </div>
           <button
             type="button"
+            onClick={onSignOut}
             className="flex items-center gap-1.5 rounded-md border-[0.5px] border-edge-secondary px-2.5 py-1.5 text-[12px] text-content-primary hover:bg-bg-secondary"
           >
             <LogOut size={13} strokeWidth={1.75} />

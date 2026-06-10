@@ -1,7 +1,7 @@
 import { NAV_ENTRIES, type ScreenId } from '@renderer/lib/nav'
 
 interface NavRailProps {
-  active: ScreenId
+  active: ScreenId | null
   onSelect: (id: ScreenId) => void
 }
 

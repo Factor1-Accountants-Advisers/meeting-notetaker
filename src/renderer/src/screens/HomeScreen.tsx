@@ -18,28 +18,26 @@ import { fetchActionItems } from '@renderer/lib/api'
 import { useLive } from '@renderer/lib/useLive'
 import { upcomingMeetings, recordings, myActionItems as sampleMyItems } from '@renderer/data/mock'
 
-const CURRENT_USER = 'Gerd Guerrero' // from Entra ID once auth lands
-
-async function fetchMyOpenItems(): Promise<typeof sampleMyItems | null> {
-  const all = await fetchActionItems()
-  return all ? all.filter((a) => a.owner === CURRENT_USER && a.status !== 'Done') : null
+interface HomeProps {
+  userName: string
+  onStartCapture: (title: string, link: string | null) => void
 }
 
-export function HomeScreen(): JSX.Element {
+export function HomeScreen({ userName, onStartCapture }: HomeProps): JSX.Element {
   return (
     <div className="flex flex-col gap-4">
-      <Greeting />
-      <CaptureCard />
+      <Greeting userName={userName} />
+      <CaptureCard onStart={onStartCapture} />
       <div className="grid grid-cols-2 gap-3.5">
         <UpcomingCard />
         <RecordingsCard />
       </div>
-      <ActionItemsCard />
+      <ActionItemsCard userName={userName} />
     </div>
   )
 }
 
-function Greeting(): JSX.Element {
+function Greeting({ userName }: { userName: string }): JSX.Element {
   const now = new Date()
   const dateLine = now.toLocaleDateString('en-GB', {
     weekday: 'long',
@@ -50,15 +48,25 @@ function Greeting(): JSX.Element {
   const hour = now.getHours()
   const daypart = hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening'
 
+  const firstName = userName.split(' ')[0]
   return (
     <div>
       <div className="mb-0.5 text-[12px] text-content-tertiary">{dateLine}</div>
-      <h1 className="text-[22px] font-medium text-content-primary">Good {daypart}, Gerd</h1>
+      <h1 className="text-[22px] font-medium text-content-primary">
+        Good {daypart}, {firstName}
+      </h1>
     </div>
   )
 }
 
-function CaptureCard(): JSX.Element {
+function CaptureCard({
+  onStart
+}: {
+  onStart: (title: string, link: string | null) => void
+}): JSX.Element {
+  const [title, setTitle] = useState('')
+  const [link, setLink] = useState('')
+
   return (
     <Card>
       <SectionHeader
@@ -76,6 +84,8 @@ function CaptureCard(): JSX.Element {
       />
       <input
         type="text"
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
         placeholder="Meeting name (e.g. Tax compliance — Henderson & Co)"
         className="mb-2.5 h-9 w-full rounded-md border-[0.5px] border-edge-tertiary bg-bg-primary px-3 text-[14px] text-content-primary placeholder:text-content-tertiary focus:border-brand-blue focus:outline-none"
       />
@@ -86,12 +96,16 @@ function CaptureCard(): JSX.Element {
       </div>
       <input
         type="text"
+        value={link}
+        onChange={(e) => setLink(e.target.value)}
         placeholder="https://"
         className="mb-3 h-9 w-full rounded-md border-[0.5px] border-edge-tertiary bg-bg-primary px-3 text-[14px] text-content-primary placeholder:text-content-tertiary focus:border-brand-blue focus:outline-none"
       />
       <button
         type="button"
-        className="flex w-full items-center justify-center gap-1.5 rounded-md border-[0.5px] border-edge-info bg-bg-info py-2.5 text-[14px] text-content-info transition-colors hover:opacity-90 active:scale-[0.99]"
+        disabled={title.trim().length === 0}
+        onClick={() => onStart(title.trim(), link.trim() || null)}
+        className="flex w-full items-center justify-center gap-1.5 rounded-md border-[0.5px] border-edge-info bg-bg-info py-2.5 text-[14px] text-content-info transition-colors hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-45"
       >
         <Mic size={16} strokeWidth={1.75} />
         Start capturing
@@ -196,8 +210,14 @@ function RecordingsCard(): JSX.Element {
   )
 }
 
-function ActionItemsCard(): JSX.Element {
-  const { data: myActionItems } = useLive(fetchMyOpenItems, sampleMyItems)
+function ActionItemsCard({ userName }: { userName: string }): JSX.Element {
+  const { data: myActionItems } = useLive(
+    async () => {
+      const all = await fetchActionItems()
+      return all ? all.filter((a) => a.owner === userName && a.status !== 'Done') : null
+    },
+    sampleMyItems
+  )
   const [done, setDone] = useState<Set<string>>(new Set())
   const open = myActionItems.filter((a) => !done.has(a.id))
   const overdueCount = open.filter((a) => a.overdue).length

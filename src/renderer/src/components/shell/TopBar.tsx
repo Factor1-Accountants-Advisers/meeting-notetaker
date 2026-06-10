@@ -4,9 +4,11 @@ import type { Theme } from '@renderer/lib/theme'
 interface TopBarProps {
   theme: Theme
   onToggleTheme: () => void
+  /** Set while a recording session is active and the user is on another screen. */
+  onOpenRecording?: (() => void) | null
 }
 
-export function TopBar({ theme, onToggleTheme }: TopBarProps): JSX.Element {
+export function TopBar({ theme, onToggleTheme, onOpenRecording }: TopBarProps): JSX.Element {
   return (
     <header
       className="flex h-10 items-center gap-3 border-b border-edge-tertiary bg-bg-secondary px-3"
@@ -32,6 +34,17 @@ export function TopBar({ theme, onToggleTheme }: TopBarProps): JSX.Element {
         className="ml-auto flex items-center gap-1"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
+        {onOpenRecording && (
+          <button
+            type="button"
+            onClick={onOpenRecording}
+            title="Return to recording"
+            className="mr-1 flex items-center gap-1.5 rounded-md bg-bg-danger px-2.5 py-1 text-[11px] font-medium text-content-danger"
+          >
+            <span className="h-2 w-2 animate-pulse rounded-full bg-edge-danger" />
+            Recording
+          </button>
+        )}
         <button
           type="button"
           title={theme === 'dark' ? 'Switch to light' : 'Switch to dark'}

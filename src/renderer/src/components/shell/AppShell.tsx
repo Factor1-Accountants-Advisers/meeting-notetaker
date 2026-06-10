@@ -5,10 +5,11 @@ import { NavRail } from './NavRail'
 import { TopBar } from './TopBar'
 
 interface AppShellProps {
-  active: ScreenId
+  active: ScreenId | null
   onSelect: (id: ScreenId) => void
   theme: Theme
   onToggleTheme: () => void
+  onOpenRecording?: (() => void) | null
   children: ReactNode
 }
 
@@ -17,11 +18,12 @@ export function AppShell({
   onSelect,
   theme,
   onToggleTheme,
+  onOpenRecording,
   children
 }: AppShellProps): JSX.Element {
   return (
     <div className="flex h-full flex-col bg-page text-content-primary">
-      <TopBar theme={theme} onToggleTheme={onToggleTheme} />
+      <TopBar theme={theme} onToggleTheme={onToggleTheme} onOpenRecording={onOpenRecording} />
       <div className="flex min-h-0 flex-1">
         <NavRail active={active} onSelect={onSelect} />
         <main className="min-w-0 flex-1 overflow-y-auto">
