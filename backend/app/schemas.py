@@ -22,6 +22,14 @@ class MeetingSource(str, Enum):
     upload = "upload"
 
 
+class PipelineStatus(str, Enum):
+    pending_audio = "pending_audio"  # created, no recording uploaded yet
+    queued = "queued"  # audio stored, waiting for transcription
+    processing = "processing"  # transcribe -> diarize -> match -> summarise
+    ready = "ready"
+    failed = "failed"  # flagged for retry (requirements §4.4)
+
+
 class Priority(str, Enum):
     high = "high"
     medium = "medium"
@@ -59,6 +67,7 @@ class Meeting(BaseModel):
     duration_seconds: int | None = None
     unknown_speaker_count: int = 0
     action_item_count: int = 0
+    pipeline_status: PipelineStatus = PipelineStatus.pending_audio
 
 
 class MeetingCreate(BaseModel):
@@ -116,6 +125,18 @@ class MeetingReview(BaseModel):
 class NameSpeakerRequest(BaseModel):
     label: str = Field(min_length=1)  # e.g. "Unknown 1"
     name: str = Field(min_length=1)
+
+
+class UploadAudioRequest(BaseModel):
+    """Recorded or uploaded meeting audio, base64-encoded.
+
+    Stored to the local audio dir (stand-in for Azure Blob with its 30-day
+    lifecycle policy) and queued for the processing pipeline.
+    """
+
+    audio_b64: str = Field(min_length=1)
+    mime_type: str = "audio/webm"
+    duration_seconds: int | None = None  # client-measured; refined later
 
 
 class PersonEnrollment(BaseModel):

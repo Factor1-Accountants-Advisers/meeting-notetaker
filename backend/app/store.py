@@ -9,6 +9,7 @@ from uuid import UUID, uuid5, NAMESPACE_URL
 
 from app.schemas import (
     ActionItem,
+    PipelineStatus,
     ActionItemStatus,
     Meeting,
     MeetingParticipant,
@@ -42,6 +43,7 @@ MEETINGS: dict[UUID, Meeting] = {
             duration_seconds=42 * 60 + 10,
             unknown_speaker_count=1,
             action_item_count=3,
+            pipeline_status=PipelineStatus.ready,
         ),
         Meeting(
             id=_mid("standup-0608"),
@@ -52,6 +54,7 @@ MEETINGS: dict[UUID, Meeting] = {
             created_at=datetime(2026, 6, 8, 11, 0, tzinfo=timezone.utc),
             duration_seconds=12 * 60 + 30,
             action_item_count=2,
+            pipeline_status=PipelineStatus.ready,
         ),
         Meeting(
             id=_mid("tax-acme"),
@@ -63,6 +66,7 @@ MEETINGS: dict[UUID, Meeting] = {
             created_at=datetime(2026, 6, 6, 14, 0, tzinfo=timezone.utc),
             duration_seconds=35 * 60 + 2,
             action_item_count=4,
+            pipeline_status=PipelineStatus.ready,
         ),
         Meeting(
             id=_mid("payroll-hr"),
@@ -73,6 +77,7 @@ MEETINGS: dict[UUID, Meeting] = {
             created_at=datetime(2026, 6, 4, 16, 0, tzinfo=timezone.utc),
             duration_seconds=28 * 60 + 44,
             action_item_count=1,
+            pipeline_status=PipelineStatus.ready,
         ),
     ]
 }

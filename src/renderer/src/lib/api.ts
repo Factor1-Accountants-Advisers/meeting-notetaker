@@ -32,6 +32,7 @@ export interface MeetingDto {
   duration_seconds: number | null
   unknown_speaker_count: number
   action_item_count: number
+  pipeline_status: 'pending_audio' | 'queued' | 'processing' | 'ready' | 'failed'
 }
 
 export interface ActionItemDto {
@@ -115,7 +116,8 @@ function mapMeeting(dto: MeetingDto): Meeting {
     icon: iconFor(dto.title),
     tone: toneFor(dto.title),
     attendees: [], // attendee avatars come with the Graph integration
-    group: groupFor(dto.created_at)
+    group: groupFor(dto.created_at),
+    pipelineStatus: dto.pipeline_status
   }
 }
 
@@ -183,15 +185,33 @@ export async function finalizeMeeting(meetingId: string): Promise<MeetingDto | n
 
 export async function createMeeting(
   title: string,
-  meetingLink: string | null
+  meetingLink: string | null,
+  source?: 'online' | 'in_person' | 'upload'
 ): Promise<MeetingDto | null> {
   // Link present implies an online meeting (loopback + mic); otherwise in-person.
   // The link itself is only used for Graph title/attendee auto-fill later.
   return call<MeetingDto>('POST', '/meetings', {
     title,
-    source: meetingLink ? 'online' : 'in_person',
+    source: source ?? (meetingLink ? 'online' : 'in_person'),
     meeting_link: meetingLink
   })
+}
+
+export async function uploadAudio(
+  meetingId: string,
+  audioB64: string,
+  mimeType: string,
+  durationSeconds: number | null
+): Promise<MeetingDto | null> {
+  return call<MeetingDto>('POST', `/meetings/${meetingId}/audio`, {
+    audio_b64: audioB64,
+    mime_type: mimeType,
+    duration_seconds: durationSeconds
+  })
+}
+
+export async function retryPipeline(meetingId: string): Promise<MeetingDto | null> {
+  return call<MeetingDto>('POST', `/meetings/${meetingId}/retry`)
 }
 
 export async function enrollPerson(

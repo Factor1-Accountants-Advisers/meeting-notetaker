@@ -43,6 +43,7 @@ export interface ActionItem {
 }
 
 export type MeetingStatus = 'Draft' | 'Finalized'
+export type PipelineStatus = 'pending_audio' | 'queued' | 'processing' | 'ready' | 'failed'
 
 export interface Meeting {
   id: string
@@ -57,6 +58,7 @@ export interface Meeting {
   tone: Tone
   attendees: Person[]
   group: 'Today' | 'Earlier this week' | 'Older'
+  pipelineStatus: PipelineStatus
 }
 
 export const upcomingMeetings: UpcomingMeeting[] = [
@@ -313,7 +315,8 @@ export const meetings: Meeting[] = [
       { initials: 'MS', tone: 'info' },
       { initials: 'JL', tone: 'success' }
     ],
-    group: 'Today'
+    group: 'Today',
+    pipelineStatus: 'ready'
   },
   {
     id: 'm2',
@@ -332,7 +335,8 @@ export const meetings: Meeting[] = [
       { initials: 'GH', tone: 'success' },
       { initials: 'IJ', tone: 'secondary' }
     ],
-    group: 'Earlier this week'
+    group: 'Earlier this week',
+    pipelineStatus: 'ready'
   },
   {
     id: 'm3',
@@ -350,7 +354,8 @@ export const meetings: Meeting[] = [
       { initials: 'CF', tone: 'warning' },
       { initials: 'KL', tone: 'secondary' }
     ],
-    group: 'Earlier this week'
+    group: 'Earlier this week',
+    pipelineStatus: 'ready'
   },
   {
     id: 'm4',
@@ -367,6 +372,7 @@ export const meetings: Meeting[] = [
       { initials: 'LP', tone: 'warning' },
       { initials: 'SW', tone: 'success' }
     ],
-    group: 'Earlier this week'
+    group: 'Earlier this week',
+    pipelineStatus: 'ready'
   }
 ]

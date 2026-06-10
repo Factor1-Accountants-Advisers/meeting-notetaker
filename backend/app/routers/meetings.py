@@ -1,3 +1,5 @@
+import base64
+import binascii
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
@@ -10,7 +12,10 @@ from app.schemas import (
     MeetingReview,
     MeetingStatus,
     NameSpeakerRequest,
+    PipelineStatus,
+    UploadAudioRequest,
 )
+from app.services.pipeline import AUDIO_DIR, audio_path_for, kick_pipeline
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 
@@ -43,6 +48,51 @@ async def create_meeting(body: MeetingCreate) -> Meeting:
     )
     store.MEETINGS[meeting.id] = meeting
     return meeting
+
+
+@router.post("/{meeting_id}/audio", response_model=Meeting)
+async def upload_audio(meeting_id: UUID, body: UploadAudioRequest) -> Meeting:
+    """Store meeting audio (Blob stand-in) and queue the processing pipeline."""
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    if meeting.pipeline_status in (PipelineStatus.queued, PipelineStatus.processing):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Audio is already being processed")
+
+    try:
+        audio = base64.b64decode(body.audio_b64, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Audio is not valid base64")
+    if len(audio) < 1_000:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Audio is too short")
+
+    AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    path = audio_path_for(meeting_id, body.mime_type)
+    path.write_bytes(audio)
+
+    updates: dict[str, object] = {}
+    if body.duration_seconds:
+        updates["duration_seconds"] = body.duration_seconds
+    if updates:
+        store.MEETINGS[meeting_id] = meeting.model_copy(update=updates)
+
+    kick_pipeline(meeting_id, path)
+    return store.MEETINGS[meeting_id]
+
+
+@router.post("/{meeting_id}/retry", response_model=Meeting)
+async def retry_pipeline(meeting_id: UUID) -> Meeting:
+    """Re-queue a failed meeting (requirements §4.4: flag and retry)."""
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    if meeting.pipeline_status is not PipelineStatus.failed:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Meeting is not in a failed state")
+    path = audio_path_for(meeting_id, "audio/webm")
+    if not path.exists():
+        raise HTTPException(status.HTTP_409_CONFLICT, "No stored audio for this meeting")
+    kick_pipeline(meeting_id, path)
+    return store.MEETINGS[meeting_id]
 
 
 def _build_review(meeting: Meeting) -> MeetingReview:

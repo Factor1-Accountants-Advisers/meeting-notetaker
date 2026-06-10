@@ -19,9 +19,11 @@ import {
   finalizeMeeting,
   mapActionItem,
   nameSpeaker,
+  retryPipeline,
   toneFor,
   type MeetingReviewDto
 } from '@renderer/lib/api'
+import type { PipelineStatus } from '@renderer/data/mock'
 import {
   meetingDetails,
   meetings,
@@ -39,6 +41,7 @@ interface ReviewVm {
   date: string
   durationMin: number
   finalized: boolean
+  pipelineStatus: PipelineStatus
   summary: string
   participants: { name: string; known: boolean; tone: Tone }[]
   segments: { id: string; speaker: string; known: boolean; time: string; text: string }[]
@@ -61,6 +64,7 @@ function vmFromDto(dto: MeetingReviewDto): ReviewVm {
     }),
     durationMin: Math.round((dto.meeting.duration_seconds ?? 0) / 60),
     finalized: dto.meeting.status === 'finalized',
+    pipelineStatus: dto.meeting.pipeline_status,
     summary: dto.summary_text ?? '',
     participants: dto.participants.map((p) => ({
       name: p.name,
@@ -87,6 +91,7 @@ function vmFromSample(meetingId: string): ReviewVm | null {
     date: meeting.date,
     durationMin: meeting.durationMin,
     finalized: meeting.status === 'Finalized',
+    pipelineStatus: meeting.pipelineStatus,
     summary: detail.summary,
     participants: detail.participants.map((p) => ({
       name: p.name,
@@ -124,17 +129,25 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
   const [vm, setVm] = useState<ReviewVm | null>(() => vmFromSample(meetingId))
   const [live, setLive] = useState(false)
 
+  const inFlight = vm?.pipelineStatus === 'queued' || vm?.pipelineStatus === 'processing'
+
   useEffect(() => {
     let cancelled = false
-    fetchMeetingReview(meetingId).then((dto) => {
-      if (cancelled || !dto) return
-      setVm(vmFromDto(dto))
-      setLive(true)
-    })
+    const load = (): void => {
+      void fetchMeetingReview(meetingId).then((dto) => {
+        if (cancelled || !dto) return
+        setVm(vmFromDto(dto))
+        setLive(true)
+      })
+    }
+    load()
+    // Poll while the pipeline is running so the review fills in when ready.
+    const id = inFlight ? window.setInterval(load, 2000) : undefined
     return () => {
       cancelled = true
+      if (id !== undefined) window.clearInterval(id)
     }
-  }, [meetingId])
+  }, [meetingId, inFlight])
 
   const unknownLeft = useMemo(
     () => (vm ? vm.participants.filter((p) => !p.known).length : 0),
@@ -174,6 +187,12 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
     setVm((prev) => (prev ? { ...prev, finalized: true } : prev))
   }
 
+  const handleRetry = async (): Promise<void> => {
+    const dto = await retryPipeline(meetingId)
+    if (dto)
+      setVm((prev) => (prev ? { ...prev, pipelineStatus: dto.pipeline_status } : prev))
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <BackLink onBack={onBack} />
@@ -183,14 +202,59 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
         unknownLeft={unknownLeft}
         onFinalize={() => void handleFinalize()}
       />
-      <ParticipantsCard vm={vm} onName={handleName} />
-      <Card>
-        <SectionHeader icon={Sparkles} title="Summary" meta="AI-generated" />
-        <p className="m-0 text-[14px] leading-relaxed text-content-primary">{vm.summary}</p>
-      </Card>
-      <ActionItemsCard items={vm.actionItems} />
-      <TranscriptCard vm={vm} onName={handleName} />
+      {vm.pipelineStatus === 'queued' || vm.pipelineStatus === 'processing' ? (
+        <PipelineCard status={vm.pipelineStatus} />
+      ) : vm.pipelineStatus === 'failed' ? (
+        <FailedCard onRetry={() => void handleRetry()} />
+      ) : vm.pipelineStatus === 'pending_audio' ? (
+        <Card className="py-8 text-center text-[13px] text-content-tertiary">
+          No recording yet — start a capture or upload an audio file for this meeting.
+        </Card>
+      ) : (
+        <>
+          <ParticipantsCard vm={vm} onName={handleName} />
+          <Card>
+            <SectionHeader icon={Sparkles} title="Summary" meta="AI-generated" />
+            <p className="m-0 text-[14px] leading-relaxed text-content-primary">{vm.summary}</p>
+          </Card>
+          <ActionItemsCard items={vm.actionItems} />
+          <TranscriptCard vm={vm} onName={handleName} />
+        </>
+      )}
     </div>
+  )
+}
+
+function PipelineCard({ status }: { status: 'queued' | 'processing' }): JSX.Element {
+  return (
+    <Card className="flex flex-col items-center gap-3 !py-10 text-center">
+      <span className="h-6 w-6 animate-spin rounded-full border-2 border-edge-tertiary border-t-brand-blue" />
+      <div className="text-[14px] text-content-primary">
+        {status === 'queued' ? 'Waiting in the queue…' : 'Processing the recording…'}
+      </div>
+      <div className="max-w-[360px] text-[12px] text-content-tertiary">
+        Transcribing, identifying speakers, and drafting the summary and action items. This
+        page updates automatically.
+      </div>
+    </Card>
+  )
+}
+
+function FailedCard({ onRetry }: { onRetry: () => void }): JSX.Element {
+  return (
+    <Card className="flex flex-col items-center gap-3 !py-10 text-center">
+      <div className="text-[14px] text-content-danger">Processing failed.</div>
+      <div className="max-w-[360px] text-[12px] text-content-tertiary">
+        The recording is stored safely; processing can be retried at any time.
+      </div>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="flex items-center gap-1.5 rounded-md border-[0.5px] border-edge-info bg-bg-info px-3.5 py-2 text-[13px] text-content-info"
+      >
+        Retry processing
+      </button>
+    </Card>
   )
 }
 
@@ -218,7 +282,7 @@ function Header({
   unknownLeft: number
   onFinalize: () => void
 }): JSX.Element {
-  const canFinalize = !vm.finalized && unknownLeft === 0
+  const canFinalize = !vm.finalized && unknownLeft === 0 && vm.pipelineStatus === 'ready'
 
   return (
     <div>

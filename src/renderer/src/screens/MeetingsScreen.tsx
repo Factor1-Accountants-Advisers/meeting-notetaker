@@ -129,6 +129,10 @@ function MeetingRow({
           {meeting.context} · {meeting.date} · {meeting.durationMin} min · {itemsLabel}
         </div>
       </div>
+      {meeting.pipelineStatus === 'queued' && <Pill tone="info">Queued</Pill>}
+      {meeting.pipelineStatus === 'processing' && <Pill tone="info">Processing…</Pill>}
+      {meeting.pipelineStatus === 'failed' && <Pill tone="danger">Failed</Pill>}
+      {meeting.pipelineStatus === 'pending_audio' && <Pill tone="secondary">No recording</Pill>}
       {meeting.unknownSpeakers > 0 && (
         <Pill tone="danger">{`${meeting.unknownSpeakers} to name`}</Pill>
       )}

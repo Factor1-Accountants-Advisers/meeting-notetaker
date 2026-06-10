@@ -8,8 +8,10 @@ import { PeopleScreen } from './screens/PeopleScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
 import { LoginScreen, type User } from './screens/LoginScreen'
 import { RecordingScreen, type RecordingSession } from './screens/RecordingScreen'
-import { createMeeting } from './lib/api'
+import { createMeeting, uploadAudio } from './lib/api'
 import { capture, type CaptureStatus } from './lib/capture'
+import { blobToBase64 } from './lib/recorder'
+import { elapsedMs } from './screens/RecordingScreen'
 import { useTheme } from './lib/theme'
 import type { ScreenId } from './lib/nav'
 
@@ -72,10 +74,12 @@ function App(): JSX.Element {
   }
 
   const stopRecording = async (): Promise<void> => {
-    const meetingId = recording?.meetingId ?? null
+    const session = recording
+    const meetingId = session?.meetingId ?? null
+    const durationSeconds = session ? Math.round(elapsedMs(session) / 1000) : null
     const blob = await capture.stop()
     if (blob) {
-      // Saved locally until the upload-to-Blob pipeline lands.
+      // Local copy first (survives backend outages), then queue the pipeline.
       const name = `${meetingId ?? `local-${Date.now()}`}.webm`
       try {
         const { path } = await window.api.saveRecording(name, await blob.arrayBuffer())
@@ -83,11 +87,32 @@ function App(): JSX.Element {
       } catch (err) {
         console.error('Failed to save recording', err)
       }
+      if (meetingId) {
+        const uploaded = await uploadAudio(
+          meetingId,
+          await blobToBase64(blob),
+          blob.type || 'audio/webm',
+          durationSeconds
+        )
+        if (!uploaded) console.warn('Audio upload failed — backend unreachable')
+      }
     }
     setRecording(null)
     setCaptureStatus(null)
     if (meetingId) openMeeting(meetingId)
     else navigate('meetings')
+  }
+
+  const uploadRecording = async (title: string, file: File): Promise<void> => {
+    const created = await createMeeting(title, null, 'upload')
+    if (!created) {
+      console.warn('Upload needs the backend — start it and try again')
+      navigate('meetings')
+      return
+    }
+    const b64 = await blobToBase64(file)
+    await uploadAudio(created.id, b64, file.type || 'audio/webm', null)
+    openMeeting(created.id)
   }
 
   const signOut = (): void => {
@@ -128,7 +153,11 @@ function App(): JSX.Element {
         />
       )}
       {view === 'home' && (
-        <HomeScreen userName={user.name} onStartCapture={(t, l) => void startCapture(t, l)} />
+        <HomeScreen
+          userName={user.name}
+          onStartCapture={(t, l) => void startCapture(t, l)}
+          onUploadRecording={(t, f) => void uploadRecording(t, f)}
+        />
       )}
       {view === 'meetings' &&
         (reviewMeetingId ? (
