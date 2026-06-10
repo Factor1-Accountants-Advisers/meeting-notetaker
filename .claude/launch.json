@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "renderer-static",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["--yes", "serve", "out/renderer", "-l", "4173"],
+      "port": 4173
+    }
+  ]
+}
