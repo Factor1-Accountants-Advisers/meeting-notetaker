@@ -99,15 +99,18 @@ Every screen sits in an app shell:
 
 ## Screen inventory
 
-| Screen | Status | Notes |
+All screens below are **implemented** in `src/renderer/src/screens/`; the
+mockups remain the visual reference for the first two.
+
+| Screen | Reference | Notes |
 |---|---|---|
-| Home / dashboard | mockup ready (`mockups/home-screen.html`) | greeting, capture, upcoming, recordings, your action items |
-| Meetings (library) | mockup ready (`mockups/meetings.html`) | All/Drafts/Finalized filter, recency groups, status pills, 'N to name' flags |
-| Meeting review | mockup ready (see chat / export on request) | summary, action items, transcript with named + unknown speakers, Draft → Finalize |
-| Action items (cross-meeting) | not yet designed | filter by owner/status/priority/overdue, links to source meeting |
-| Recording in progress | not yet designed | live indicator, pause/resume/stop, elapsed time |
-| Voiceprint enrollment | not yet designed | 3-clip capture, consent handled out-of-app |
-| Login | not yet designed | Microsoft sign-in, authorisation check |
+| Home / dashboard | `mockups/home-screen.html` | greeting, capture, upcoming, recordings, your action items |
+| Meetings (library) | `mockups/meetings.html` | All/Drafts/Finalized filter, recency groups, status pills, 'N to name' flags |
+| Meeting review | built from requirements §5.3 | summary, action items, transcript editing, naming, share, history, audio player |
+| Action items (cross-meeting) | built from requirements §5.4 | filter by owner/status/priority/overdue, links to source meeting |
+| Recording in progress | built from requirements §5.x | live indicator, pause/resume/stop, elapsed time, capture status |
+| Voiceprint enrollment | built from requirements §4.2 | 3-clip modal, consent noted in-modal |
+| Login | built from requirements §4.1 | Microsoft sign-in stub until Entra ID lands |
 
 ## Behaviours the UI must reflect (from requirements)
 

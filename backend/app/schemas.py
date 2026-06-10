@@ -77,17 +77,6 @@ class MeetingCreate(BaseModel):
     meeting_link: str | None = None  # optional; only used for Graph auto-fill
 
 
-class Transcript(BaseModel):
-    meeting_id: UUID
-    segments: list[TranscriptSegment]
-
-
-class Summary(BaseModel):
-    meeting_id: UUID
-    summary_text: str
-    generated_at: datetime
-
-
 class ActionItem(BaseModel):
     id: UUID
     meeting_id: UUID

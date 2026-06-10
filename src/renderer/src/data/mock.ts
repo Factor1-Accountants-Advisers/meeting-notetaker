@@ -9,8 +9,9 @@ import type { Person } from '@renderer/components/ui/Avatar'
 import type { Priority, Status } from '@renderer/components/ui/Pill'
 import type { Tone } from '@renderer/components/ui/tones'
 
-// Placeholder data matching the mockups. Replaced by the FastAPI backend later;
-// keep shapes close to the indicative schema in requirements §6.1.
+// Sample data: the deliberate offline fallback used by useLive() when the
+// backend is unreachable (screens show a "sample data" notice). Keep shapes
+// aligned with lib/api.ts mappings. Do not delete.
 
 export interface UpcomingMeeting {
   id: string
@@ -59,6 +60,7 @@ export interface Meeting {
   attendees: Person[]
   group: 'Today' | 'Earlier this week' | 'Older'
   pipelineStatus: PipelineStatus
+  source: 'online' | 'in_person' | 'upload'
 }
 
 export const upcomingMeetings: UpcomingMeeting[] = [
@@ -302,6 +304,7 @@ export const meetingDetails: Record<string, MeetingDetail> = {
 export const meetings: Meeting[] = [
   {
     id: 'm1',
+    source: 'online',
     title: 'Q2 review — Henderson & Co',
     context: 'Henderson & Co',
     date: '9 Jun',
@@ -320,6 +323,7 @@ export const meetings: Meeting[] = [
   },
   {
     id: 'm2',
+    source: 'online',
     title: 'Daily stand-up',
     context: 'Internal',
     date: '8 Jun',
@@ -340,6 +344,7 @@ export const meetings: Meeting[] = [
   },
   {
     id: 'm3',
+    source: 'in_person',
     title: 'Tax compliance — Acme Retail',
     context: 'Acme Retail',
     date: '6 Jun',
@@ -359,6 +364,7 @@ export const meetings: Meeting[] = [
   },
   {
     id: 'm4',
+    source: 'in_person',
     title: 'Payroll discussion — HR',
     context: 'Internal',
     date: '4 Jun',

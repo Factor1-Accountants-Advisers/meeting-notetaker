@@ -57,12 +57,19 @@ interface ReviewVm {
   date: string
   durationMin: number
   finalized: boolean
+  sourceLabel: string
   pipelineStatus: PipelineStatus
   summary: string
   participants: { name: string; known: boolean; tone: Tone }[]
   segments: { id: string; speaker: string; known: boolean; time: string; text: string }[]
   actionItems: ActionItem[]
 }
+
+const SOURCE_LABELS = {
+  online: 'Online · loopback + mic',
+  in_person: 'In person · microphone',
+  upload: 'Uploaded recording'
+} as const
 
 function msToClock(ms: number): string {
   const total = Math.floor(ms / 1000)
@@ -80,6 +87,7 @@ function vmFromDto(dto: MeetingReviewDto): ReviewVm {
     }),
     durationMin: Math.round((dto.meeting.duration_seconds ?? 0) / 60),
     finalized: dto.meeting.status === 'finalized',
+    sourceLabel: SOURCE_LABELS[dto.meeting.source],
     pipelineStatus: dto.meeting.pipeline_status,
     summary: dto.summary_text ?? '',
     participants: dto.participants.map((p) => ({
@@ -107,6 +115,7 @@ function vmFromSample(meetingId: string): ReviewVm | null {
     date: meeting.date,
     durationMin: meeting.durationMin,
     finalized: meeting.status === 'Finalized',
+    sourceLabel: SOURCE_LABELS[meeting.source],
     pipelineStatus: meeting.pipelineStatus,
     summary: detail.summary,
     participants: detail.participants.map((p) => ({
@@ -434,7 +443,7 @@ function Header({
             {vm.date} · {vm.durationMin} min ·{' '}
             <span className="flex items-center gap-1">
               <Mic size={12} strokeWidth={1.75} />
-              Online · loopback + mic
+              {vm.sourceLabel}
             </span>
             {!live && (
               <span className="flex items-center gap-1 text-content-warning">

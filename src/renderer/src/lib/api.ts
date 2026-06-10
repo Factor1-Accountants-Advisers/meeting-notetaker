@@ -117,7 +117,8 @@ function mapMeeting(dto: MeetingDto): Meeting {
     tone: toneFor(dto.title),
     attendees: [], // attendee avatars come with the Graph integration
     group: groupFor(dto.created_at),
-    pipelineStatus: dto.pipeline_status
+    pipelineStatus: dto.pipeline_status,
+    source: dto.source
   }
 }
 

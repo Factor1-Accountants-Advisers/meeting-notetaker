@@ -22,7 +22,6 @@ export function EnrollmentModal({ person, onClose, onEnrolled }: Props): JSX.Ele
   const [clips, setClips] = useState<Blob[]>([])
   const [state, setState] = useState<RecState>('idle')
   const [seconds, setSeconds] = useState(0)
-  const [error, setError] = useState<string | null>(null)
   const recorderRef = useRef<ClipRecorder | null>(null)
 
   // Tick + auto-stop while recording.
@@ -41,7 +40,6 @@ export function EnrollmentModal({ person, onClose, onEnrolled }: Props): JSX.Ele
   useEffect(() => () => recorderRef.current?.cancel(), [])
 
   const startClip = async (): Promise<void> => {
-    setError(null)
     try {
       recorderRef.current = await startClipRecorder()
       setSeconds(0)
@@ -64,7 +62,6 @@ export function EnrollmentModal({ person, onClose, onEnrolled }: Props): JSX.Ele
 
   const save = async (): Promise<void> => {
     setState('saving')
-    setError(null)
     const mime = clips[0]?.type || 'audio/webm'
     const b64 = await Promise.all(clips.map(blobToBase64))
     const updated = await enrollPerson(person.id, b64, mime)
@@ -137,7 +134,6 @@ export function EnrollmentModal({ person, onClose, onEnrolled }: Props): JSX.Ele
             Microphone access was blocked. Allow it in system settings and try again.
           </p>
         )}
-        {error && <p className="mb-3 mt-0 text-[12px] text-content-danger">{error}</p>}
 
         <div className="flex items-center gap-2">
           {!done && state !== 'recording' && (
