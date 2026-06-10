@@ -14,7 +14,11 @@ const api = {
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     path: string,
     body?: unknown
-  ): Promise<ApiResponse<T>> => ipcRenderer.invoke('api:request', { method, path, body })
+  ): Promise<ApiResponse<T>> => ipcRenderer.invoke('api:request', { method, path, body }),
+
+  /** Persist a finished capture under userData/recordings. */
+  saveRecording: (name: string, data: ArrayBuffer): Promise<{ path: string }> =>
+    ipcRenderer.invoke('recording:save', name, data)
 }
 
 export type Api = typeof api

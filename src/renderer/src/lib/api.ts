@@ -194,6 +194,26 @@ export async function createMeeting(
   })
 }
 
+export async function enrollPerson(
+  employeeId: string,
+  clipsB64: string[],
+  mimeType: string
+): Promise<StaffMember | null> {
+  const dto = await call<PersonEnrollmentDto>('POST', `/people/${employeeId}/enroll`, {
+    clips_b64: clipsB64,
+    mime_type: mimeType
+  })
+  if (!dto) return null
+  return {
+    id: dto.employee_id,
+    name: dto.display_name,
+    role: dto.role,
+    tone: toneFor(dto.display_name),
+    enrollment: enrollmentState(dto),
+    modelVersion: dto.model_version
+  }
+}
+
 function enrollmentState(dto: PersonEnrollmentDto): EnrollmentState {
   if (dto.reenrollment_required) return 'reenroll_required'
   return dto.enrolled ? 'enrolled' : 'not_enrolled'

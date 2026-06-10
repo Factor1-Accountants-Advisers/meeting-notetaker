@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { CloudOff, Mic, Pause, Play, Square, Volume2 } from 'lucide-react'
+import { AlertTriangle, CloudOff, Mic, MicOff, Pause, Play, Square, Volume2 } from 'lucide-react'
 import { Card } from '@renderer/components/ui/Card'
 import { Pill } from '@renderer/components/ui/Pill'
+import type { CaptureStatus } from '@renderer/lib/capture'
 
 /** Lifted to App so recording survives navigation between screens. */
 export interface RecordingSession {
@@ -30,12 +31,19 @@ function clock(ms: number): string {
 
 interface Props {
   session: RecordingSession
+  captureStatus: CaptureStatus | null
   onPause: () => void
   onResume: () => void
   onStop: () => void
 }
 
-export function RecordingScreen({ session, onPause, onResume, onStop }: Props): JSX.Element {
+export function RecordingScreen({
+  session,
+  captureStatus,
+  onPause,
+  onResume,
+  onStop
+}: Props): JSX.Element {
   const [now, setNow] = useState(Date.now())
   const paused = session.pausedAt !== null
 
@@ -105,17 +113,35 @@ export function RecordingScreen({ session, onPause, onResume, onStop }: Props): 
 
       <Card>
         <div className="flex flex-col gap-2 text-[12px] text-content-secondary">
-          <span className="flex items-center gap-1.5">
-            <Mic size={13} strokeWidth={1.75} />
-            {session.source === 'online'
-              ? 'Capturing system audio (loopback) + microphone'
-              : 'Capturing microphone'}
-          </span>
-          {session.source === 'online' && (
-            <span className="flex items-center gap-1.5 text-content-tertiary">
+          {captureStatus?.mic === 'active' && (
+            <span className="flex items-center gap-1.5 text-content-success">
+              <Mic size={13} strokeWidth={1.75} />
+              Microphone capturing
+            </span>
+          )}
+          {captureStatus?.mic === 'error' && (
+            <span className="flex items-center gap-1.5 text-content-danger">
+              <MicOff size={13} strokeWidth={1.75} />
+              Microphone unavailable — check access in system settings.
+            </span>
+          )}
+          {session.source === 'online' && captureStatus?.loopback === 'active' && (
+            <span className="flex items-center gap-1.5 text-content-success">
               <Volume2 size={13} strokeWidth={1.75} />
-              Loopback captures all system sound — silence notifications and media while
+              System audio (loopback) capturing — silence notifications and media while
               recording.
+            </span>
+          )}
+          {session.source === 'online' && captureStatus?.loopback === 'error' && (
+            <span className="flex items-center gap-1.5 text-content-danger">
+              <AlertTriangle size={13} strokeWidth={1.75} />
+              System-audio loopback failed — remote participants are not being captured.
+            </span>
+          )}
+          {captureStatus !== null && !captureStatus.recording && (
+            <span className="flex items-center gap-1.5 text-content-danger">
+              <AlertTriangle size={13} strokeWidth={1.75} />
+              No audio is being captured — timer only. Upload a recording afterwards instead.
             </span>
           )}
           {session.meetingId === null && (

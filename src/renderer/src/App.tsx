@@ -9,6 +9,7 @@ import { SettingsScreen } from './screens/SettingsScreen'
 import { LoginScreen, type User } from './screens/LoginScreen'
 import { RecordingScreen, type RecordingSession } from './screens/RecordingScreen'
 import { createMeeting } from './lib/api'
+import { capture, type CaptureStatus } from './lib/capture'
 import { useTheme } from './lib/theme'
 import type { ScreenId } from './lib/nav'
 
@@ -30,6 +31,7 @@ function App(): JSX.Element {
   const [view, setView] = useState<View>('home')
   const [reviewMeetingId, setReviewMeetingId] = useState<string | null>(null)
   const [recording, setRecording] = useState<RecordingSession | null>(null)
+  const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null)
   const { theme, toggle } = useTheme()
 
   if (!user) {
@@ -54,11 +56,14 @@ function App(): JSX.Element {
   }
 
   const startCapture = async (title: string, link: string | null): Promise<void> => {
+    const source = link ? ('online' as const) : ('in_person' as const)
     const created = await createMeeting(title, link)
+    const status = await capture.start(source)
+    setCaptureStatus(status)
     setRecording({
       meetingId: created?.id ?? null,
       title,
-      source: link ? 'online' : 'in_person',
+      source,
       startedAt: Date.now(),
       pausedAccum: 0,
       pausedAt: null
@@ -66,11 +71,21 @@ function App(): JSX.Element {
     setView('recording')
   }
 
-  const stopRecording = (): void => {
+  const stopRecording = async (): Promise<void> => {
     const meetingId = recording?.meetingId ?? null
+    const blob = await capture.stop()
+    if (blob) {
+      // Saved locally until the upload-to-Blob pipeline lands.
+      const name = `${meetingId ?? `local-${Date.now()}`}.webm`
+      try {
+        const { path } = await window.api.saveRecording(name, await blob.arrayBuffer())
+        console.info(`Recording saved: ${path} (${Math.round(blob.size / 1024)} KB)`)
+      } catch (err) {
+        console.error('Failed to save recording', err)
+      }
+    }
     setRecording(null)
-    // Capture upload + pipeline kick-off lands with the WASAPI work; for now
-    // stopping returns to the library where the draft meeting already exists.
+    setCaptureStatus(null)
     if (meetingId) openMeeting(meetingId)
     else navigate('meetings')
   }
@@ -96,17 +111,20 @@ function App(): JSX.Element {
       {view === 'recording' && recording && (
         <RecordingScreen
           session={recording}
-          onPause={() =>
+          captureStatus={captureStatus}
+          onPause={() => {
+            capture.pause()
             setRecording((s) => (s ? { ...s, pausedAt: Date.now() } : s))
-          }
-          onResume={() =>
+          }}
+          onResume={() => {
+            capture.resume()
             setRecording((s) =>
               s && s.pausedAt !== null
                 ? { ...s, pausedAccum: s.pausedAccum + (Date.now() - s.pausedAt), pausedAt: null }
                 : s
             )
-          }
-          onStop={stopRecording}
+          }}
+          onStop={() => void stopRecording()}
         />
       )}
       {view === 'home' && (

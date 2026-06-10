@@ -125,3 +125,14 @@ class PersonEnrollment(BaseModel):
     enrolled: bool
     model_version: str | None = None
     reenrollment_required: bool = False
+
+
+class EnrollRequest(BaseModel):
+    """Three short clips of natural speech (~10–15 s each), base64-encoded.
+
+    Audio is held in memory only: converted to one averaged embedding and
+    discarded immediately (requirements §4.2). Never written to disk.
+    """
+
+    clips_b64: list[str] = Field(min_length=3, max_length=3)
+    mime_type: str = "audio/webm"

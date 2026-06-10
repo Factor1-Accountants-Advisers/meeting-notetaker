@@ -1,4 +1,5 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, desktopCapturer, ipcMain, session } from 'electron'
+import { mkdir, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 
@@ -62,8 +63,35 @@ function createWindow(): void {
   }
 }
 
+// Save a finished capture to disk. Files live under userData/recordings until
+// the upload-to-Blob pipeline lands; raw audio retention rules apply there.
+ipcMain.handle(
+  'recording:save',
+  async (_event, name: string, data: ArrayBuffer): Promise<{ path: string }> => {
+    const dir = join(app.getPath('userData'), 'recordings')
+    await mkdir(dir, { recursive: true })
+    // Keep the name strictly ours: id + extension only.
+    const safe = name.replace(/[^a-zA-Z0-9._-]/g, '_')
+    const filePath = join(dir, safe)
+    await writeFile(filePath, Buffer.from(data))
+    return { path: filePath }
+  }
+)
+
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.factor1.notetaker')
+
+  // WASAPI loopback (decision #6): grant getDisplayMedia requests system-audio
+  // loopback without showing a picker. Renderer drops the mandatory video track.
+  session.defaultSession.setDisplayMediaRequestHandler(
+    (_request, callback) => {
+      desktopCapturer
+        .getSources({ types: ['screen'] })
+        .then((sources) => callback({ video: sources[0], audio: 'loopback' }))
+        .catch(() => callback({}))
+    },
+    { useSystemPicker: false }
+  )
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)

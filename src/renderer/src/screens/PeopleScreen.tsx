@@ -1,7 +1,9 @@
+import { useState } from 'react'
 import { CloudOff, Mic, RefreshCw, ShieldCheck } from 'lucide-react'
 import { Card } from '@renderer/components/ui/Card'
 import { Pill } from '@renderer/components/ui/Pill'
 import { Avatar } from '@renderer/components/ui/Avatar'
+import { EnrollmentModal } from '@renderer/components/EnrollmentModal'
 import { fetchPeople } from '@renderer/lib/api'
 import { useLive } from '@renderer/lib/useLive'
 import { staff as sampleStaff, type EnrollmentState, type StaffMember } from '@renderer/data/mock'
@@ -14,9 +16,17 @@ const enrollmentLabel: Record<EnrollmentState, { text: string; tone: Tone }> = {
 }
 
 export function PeopleScreen(): JSX.Element {
-  const { data: staff, offline } = useLive(fetchPeople, sampleStaff)
+  const { data: staff, offline, setData } = useLive(fetchPeople, sampleStaff)
+  const [enrolling, setEnrolling] = useState<StaffMember | null>(null)
+  const [pendingSync, setPendingSync] = useState(false)
 
   const enrolledCount = staff.filter((s) => s.enrollment === 'enrolled').length
+
+  const handleEnrolled = (updated: StaffMember, live: boolean): void => {
+    setData((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
+    if (!live) setPendingSync(true)
+    setEnrolling(null)
+  }
 
   return (
     <div>
@@ -38,18 +48,45 @@ export function PeopleScreen(): JSX.Element {
             Backend unavailable — showing sample data.
           </p>
         )}
+        {pendingSync && (
+          <p className="mt-1.5 flex items-center gap-1.5 text-[12px] text-content-warning">
+            <CloudOff size={13} strokeWidth={1.75} />
+            Enrollment saved locally — syncs when the backend is reachable.
+          </p>
+        )}
       </div>
 
       <Card className="!py-1">
         {staff.map((person, i) => (
-          <PersonRow key={person.id} person={person} divider={i > 0} />
+          <PersonRow
+            key={person.id}
+            person={person}
+            divider={i > 0}
+            onEnroll={() => setEnrolling(person)}
+          />
         ))}
       </Card>
+
+      {enrolling && (
+        <EnrollmentModal
+          person={enrolling}
+          onClose={() => setEnrolling(null)}
+          onEnrolled={handleEnrolled}
+        />
+      )}
     </div>
   )
 }
 
-function PersonRow({ person, divider }: { person: StaffMember; divider: boolean }): JSX.Element {
+function PersonRow({
+  person,
+  divider,
+  onEnroll
+}: {
+  person: StaffMember
+  divider: boolean
+  onEnroll: () => void
+}): JSX.Element {
   const state = enrollmentLabel[person.enrollment]
   const initials = person.name
     .split(' ')
@@ -78,6 +115,7 @@ function PersonRow({ person, divider }: { person: StaffMember; divider: boolean 
         <button
           type="button"
           title="Record three short clips to enroll"
+          onClick={onEnroll}
           className="flex shrink-0 items-center gap-1.5 rounded-md border-[0.5px] border-edge-secondary px-2.5 py-1.5 text-[12px] text-content-primary hover:bg-bg-secondary"
         >
           {person.enrollment === 'reenroll_required' ? (
