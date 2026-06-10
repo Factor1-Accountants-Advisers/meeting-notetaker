@@ -229,6 +229,18 @@ export async function patchActionItem(
   return call<ActionItemDto>('PATCH', `/action-items/${itemId}`, changes)
 }
 
+export interface EmailResultDto {
+  recipients: string[]
+  sent_at: string
+}
+
+export async function emailNotes(
+  meetingId: string,
+  note: string | null
+): Promise<EmailResultDto | null> {
+  return call<EmailResultDto>('POST', `/meetings/${meetingId}/email`, { note })
+}
+
 export interface AuditEntryDto {
   id: string
   meeting_id: string | null
@@ -247,6 +259,17 @@ export async function fetchAudit(meetingId: string): Promise<AuditEntryDto[] | n
 /** Direct media URL for the stored meeting audio (dev backend). */
 export function audioUrl(meetingId: string): string {
   return `http://127.0.0.1:8787${PREFIX}/meetings/${meetingId}/audio`
+}
+
+export interface SearchResultDto {
+  meeting_id: string
+  meeting_title: string
+  kind: 'meeting' | 'summary' | 'transcript' | 'action_item'
+  snippet: string
+}
+
+export async function searchAll(q: string): Promise<SearchResultDto[] | null> {
+  return get<SearchResultDto[]>(`/search?q=${encodeURIComponent(q)}`)
 }
 
 export async function enrollPerson(

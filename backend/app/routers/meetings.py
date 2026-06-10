@@ -10,6 +10,8 @@ from app import store
 from app.schemas import (
     AuditEntry,
     EditSegmentRequest,
+    EmailRequest,
+    EmailResult,
     Meeting,
     MeetingCreate,
     MeetingReview,
@@ -18,6 +20,7 @@ from app.schemas import (
     PipelineStatus,
     UploadAudioRequest,
 )
+from app.services.email import get_email_provider
 from app.services.pipeline import AUDIO_DIR, audio_path_for, kick_pipeline
 
 Actor = Header("Unknown user", alias="X-MN-User")
@@ -98,6 +101,51 @@ async def retry_pipeline(meeting_id: UUID) -> Meeting:
         raise HTTPException(status.HTTP_409_CONFLICT, "No stored audio for this meeting")
     kick_pipeline(meeting_id, path)
     return store.MEETINGS[meeting_id]
+
+
+@router.post("/{meeting_id}/email", response_model=EmailResult)
+async def email_notes(
+    meeting_id: UUID, body: EmailRequest, actor: str = Actor
+) -> EmailResult:
+    """Email finalised notes to participants (requirements §4.7).
+
+    Distribution is hard-gated on finalisation — nothing is sent unreviewed.
+    Real recipient addresses come from Graph attendee lookup later; the stub
+    derives placeholder addresses from participant names.
+    """
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    if meeting.status is not MeetingStatus.finalized:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Notes can only be emailed after finalisation"
+        )
+
+    def placeholder_address(name: str) -> str:
+        slug = "".join(c for c in name.lower() if c.isalnum() or c == " ")
+        return ".".join(slug.split()) + "@factor1.ph"
+
+    participants = store.PARTICIPANTS.get(meeting_id, [])
+    recipients = [placeholder_address(p.name) for p in participants if p.known]
+    if not recipients:
+        raise HTTPException(status.HTTP_409_CONFLICT, "No named participants to email")
+
+    summary = store.SUMMARIES.get(meeting_id, "")
+    note = f"{body.note}\n\n" if body.note else ""
+    email_body = f"{note}{summary}"
+
+    await get_email_provider().send_meeting_notes(
+        recipients, f"Meeting notes: {meeting.title}", email_body
+    )
+    sent_at = datetime.now(timezone.utc)
+    store.add_audit(
+        actor,
+        "meeting.email",
+        meeting.title,
+        after=", ".join(recipients),
+        meeting_id=meeting_id,
+    )
+    return EmailResult(recipients=recipients, sent_at=sent_at)
 
 
 def _build_review(meeting: Meeting) -> MeetingReview:

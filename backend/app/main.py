@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import store
 from app.config import get_settings
-from app.routers import action_items, health, meetings, people
+from app.routers import action_items, health, meetings, people, search
 
 
 def create_app() -> FastAPI:
@@ -35,6 +35,7 @@ def create_app() -> FastAPI:
     app.include_router(meetings.router, prefix=settings.api_v1_prefix)
     app.include_router(action_items.router, prefix=settings.api_v1_prefix)
     app.include_router(people.router, prefix=settings.api_v1_prefix)
+    app.include_router(search.router, prefix=settings.api_v1_prefix)
     return app
 
 

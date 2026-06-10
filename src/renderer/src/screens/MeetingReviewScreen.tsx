@@ -21,6 +21,7 @@ import { toneClasses } from '@renderer/components/ui/tones'
 import {
   audioUrl,
   editSegment,
+  emailNotes,
   fetchAudit,
   fetchMeetingReview,
   finalizeMeeting,
@@ -138,6 +139,7 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
   const [vm, setVm] = useState<ReviewVm | null>(() => vmFromSample(meetingId))
   const [live, setLive] = useState(false)
   const [audit, setAudit] = useState<AuditEntryDto[]>([])
+  const [emailOpen, setEmailOpen] = useState(false)
 
   const inFlight = vm?.pipelineStatus === 'queued' || vm?.pipelineStatus === 'processing'
 
@@ -284,7 +286,19 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
         live={live}
         unknownLeft={unknownLeft}
         onFinalize={() => void handleFinalize()}
+        onEmail={() => setEmailOpen(true)}
       />
+      {emailOpen && (
+        <EmailModal
+          meetingId={meetingId}
+          live={live}
+          participants={vm.participants.filter((p) => p.known).map((p) => p.name)}
+          onClose={() => {
+            setEmailOpen(false)
+            refreshAudit()
+          }}
+        />
+      )}
       {vm.pipelineStatus === 'queued' || vm.pipelineStatus === 'processing' ? (
         <PipelineCard status={vm.pipelineStatus} />
       ) : vm.pipelineStatus === 'failed' ? (
@@ -377,12 +391,14 @@ function Header({
   vm,
   live,
   unknownLeft,
-  onFinalize
+  onFinalize,
+  onEmail
 }: {
   vm: ReviewVm
   live: boolean
   unknownLeft: number
   onFinalize: () => void
+  onEmail: () => void
 }): JSX.Element {
   const canFinalize = !vm.finalized && unknownLeft === 0 && vm.pipelineStatus === 'ready'
 
@@ -430,6 +446,7 @@ function Header({
           <button
             type="button"
             disabled={!vm.finalized}
+            onClick={onEmail}
             title={vm.finalized ? 'Email notes to participants' : 'Available after finalizing'}
             className="flex items-center gap-1.5 rounded-md border-[0.5px] border-edge-secondary px-3.5 py-2 text-[13px] text-content-primary transition-opacity hover:bg-bg-secondary disabled:cursor-not-allowed disabled:opacity-45"
           >
@@ -700,6 +717,109 @@ function HistoryCard({ entries }: { entries: AuditEntryDto[] }): JSX.Element {
   )
 }
 
+function EmailModal({
+  meetingId,
+  live,
+  participants,
+  onClose
+}: {
+  meetingId: string
+  live: boolean
+  participants: string[]
+  onClose: () => void
+}): JSX.Element {
+  const [note, setNote] = useState('')
+  const [state, setState] = useState<'compose' | 'sending' | 'sent' | 'error'>('compose')
+  const [sentTo, setSentTo] = useState<string[]>([])
+
+  const send = async (): Promise<void> => {
+    if (!live) {
+      setState('error')
+      return
+    }
+    setState('sending')
+    const result = await emailNotes(meetingId, note.trim() || null)
+    if (result) {
+      setSentTo(result.recipients)
+      setState('sent')
+    } else {
+      setState('error')
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6">
+      <div className="w-full max-w-[420px] rounded-lg border-[0.5px] border-edge-secondary bg-bg-primary p-5">
+        <h2 className="m-0 mb-3 text-[16px] font-medium text-content-primary">
+          Email meeting notes
+        </h2>
+
+        {state === 'sent' ? (
+          <>
+            <p className="mb-1 mt-0 text-[13px] text-content-success">Notes sent to:</p>
+            <ul className="mb-4 mt-0 list-none p-0 text-[12px] text-content-secondary">
+              {sentTo.map((r) => (
+                <li key={r}>{r}</li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md border-[0.5px] border-edge-info bg-bg-info px-3.5 py-2 text-[13px] text-content-info"
+            >
+              Done
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="mb-2 text-[12px] text-content-secondary">Recipients</div>
+            <div className="mb-3 flex flex-wrap gap-1.5">
+              {participants.map((p) => (
+                <span
+                  key={p}
+                  className="rounded-md bg-bg-secondary px-2 py-0.5 text-[12px] text-content-secondary"
+                >
+                  {p}
+                </span>
+              ))}
+            </div>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Optional note above the meeting notes…"
+              rows={3}
+              className="mb-3 w-full rounded-md border-[0.5px] border-edge-tertiary bg-bg-primary p-2 text-[13px] text-content-primary placeholder:text-content-tertiary focus:border-brand-blue focus:outline-none"
+            />
+            {state === 'error' && (
+              <p className="mb-3 mt-0 text-[12px] text-content-danger">
+                {live ? 'Sending failed — try again.' : 'Backend unavailable — cannot send.'}
+              </p>
+            )}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={state === 'sending'}
+                onClick={() => void send()}
+                className="flex items-center gap-1.5 rounded-md border-[0.5px] border-edge-info bg-bg-info px-3.5 py-2 text-[13px] text-content-info disabled:opacity-45"
+              >
+                <Mail size={14} strokeWidth={1.75} />
+                {state === 'sending' ? 'Sending…' : 'Send notes'}
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-md border-[0.5px] border-edge-secondary px-3 py-2 text-[13px] text-content-primary hover:bg-bg-secondary"
+              >
+                Cancel
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function describeAudit(e: AuditEntryDto): string {
   switch (e.action) {
     case 'transcript.edit':
@@ -708,6 +828,8 @@ function describeAudit(e: AuditEntryDto): string {
       return `named ${e.before} as ${e.after}`
     case 'meeting.finalize':
       return 'finalized the meeting'
+    case 'meeting.email':
+      return `emailed the notes to ${e.after ?? 'participants'}`
     default:
       if (e.action.startsWith('action_item.')) {
         const field = e.action.split('.')[1]

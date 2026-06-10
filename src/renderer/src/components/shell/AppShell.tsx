@@ -10,6 +10,7 @@ interface AppShellProps {
   theme: Theme
   onToggleTheme: () => void
   onOpenRecording?: (() => void) | null
+  onOpenMeeting?: (id: string) => void
   children: ReactNode
 }
 
@@ -19,11 +20,17 @@ export function AppShell({
   theme,
   onToggleTheme,
   onOpenRecording,
+  onOpenMeeting,
   children
 }: AppShellProps): JSX.Element {
   return (
     <div className="flex h-full flex-col bg-page text-content-primary">
-      <TopBar theme={theme} onToggleTheme={onToggleTheme} onOpenRecording={onOpenRecording} />
+      <TopBar
+        theme={theme}
+        onToggleTheme={onToggleTheme}
+        onOpenRecording={onOpenRecording}
+        onOpenMeeting={onOpenMeeting}
+      />
       <div className="flex min-h-0 flex-1">
         <NavRail active={active} onSelect={onSelect} />
         <main className="min-w-0 flex-1 overflow-y-auto">

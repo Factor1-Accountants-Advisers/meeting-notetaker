@@ -144,6 +144,15 @@ class EditSegmentRequest(BaseModel):
     text: str = Field(min_length=1)
 
 
+class EmailRequest(BaseModel):
+    note: str | None = None  # optional message above the notes
+
+
+class EmailResult(BaseModel):
+    recipients: list[str]
+    sent_at: datetime
+
+
 class UploadAudioRequest(BaseModel):
     """Recorded or uploaded meeting audio, base64-encoded.
 

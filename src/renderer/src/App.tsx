@@ -137,6 +137,7 @@ function App(): JSX.Element {
       onOpenRecording={
         recording && view !== 'recording' ? () => setView('recording') : null
       }
+      onOpenMeeting={openMeeting}
     >
       {view === 'recording' && recording && (
         <RecordingScreen
