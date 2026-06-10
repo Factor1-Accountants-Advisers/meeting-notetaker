@@ -1,5 +1,8 @@
 import { app, shell, BrowserWindow, desktopCapturer, ipcMain, session } from 'electron'
-import { autoUpdater } from 'electron-updater'
+import updater from 'electron-updater'
+
+// electron-updater is CommonJS; named ESM imports fail at runtime.
+const { autoUpdater } = updater
 import { mkdir, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
