@@ -11,6 +11,7 @@ from app.schemas import (
     ActionItem,
     PipelineStatus,
     ActionItemStatus,
+    AuditEntry,
     Meeting,
     MeetingParticipant,
     MeetingSource,
@@ -19,6 +20,34 @@ from app.schemas import (
     Priority,
     TranscriptSegment,
 )
+
+
+AUDIT_LOG: list["AuditEntry"] = []
+
+
+def add_audit(
+    actor: str,
+    action: str,
+    target: str,
+    before: str | None = None,
+    after: str | None = None,
+    meeting_id: UUID | None = None,
+) -> None:
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    AUDIT_LOG.append(
+        AuditEntry(
+            id=uuid4(),
+            meeting_id=meeting_id,
+            actor=actor,
+            action=action,
+            target=target,
+            before=before,
+            after=after,
+            at=datetime.now(timezone.utc),
+        )
+    )
 
 
 def _mid(slug: str) -> UUID:

@@ -3,10 +3,13 @@ import binascii
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, status
+from fastapi.responses import FileResponse
 
 from app import store
 from app.schemas import (
+    AuditEntry,
+    EditSegmentRequest,
     Meeting,
     MeetingCreate,
     MeetingReview,
@@ -16,6 +19,8 @@ from app.schemas import (
     UploadAudioRequest,
 )
 from app.services.pipeline import AUDIO_DIR, audio_path_for, kick_pipeline
+
+Actor = Header("Unknown user", alias="X-MN-User")
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 
@@ -118,8 +123,53 @@ async def get_review(meeting_id: UUID) -> MeetingReview:
     return _build_review(meeting)
 
 
+@router.get("/{meeting_id}/audio")
+async def get_audio(meeting_id: UUID) -> FileResponse:
+    """Stream the stored meeting audio (Blob stand-in; 30-day lifecycle there)."""
+    if meeting_id not in store.MEETINGS:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    path = audio_path_for(meeting_id, "audio/webm")
+    if not path.exists():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No stored audio for this meeting")
+    return FileResponse(path, media_type="audio/webm")
+
+
+@router.get("/{meeting_id}/audit", response_model=list[AuditEntry])
+async def get_audit(meeting_id: UUID) -> list[AuditEntry]:
+    if meeting_id not in store.MEETINGS:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    return [e for e in store.AUDIT_LOG if e.meeting_id == meeting_id][::-1]
+
+
+@router.patch("/{meeting_id}/segments/{index}", response_model=MeetingReview)
+async def edit_segment(
+    meeting_id: UUID, index: int, body: EditSegmentRequest, actor: str = Actor
+) -> MeetingReview:
+    """Edit transcript text; the change is audit-logged (requirements §4.6)."""
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    segments = store.TRANSCRIPTS.get(meeting_id, [])
+    if not 0 <= index < len(segments):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Segment not found")
+
+    before = segments[index].text
+    segments[index].text = body.text
+    store.add_audit(
+        actor,
+        "transcript.edit",
+        f"segment {index + 1} ({segments[index].speaker})",
+        before=before,
+        after=body.text,
+        meeting_id=meeting_id,
+    )
+    return _build_review(meeting)
+
+
 @router.post("/{meeting_id}/name-speaker", response_model=MeetingReview)
-async def name_speaker(meeting_id: UUID, body: NameSpeakerRequest) -> MeetingReview:
+async def name_speaker(
+    meeting_id: UUID, body: NameSpeakerRequest, actor: str = Actor
+) -> MeetingReview:
     """Manually name an unknown diarized speaker (requirements §4.4).
 
     Renames the speaker across transcript and participants and decrements the
@@ -147,11 +197,19 @@ async def name_speaker(meeting_id: UUID, body: NameSpeakerRequest) -> MeetingRev
         update={"unknown_speaker_count": max(0, meeting.unknown_speaker_count - 1)}
     )
     store.MEETINGS[meeting_id] = updated
+    store.add_audit(
+        actor,
+        "speaker.name",
+        f"speaker '{body.label}'",
+        before=body.label,
+        after=body.name,
+        meeting_id=meeting_id,
+    )
     return _build_review(updated)
 
 
 @router.post("/{meeting_id}/finalize", response_model=Meeting)
-async def finalize_meeting(meeting_id: UUID) -> Meeting:
+async def finalize_meeting(meeting_id: UUID, actor: str = Actor) -> Meeting:
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
@@ -165,4 +223,12 @@ async def finalize_meeting(meeting_id: UUID) -> Meeting:
         )
     updated = meeting.model_copy(update={"status": MeetingStatus.finalized})
     store.MEETINGS[meeting_id] = updated
+    store.add_audit(
+        actor,
+        "meeting.finalize",
+        meeting.title,
+        before="draft",
+        after="finalized",
+        meeting_id=meeting_id,
+    )
     return updated

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AppShell } from './components/shell/AppShell'
 import { HomeScreen } from './screens/HomeScreen'
 import { MeetingsScreen } from './screens/MeetingsScreen'
@@ -35,6 +35,11 @@ function App(): JSX.Element {
   const [recording, setRecording] = useState<RecordingSession | null>(null)
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null)
   const { theme, toggle } = useTheme()
+
+  // Keep the main process informed so backend calls carry the audit actor.
+  useEffect(() => {
+    if (typeof window.api?.setUser === 'function') window.api.setUser(user?.name ?? '')
+  }, [user])
 
   if (!user) {
     return (
@@ -157,6 +162,7 @@ function App(): JSX.Element {
           userName={user.name}
           onStartCapture={(t, l) => void startCapture(t, l)}
           onUploadRecording={(t, f) => void uploadRecording(t, f)}
+          onOpenMeeting={openMeeting}
         />
       )}
       {view === 'meetings' &&

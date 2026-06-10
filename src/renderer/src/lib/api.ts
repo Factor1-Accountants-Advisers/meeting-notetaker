@@ -214,6 +214,41 @@ export async function retryPipeline(meetingId: string): Promise<MeetingDto | nul
   return call<MeetingDto>('POST', `/meetings/${meetingId}/retry`)
 }
 
+export async function editSegment(
+  meetingId: string,
+  index: number,
+  text: string
+): Promise<MeetingReviewDto | null> {
+  return call<MeetingReviewDto>('PATCH', `/meetings/${meetingId}/segments/${index}`, { text })
+}
+
+export async function patchActionItem(
+  itemId: string,
+  changes: { owner?: string | null; status?: 'open' | 'done' }
+): Promise<ActionItemDto | null> {
+  return call<ActionItemDto>('PATCH', `/action-items/${itemId}`, changes)
+}
+
+export interface AuditEntryDto {
+  id: string
+  meeting_id: string | null
+  actor: string
+  action: string
+  target: string
+  before: string | null
+  after: string | null
+  at: string
+}
+
+export async function fetchAudit(meetingId: string): Promise<AuditEntryDto[] | null> {
+  return get<AuditEntryDto[]>(`/meetings/${meetingId}/audit`)
+}
+
+/** Direct media URL for the stored meeting audio (dev backend). */
+export function audioUrl(meetingId: string): string {
+  return `http://127.0.0.1:8787${PREFIX}/meetings/${meetingId}/audio`
+}
+
 export async function enrollPerson(
   employeeId: string,
   clipsB64: string[],

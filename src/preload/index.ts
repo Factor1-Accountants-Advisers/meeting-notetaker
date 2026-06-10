@@ -18,7 +18,10 @@ const api = {
 
   /** Persist a finished capture under userData/recordings. */
   saveRecording: (name: string, data: ArrayBuffer): Promise<{ path: string }> =>
-    ipcRenderer.invoke('recording:save', name, data)
+    ipcRenderer.invoke('recording:save', name, data),
+
+  /** Audit actor for backend calls; cleared on sign-out. */
+  setUser: (name: string): void => ipcRenderer.send('auth:set-user', name)
 }
 
 export type Api = typeof api

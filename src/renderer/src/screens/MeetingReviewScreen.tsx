@@ -2,33 +2,42 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowLeft,
   CheckCircle2,
+  Circle,
   CloudOff,
   FileText,
+  History,
   ListChecks,
   Mail,
   Mic,
+  Pencil,
   Sparkles,
   UserRoundSearch,
-  Users
+  Users,
+  Volume2
 } from 'lucide-react'
 import { Card, SectionHeader } from '@renderer/components/ui/Card'
 import { Pill, priorityTone, statusTone } from '@renderer/components/ui/Pill'
 import { toneClasses } from '@renderer/components/ui/tones'
 import {
+  audioUrl,
+  editSegment,
+  fetchAudit,
   fetchMeetingReview,
   finalizeMeeting,
   mapActionItem,
   nameSpeaker,
+  patchActionItem,
   retryPipeline,
   toneFor,
+  type AuditEntryDto,
   type MeetingReviewDto
 } from '@renderer/lib/api'
-import type { PipelineStatus } from '@renderer/data/mock'
 import {
   meetingDetails,
   meetings,
   staffNames,
-  type ActionItem
+  type ActionItem,
+  type PipelineStatus
 } from '@renderer/data/mock'
 import type { Tone } from '@renderer/components/ui/tones'
 
@@ -128,6 +137,7 @@ interface Props {
 export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
   const [vm, setVm] = useState<ReviewVm | null>(() => vmFromSample(meetingId))
   const [live, setLive] = useState(false)
+  const [audit, setAudit] = useState<AuditEntryDto[]>([])
 
   const inFlight = vm?.pipelineStatus === 'queued' || vm?.pipelineStatus === 'processing'
 
@@ -148,6 +158,15 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
       if (id !== undefined) window.clearInterval(id)
     }
   }, [meetingId, inFlight])
+
+  const refreshAudit = (): void => {
+    void fetchAudit(meetingId).then((entries) => entries && setAudit(entries))
+  }
+
+  useEffect(() => {
+    if (live && vm?.pipelineStatus === 'ready') refreshAudit()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live, vm?.pipelineStatus, meetingId])
 
   const unknownLeft = useMemo(
     () => (vm ? vm.participants.filter((p) => !p.known).length : 0),
@@ -170,6 +189,7 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
       const dto = await nameSpeaker(meetingId, label, name)
       if (dto) {
         setVm(vmFromDto(dto))
+        refreshAudit()
         return
       }
     }
@@ -181,6 +201,7 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
       const dto = await finalizeMeeting(meetingId)
       if (dto) {
         setVm((prev) => (prev ? { ...prev, finalized: dto.status === 'finalized' } : prev))
+        refreshAudit()
         return
       }
     }
@@ -191,6 +212,68 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
     const dto = await retryPipeline(meetingId)
     if (dto)
       setVm((prev) => (prev ? { ...prev, pipelineStatus: dto.pipeline_status } : prev))
+  }
+
+  const handleEditSegment = async (index: number, text: string): Promise<void> => {
+    if (live) {
+      const dto = await editSegment(meetingId, index, text)
+      if (dto) {
+        setVm(vmFromDto(dto))
+        refreshAudit()
+        return
+      }
+    }
+    setVm((prev) =>
+      prev
+        ? {
+            ...prev,
+            segments: prev.segments.map((s, i) => (i === index ? { ...s, text } : s))
+          }
+        : prev
+    )
+  }
+
+  const handlePatchItem = async (
+    item: ActionItem,
+    changes: { owner?: string; status?: 'open' | 'done' }
+  ): Promise<void> => {
+    if (live) {
+      const dto = await patchActionItem(item.id, changes)
+      if (dto) {
+        const mapped = mapActionItem(dto)
+        setVm((prev) =>
+          prev
+            ? {
+                ...prev,
+                actionItems: prev.actionItems.map((a) => (a.id === item.id ? mapped : a))
+              }
+            : prev
+        )
+        refreshAudit()
+        return
+      }
+    }
+    setVm((prev) =>
+      prev
+        ? {
+            ...prev,
+            actionItems: prev.actionItems.map((a) =>
+              a.id === item.id
+                ? {
+                    ...a,
+                    owner: changes.owner ?? a.owner,
+                    status:
+                      changes.status === undefined
+                        ? a.status
+                        : changes.status === 'done'
+                          ? 'Done'
+                          : 'Open'
+                  }
+                : a
+            )
+          }
+        : prev
+    )
   }
 
   return (
@@ -212,13 +295,15 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
         </Card>
       ) : (
         <>
+          {live && <AudioCard meetingId={meetingId} />}
           <ParticipantsCard vm={vm} onName={handleName} />
           <Card>
             <SectionHeader icon={Sparkles} title="Summary" meta="AI-generated" />
             <p className="m-0 text-[14px] leading-relaxed text-content-primary">{vm.summary}</p>
           </Card>
-          <ActionItemsCard items={vm.actionItems} />
-          <TranscriptCard vm={vm} onName={handleName} />
+          <ActionItemsCard items={vm.actionItems} onPatch={handlePatchItem} />
+          <TranscriptCard vm={vm} onName={handleName} onEdit={handleEditSegment} />
+          {audit.length > 0 && <HistoryCard entries={audit} />}
         </>
       )}
     </div>
@@ -254,6 +339,23 @@ function FailedCard({ onRetry }: { onRetry: () => void }): JSX.Element {
       >
         Retry processing
       </button>
+    </Card>
+  )
+}
+
+function AudioCard({ meetingId }: { meetingId: string }): JSX.Element | null {
+  const [available, setAvailable] = useState(true)
+  if (!available) return null
+  return (
+    <Card>
+      <SectionHeader icon={Volume2} title="Recording" meta="audio deleted after 30 days" />
+      <audio
+        controls
+        preload="metadata"
+        src={audioUrl(meetingId)}
+        onError={() => setAvailable(false)}
+        className="h-9 w-full"
+      />
     </Card>
   )
 }
@@ -314,9 +416,11 @@ function Header({
             title={
               vm.finalized
                 ? 'Already finalized'
-                : unknownLeft > 0
-                  ? `${unknownLeft} unknown speaker(s) must be named first`
-                  : 'Finalize meeting notes'
+                : vm.pipelineStatus !== 'ready'
+                  ? 'Available once processing completes'
+                  : unknownLeft > 0
+                    ? `${unknownLeft} unknown speaker(s) must be named first`
+                    : 'Finalize meeting notes'
             }
             className="flex items-center gap-1.5 rounded-md border-[0.5px] border-edge-info bg-bg-info px-3.5 py-2 text-[13px] text-content-info transition-opacity disabled:cursor-not-allowed disabled:opacity-45"
           >
@@ -334,7 +438,7 @@ function Header({
           </button>
         </div>
       </div>
-      {!vm.finalized && unknownLeft > 0 && (
+      {!vm.finalized && unknownLeft > 0 && vm.pipelineStatus === 'ready' && (
         <div className="mt-2 text-[12px] text-content-danger">
           {unknownLeft} unknown speaker{unknownLeft > 1 ? 's' : ''} must be named before finalizing.
         </div>
@@ -404,32 +508,78 @@ function ParticipantsCard({
   )
 }
 
-function ActionItemsCard({ items }: { items: ActionItem[] }): JSX.Element {
+function ActionItemsCard({
+  items,
+  onPatch
+}: {
+  items: ActionItem[]
+  onPatch: (item: ActionItem, changes: { owner?: string; status?: 'open' | 'done' }) => void
+}): JSX.Element {
   return (
     <Card>
       <SectionHeader icon={ListChecks} title="Action items" meta={`${items.length}`} />
-      {items.map((a, i) => (
-        <div
-          key={a.id}
-          className={`flex items-center gap-2.5 py-2.5 ${
-            i > 0 ? 'border-t-[0.5px] border-edge-tertiary' : ''
-          }`}
-        >
-          <div className="min-w-0 flex-1">
-            <div className="text-[14px] text-content-primary">{a.description}</div>
-            <div className="text-[11px] text-content-tertiary">
-              {a.owner ? (
-                <>Owner: {a.owner}</>
+      {items.map((a, i) => {
+        const isDone = a.status === 'Done'
+        return (
+          <div
+            key={a.id}
+            className={`flex items-center gap-2.5 py-2.5 ${
+              i > 0 ? 'border-t-[0.5px] border-edge-tertiary' : ''
+            }`}
+          >
+            <button
+              type="button"
+              aria-label={isDone ? 'Mark as open' : 'Mark as done'}
+              onClick={() => onPatch(a, { status: isDone ? 'open' : 'done' })}
+              className="shrink-0 text-content-tertiary hover:text-content-secondary"
+            >
+              {isDone ? (
+                <CheckCircle2 size={18} strokeWidth={1.75} className="text-content-success" />
               ) : (
-                <span className="text-content-danger">Unassigned — unknown speaker</span>
-              )}{' '}
-              · <span className={a.overdue ? 'text-content-danger' : ''}>{a.dueLabel}</span>
+                <Circle size={18} strokeWidth={1.75} />
+              )}
+            </button>
+            <div className="min-w-0 flex-1">
+              <div
+                className={`text-[14px] ${
+                  isDone ? 'text-content-tertiary line-through' : 'text-content-primary'
+                }`}
+              >
+                {a.description}
+              </div>
+              <div className="flex items-center gap-1 text-[11px] text-content-tertiary">
+                {a.owner ? (
+                  <>Owner: {a.owner}</>
+                ) : (
+                  <span className="flex items-center gap-1 text-content-danger">
+                    Unassigned
+                    <select
+                      defaultValue=""
+                      aria-label={`Assign owner for ${a.description}`}
+                      onChange={(e) => e.target.value && onPatch(a, { owner: e.target.value })}
+                      className="h-5 rounded-md border-[0.5px] border-edge-danger bg-bg-danger px-1 text-[10px] font-medium text-content-danger focus:outline-none"
+                    >
+                      <option value="" disabled>
+                        Assign…
+                      </option>
+                      {staffNames.map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                    </select>
+                  </span>
+                )}
+                <span>
+                  · <span className={a.overdue && !isDone ? 'text-content-danger' : ''}>{a.dueLabel}</span>
+                </span>
+              </div>
             </div>
+            <Pill tone={priorityTone[a.priority]}>{a.priority}</Pill>
+            <Pill tone={statusTone[a.status]}>{a.status}</Pill>
           </div>
-          <Pill tone={priorityTone[a.priority]}>{a.priority}</Pill>
-          <Pill tone={statusTone[a.status]}>{a.status}</Pill>
-        </div>
-      ))}
+        )
+      })}
       {items.length === 0 && (
         <div className="py-4 text-center text-[12px] text-content-tertiary">
           No action items for this meeting.
@@ -441,16 +591,21 @@ function ActionItemsCard({ items }: { items: ActionItem[] }): JSX.Element {
 
 function TranscriptCard({
   vm,
-  onName
+  onName,
+  onEdit
 }: {
   vm: ReviewVm
   onName: (label: string, name: string) => void
+  onEdit: (index: number, text: string) => void
 }): JSX.Element {
+  const [editing, setEditing] = useState<number | null>(null)
+  const [draft, setDraft] = useState('')
+
   return (
     <Card>
-      <SectionHeader icon={FileText} title="Transcript" />
+      <SectionHeader icon={FileText} title="Transcript" meta="edits are logged" />
       <div className="flex flex-col gap-3">
-        {vm.segments.map((seg) => (
+        {vm.segments.map((seg, index) => (
           <div key={seg.id} className={`rounded-md px-2.5 py-2 ${seg.known ? '' : 'bg-bg-danger'}`}>
             <div className="mb-0.5 flex items-center gap-2">
               <span
@@ -464,11 +619,100 @@ function TranscriptCard({
               {!seg.known && (
                 <NamePicker unknownId={seg.speaker} onPick={(n) => onName(seg.speaker, n)} />
               )}
+              {editing !== index && (
+                <button
+                  type="button"
+                  title="Edit this segment"
+                  aria-label={`Edit segment ${index + 1}`}
+                  onClick={() => {
+                    setEditing(index)
+                    setDraft(seg.text)
+                  }}
+                  className="ml-auto text-content-tertiary hover:text-content-secondary"
+                >
+                  <Pencil size={13} strokeWidth={1.75} />
+                </button>
+              )}
             </div>
-            <p className="m-0 text-[14px] leading-relaxed text-content-primary">{seg.text}</p>
+            {editing === index ? (
+              <div>
+                <textarea
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  rows={3}
+                  className="w-full rounded-md border-[0.5px] border-edge-secondary bg-bg-primary p-2 text-[14px] leading-relaxed text-content-primary focus:border-brand-blue focus:outline-none"
+                />
+                <div className="mt-1.5 flex gap-2">
+                  <button
+                    type="button"
+                    disabled={draft.trim().length === 0}
+                    onClick={() => {
+                      onEdit(index, draft.trim())
+                      setEditing(null)
+                    }}
+                    className="rounded-md border-[0.5px] border-edge-info bg-bg-info px-2.5 py-1 text-[12px] text-content-info disabled:opacity-45"
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditing(null)}
+                    className="rounded-md border-[0.5px] border-edge-secondary px-2.5 py-1 text-[12px] text-content-primary hover:bg-bg-secondary"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <p className="m-0 text-[14px] leading-relaxed text-content-primary">{seg.text}</p>
+            )}
           </div>
         ))}
       </div>
     </Card>
   )
+}
+
+function HistoryCard({ entries }: { entries: AuditEntryDto[] }): JSX.Element {
+  return (
+    <Card>
+      <SectionHeader icon={History} title="History" meta={`${entries.length} change${entries.length === 1 ? '' : 's'}`} />
+      <div className="flex flex-col">
+        {entries.map((e, i) => (
+          <div
+            key={e.id}
+            className={`py-2 text-[12px] ${i > 0 ? 'border-t-[0.5px] border-edge-tertiary' : ''}`}
+          >
+            <span className="text-content-primary">{e.actor}</span>{' '}
+            <span className="text-content-secondary">{describeAudit(e)}</span>
+            <span className="ml-2 text-[11px] text-content-tertiary">
+              {new Date(e.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+            </span>
+            {e.before && e.after && e.action === 'transcript.edit' && (
+              <div className="mt-0.5 truncate text-[11px] text-content-tertiary">
+                “{e.before}” → “{e.after}”
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+function describeAudit(e: AuditEntryDto): string {
+  switch (e.action) {
+    case 'transcript.edit':
+      return `edited ${e.target}`
+    case 'speaker.name':
+      return `named ${e.before} as ${e.after}`
+    case 'meeting.finalize':
+      return 'finalized the meeting'
+    default:
+      if (e.action.startsWith('action_item.')) {
+        const field = e.action.split('.')[1]
+        return `changed ${field} of “${e.target}” to ${e.after ?? '—'}`
+      }
+      return `${e.action} on ${e.target}`
+  }
 }

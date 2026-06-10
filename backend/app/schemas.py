@@ -127,6 +127,23 @@ class NameSpeakerRequest(BaseModel):
     name: str = Field(min_length=1)
 
 
+class AuditEntry(BaseModel):
+    """Who/what/when for every edit, naming, and finalisation (requirements §4.6)."""
+
+    id: UUID
+    meeting_id: UUID | None = None
+    actor: str
+    action: str  # e.g. "transcript.edit", "speaker.name", "meeting.finalize"
+    target: str  # human-readable target, e.g. "segment 3", "action item <desc>"
+    before: str | None = None
+    after: str | None = None
+    at: datetime
+
+
+class EditSegmentRequest(BaseModel):
+    text: str = Field(min_length=1)
+
+
 class UploadAudioRequest(BaseModel):
     """Recorded or uploaded meeting audio, base64-encoded.
 

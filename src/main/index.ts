@@ -8,6 +8,13 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 // tokens will be attached here once auth lands.
 const API_BASE = process.env.MN_API_BASE ?? 'http://127.0.0.1:8787'
 
+// Signed-in display name; sent as the audit actor on every backend call.
+// Replaced by the Entra ID token subject once real auth lands.
+let currentUser = 'Unknown user'
+ipcMain.on('auth:set-user', (_event, name: string) => {
+  currentUser = name || 'Unknown user'
+})
+
 interface ApiRequest {
   method: 'GET' | 'POST' | 'PATCH' | 'DELETE'
   path: string
@@ -16,9 +23,11 @@ interface ApiRequest {
 
 ipcMain.handle('api:request', async (_event, req: ApiRequest) => {
   try {
+    const headers: Record<string, string> = { 'X-MN-User': currentUser }
+    if (req.body !== undefined) headers['content-type'] = 'application/json'
     const res = await fetch(`${API_BASE}${req.path}`, {
       method: req.method,
-      headers: req.body !== undefined ? { 'content-type': 'application/json' } : undefined,
+      headers,
       body: req.body !== undefined ? JSON.stringify(req.body) : undefined
     })
     const text = await res.text()

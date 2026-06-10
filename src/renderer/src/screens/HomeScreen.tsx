@@ -14,20 +14,27 @@ import { Card, SectionHeader } from '@renderer/components/ui/Card'
 import { Pill, priorityTone, statusTone } from '@renderer/components/ui/Pill'
 import { AvatarStack } from '@renderer/components/ui/Avatar'
 import { toneClasses } from '@renderer/components/ui/tones'
-import { fetchActionItems } from '@renderer/lib/api'
+import { fetchActionItems, fetchMeetings } from '@renderer/lib/api'
 import { useLive } from '@renderer/lib/useLive'
-import { upcomingMeetings, recordings, myActionItems as sampleMyItems } from '@renderer/data/mock'
+import {
+  upcomingMeetings,
+  recordings as sampleRecordings,
+  myActionItems as sampleMyItems,
+  type Recording
+} from '@renderer/data/mock'
 
 interface HomeProps {
   userName: string
   onStartCapture: (title: string, link: string | null) => void
   onUploadRecording: (title: string, file: File) => void
+  onOpenMeeting: (id: string) => void
 }
 
 export function HomeScreen({
   userName,
   onStartCapture,
-  onUploadRecording
+  onUploadRecording,
+  onOpenMeeting
 }: HomeProps): JSX.Element {
   return (
     <div className="flex flex-col gap-4">
@@ -35,7 +42,7 @@ export function HomeScreen({
       <CaptureCard onStart={onStartCapture} onUpload={onUploadRecording} />
       <div className="grid grid-cols-2 gap-3.5">
         <UpcomingCard />
-        <RecordingsCard />
+        <RecordingsCard onOpenMeeting={onOpenMeeting} />
       </div>
       <ActionItemsCard userName={userName} />
     </div>
@@ -208,7 +215,23 @@ function UpcomingCard(): JSX.Element {
   )
 }
 
-function RecordingsCard(): JSX.Element {
+function RecordingsCard({ onOpenMeeting }: { onOpenMeeting: (id: string) => void }): JSX.Element {
+  // Processed meetings double as the recordings list (audio-first tiles, §5.1).
+  const { data: tiles, offline } = useLive(async (): Promise<Recording[] | null> => {
+    const live = await fetchMeetings()
+    if (!live) return null
+    return live
+      .filter((m) => m.pipelineStatus === 'ready' && m.durationMin > 0)
+      .slice(0, 4)
+      .map((m) => ({
+        id: m.id,
+        title: m.title,
+        date: m.date,
+        durationLabel: `${m.durationMin} min`,
+        durationBadge: `${m.durationMin}:00`
+      }))
+  }, sampleRecordings)
+
   return (
     <Card>
       <SectionHeader
@@ -221,8 +244,14 @@ function RecordingsCard(): JSX.Element {
         }
       />
       <div className="grid grid-cols-2 gap-2.5">
-        {recordings.map((r) => (
-          <div key={r.id}>
+        {tiles.map((r) => (
+          <button
+            key={r.id}
+            type="button"
+            onClick={() => !offline && onOpenMeeting(r.id)}
+            className="text-left"
+            title={offline ? undefined : `Open ${r.title}`}
+          >
             <div className="relative mb-1.5 flex aspect-[16/10] items-center justify-center rounded-md bg-bg-tertiary">
               <AudioWaveform size={22} strokeWidth={1.5} className="text-content-tertiary" />
               <span className="absolute bottom-1 right-1 rounded bg-bg-primary px-1 py-px text-[10px] text-content-secondary">
@@ -233,8 +262,13 @@ function RecordingsCard(): JSX.Element {
             <div className="text-[11px] text-content-tertiary">
               {r.date} · {r.durationLabel}
             </div>
-          </div>
+          </button>
         ))}
+        {tiles.length === 0 && (
+          <div className="col-span-2 py-6 text-center text-[12px] text-content-tertiary">
+            Processed recordings appear here.
+          </div>
+        )}
       </div>
     </Card>
   )
