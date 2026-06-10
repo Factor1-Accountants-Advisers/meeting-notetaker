@@ -8,6 +8,8 @@
  * the recording screen only renders its status.
  */
 
+import fixWebmDuration from 'fix-webm-duration'
+
 export type StreamState = 'active' | 'error' | 'off'
 
 export interface CaptureStatus {
@@ -50,8 +52,13 @@ class CaptureController {
       try {
         // Main process answers with a screen source + WASAPI loopback audio.
         const sys = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
-        sys.getVideoTracks().forEach((t) => t.stop()) // audio-first: video dropped
         if (sys.getAudioTracks().length === 0) throw new Error('no loopback track')
+        // Audio-first, but do NOT stop the video track: on Windows, stopping it
+        // tears down the whole capture session and silences the loopback audio.
+        // Disable it instead; it is stopped with everything else on release.
+        sys.getVideoTracks().forEach((t) => {
+          t.enabled = false
+        })
         this.streams.push(sys)
         ctx.createMediaStreamSource(new MediaStream(sys.getAudioTracks())).connect(mixed)
         status.loopback = 'active'
@@ -88,20 +95,32 @@ class CaptureController {
     if (this.recorder?.state === 'paused') this.recorder.resume()
   }
 
-  /** Stop and return the captured audio; null when nothing was recorded. */
-  async stop(): Promise<Blob | null> {
+  /** Stop and return the captured audio; null when nothing was recorded.
+   *
+   * MediaRecorder webm has no duration in its header (players show 0:00 until
+   * they scan the file), so the measured duration is patched in before return.
+   */
+  async stop(durationMs?: number): Promise<Blob | null> {
     const recorder = this.recorder
     if (!recorder || recorder.state === 'inactive') {
       this.releaseAll()
       return null
     }
-    const blob = await new Promise<Blob>((resolve) => {
+    let blob = await new Promise<Blob>((resolve) => {
       recorder.onstop = () =>
         resolve(new Blob(this.chunks, { type: recorder.mimeType || 'audio/webm' }))
       recorder.stop()
     })
     this.releaseAll()
-    return blob.size > 0 ? blob : null
+    if (blob.size === 0) return null
+    if (durationMs && durationMs > 0) {
+      try {
+        blob = await fixWebmDuration(blob, durationMs, { logger: false })
+      } catch {
+        // Unpatched blob still plays; only the seek bar suffers.
+      }
+    }
+    return blob
   }
 
   private releaseAll(): void {

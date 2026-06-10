@@ -82,7 +82,7 @@ function App(): JSX.Element {
     const session = recording
     const meetingId = session?.meetingId ?? null
     const durationSeconds = session ? Math.round(elapsedMs(session) / 1000) : null
-    const blob = await capture.stop()
+    const blob = await capture.stop(session ? elapsedMs(session) : undefined)
     if (blob) {
       // Local copy first (survives backend outages), then queue the pipeline.
       const name = `${meetingId ?? `local-${Date.now()}`}.webm`
