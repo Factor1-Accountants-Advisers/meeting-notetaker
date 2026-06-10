@@ -153,6 +153,74 @@ export const myActionItems: ActionItem[] = [
   }
 ]
 
+export interface TranscriptSegment {
+  id: string
+  speaker: string // display name or "Unknown 1"
+  known: boolean
+  time: string
+  text: string
+}
+
+export interface MeetingDetail {
+  summary: string
+  participants: { name: string; tone: Tone; unknown?: boolean }[]
+  transcript: TranscriptSegment[]
+  actionItems: ActionItem[]
+}
+
+/** Staff available when naming an unknown speaker (from People, enrolled or not). */
+export const staffNames = ['M. Santos', 'J. Lim', 'R. Abad', 'L. Perez', 'S. Wong']
+
+export const meetingDetails: Record<string, MeetingDetail> = {
+  m1: {
+    summary:
+      'Quarterly review of Henderson & Co accounts. Revenue is tracking 8% ahead of forecast; depreciation schedule needs updating before the FY25 provisional tax estimate goes out. Client asked for a reconciliation of the Smith’s Bakery subsidiary accounts by end of week. Next review booked for early September.',
+    participants: [
+      { name: 'Gerd Guerrero', tone: 'info' },
+      { name: 'M. Santos', tone: 'success' },
+      { name: 'Unknown 1', tone: 'danger', unknown: true }
+    ],
+    transcript: [
+      {
+        id: 't1',
+        speaker: 'Gerd Guerrero',
+        known: true,
+        time: '00:12',
+        text: 'Thanks for joining. Agenda today is the Q2 numbers, the depreciation schedule, and the provisional tax estimate for FY25.'
+      },
+      {
+        id: 't2',
+        speaker: 'M. Santos',
+        known: true,
+        time: '01:05',
+        text: 'Revenue is sitting about eight percent ahead of forecast. Margins are flat — the cost increases in logistics ate the gains.'
+      },
+      {
+        id: 't3',
+        speaker: 'Unknown 1',
+        known: false,
+        time: '03:41',
+        text: 'On our side we’d like the Smith’s Bakery accounts reconciled before Friday, if that’s workable. The board meets Monday.'
+      },
+      {
+        id: 't4',
+        speaker: 'Gerd Guerrero',
+        known: true,
+        time: '04:02',
+        text: 'Workable. I’ll take that one. We’ll also need the updated depreciation schedule before the estimate — Marco, can you own that?'
+      },
+      {
+        id: 't5',
+        speaker: 'M. Santos',
+        known: true,
+        time: '04:18',
+        text: 'Yes — I’ll have it by the 13th. The FY25 provisional estimate can follow on the 16th.'
+      }
+    ],
+    actionItems: myActionItems.slice(0, 3)
+  }
+}
+
 export const meetings: Meeting[] = [
   {
     id: 'm1',

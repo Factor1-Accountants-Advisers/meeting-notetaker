@@ -14,7 +14,11 @@ const filterToStatus: Record<Exclude<Filter, 'All'>, MeetingStatus> = {
   Finalized: 'Finalized'
 }
 
-export function MeetingsScreen(): JSX.Element {
+export function MeetingsScreen({
+  onOpenMeeting
+}: {
+  onOpenMeeting: (id: string) => void
+}): JSX.Element {
   const [filter, setFilter] = useState<Filter>('All')
 
   const visible =
@@ -70,7 +74,7 @@ export function MeetingsScreen(): JSX.Element {
           <div className="mb-1.5 text-[12px] font-medium text-content-tertiary">{group.name}</div>
           <Card className="!px-4 !py-1">
             {group.items.map((m, i) => (
-              <MeetingRow key={m.id} meeting={m} divider={i > 0} />
+              <MeetingRow key={m.id} meeting={m} divider={i > 0} onOpen={onOpenMeeting} />
             ))}
           </Card>
         </div>
@@ -85,13 +89,22 @@ export function MeetingsScreen(): JSX.Element {
   )
 }
 
-function MeetingRow({ meeting, divider }: { meeting: Meeting; divider: boolean }): JSX.Element {
+function MeetingRow({
+  meeting,
+  divider,
+  onOpen
+}: {
+  meeting: Meeting
+  divider: boolean
+  onOpen: (id: string) => void
+}): JSX.Element {
   const Icon = meeting.icon
   const itemsLabel = `${meeting.actionItems} action item${meeting.actionItems === 1 ? '' : 's'}`
 
   return (
     <button
       type="button"
+      onClick={() => onOpen(meeting.id)}
       className={`flex w-full items-center gap-2.5 py-[11px] text-left ${
         divider ? 'border-t-[0.5px] border-edge-tertiary' : ''
       }`}

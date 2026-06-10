@@ -3,18 +3,33 @@ import { CheckSquare, Users, Settings } from 'lucide-react'
 import { AppShell } from './components/shell/AppShell'
 import { HomeScreen } from './screens/HomeScreen'
 import { MeetingsScreen } from './screens/MeetingsScreen'
+import { MeetingReviewScreen } from './screens/MeetingReviewScreen'
 import { Placeholder } from './screens/Placeholder'
 import { useTheme } from './lib/theme'
 import type { ScreenId } from './lib/nav'
 
 function App(): JSX.Element {
   const [screen, setScreen] = useState<ScreenId>('home')
+  const [reviewMeetingId, setReviewMeetingId] = useState<string | null>(null)
   const { theme, toggle } = useTheme()
 
+  const navigate = (id: ScreenId): void => {
+    setReviewMeetingId(null)
+    setScreen(id)
+  }
+
   return (
-    <AppShell active={screen} onSelect={setScreen} theme={theme} onToggleTheme={toggle}>
+    <AppShell active={screen} onSelect={navigate} theme={theme} onToggleTheme={toggle}>
       {screen === 'home' && <HomeScreen />}
-      {screen === 'meetings' && <MeetingsScreen />}
+      {screen === 'meetings' &&
+        (reviewMeetingId ? (
+          <MeetingReviewScreen
+            meetingId={reviewMeetingId}
+            onBack={() => setReviewMeetingId(null)}
+          />
+        ) : (
+          <MeetingsScreen onOpenMeeting={setReviewMeetingId} />
+        ))}
       {screen === 'actions' && (
         <Placeholder icon={CheckSquare} title="Action items" note="Cross-meeting action items, filterable by owner, status, priority, and overdue." />
       )}
