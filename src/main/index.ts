@@ -1,4 +1,5 @@
 import { app, shell, BrowserWindow, desktopCapturer, ipcMain, session } from 'electron'
+import { autoUpdater } from 'electron-updater'
 import { mkdir, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -93,8 +94,40 @@ ipcMain.handle(
   }
 )
 
+// Updates (decision #12): electron-updater against the static Blob feed.
+// Background download, install on restart. No-ops in dev / unpackaged builds.
+interface UpdateStatus {
+  state: 'dev' | 'checking' | 'up-to-date' | 'available' | 'downloaded' | 'error'
+  version?: string
+  message?: string
+}
+
+autoUpdater.autoDownload = true
+autoUpdater.autoInstallOnAppQuit = true
+
+ipcMain.handle('updates:check', async (): Promise<UpdateStatus> => {
+  if (!app.isPackaged) return { state: 'dev', version: app.getVersion() }
+  try {
+    const result = await autoUpdater.checkForUpdates()
+    const latest = result?.updateInfo.version
+    if (latest && latest !== app.getVersion()) {
+      return { state: 'available', version: latest }
+    }
+    return { state: 'up-to-date', version: app.getVersion() }
+  } catch (err) {
+    return { state: 'error', message: err instanceof Error ? err.message : String(err) }
+  }
+})
+
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.factor1.notetaker')
+
+  // Silent background check on launch (packaged builds only).
+  if (app.isPackaged) {
+    autoUpdater.checkForUpdatesAndNotify().catch(() => {
+      // Feed unreachable (e.g. not provisioned yet) — never block startup.
+    })
+  }
 
   // WASAPI loopback (decision #6): grant getDisplayMedia requests system-audio
   // loopback without showing a picker. Renderer drops the mandatory video track.

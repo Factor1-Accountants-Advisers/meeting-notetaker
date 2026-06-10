@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import type { ScreenId } from '@renderer/lib/nav'
 import type { Theme } from '@renderer/lib/theme'
+import type { AppNotification } from '@renderer/lib/useNotifications'
 import { NavRail } from './NavRail'
 import { TopBar } from './TopBar'
 
@@ -11,6 +12,9 @@ interface AppShellProps {
   onToggleTheme: () => void
   onOpenRecording?: (() => void) | null
   onOpenMeeting?: (id: string) => void
+  notifications?: AppNotification[]
+  unreadCount?: number
+  onNotificationsOpened?: () => void
   children: ReactNode
 }
 
@@ -21,6 +25,9 @@ export function AppShell({
   onToggleTheme,
   onOpenRecording,
   onOpenMeeting,
+  notifications,
+  unreadCount,
+  onNotificationsOpened,
   children
 }: AppShellProps): JSX.Element {
   return (
@@ -30,6 +37,9 @@ export function AppShell({
         onToggleTheme={onToggleTheme}
         onOpenRecording={onOpenRecording}
         onOpenMeeting={onOpenMeeting}
+        notifications={notifications}
+        unreadCount={unreadCount}
+        onNotificationsOpened={onNotificationsOpened}
       />
       <div className="flex min-h-0 flex-1">
         <NavRail active={active} onSelect={onSelect} />

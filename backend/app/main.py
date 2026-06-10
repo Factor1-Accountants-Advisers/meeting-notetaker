@@ -1,9 +1,21 @@
+import asyncio
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import store
 from app.config import get_settings
 from app.routers import action_items, health, meetings, people, search
+from app.services.retention import retention_loop
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    task = asyncio.create_task(retention_loop())
+    yield
+    task.cancel()
 
 
 def create_app() -> FastAPI:
@@ -12,6 +24,7 @@ def create_app() -> FastAPI:
         title="Meeting Notetaker API",
         version="0.1.0",
         docs_url="/docs" if settings.environment == "dev" else None,
+        lifespan=lifespan,
     )
 
     # Electron renderer origin in dev (Vite). Tighten for production packaging.

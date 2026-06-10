@@ -14,11 +14,13 @@ from pathlib import Path
 from uuid import UUID, uuid5, NAMESPACE_URL
 
 from app.schemas import (
+    AccessRole,
     ActionItem,
     PipelineStatus,
     ActionItemStatus,
     AuditEntry,
     Meeting,
+    MeetingAccessEntry,
     MeetingParticipant,
     MeetingSource,
     MeetingStatus,
@@ -115,6 +117,27 @@ MEETINGS: dict[UUID, Meeting] = {
             pipeline_status=PipelineStatus.ready,
         ),
     ]
+}
+
+# Decision #7: private to participants by default; owner can share.
+ACCESS: dict[UUID, list[MeetingAccessEntry]] = {
+    _mid("q2-henderson"): [
+        MeetingAccessEntry(user="Gerd Guerrero", role=AccessRole.owner),
+        MeetingAccessEntry(user="M. Santos", role=AccessRole.viewer),
+    ],
+    _mid("standup-0608"): [
+        MeetingAccessEntry(user="Gerd Guerrero", role=AccessRole.owner),
+        MeetingAccessEntry(user="R. Abad", role=AccessRole.viewer),
+    ],
+    _mid("tax-acme"): [
+        MeetingAccessEntry(user="Gerd Guerrero", role=AccessRole.owner),
+        MeetingAccessEntry(user="M. Santos", role=AccessRole.editor),
+    ],
+    _mid("payroll-hr"): [
+        MeetingAccessEntry(user="Gerd Guerrero", role=AccessRole.owner),
+        MeetingAccessEntry(user="L. Perez", role=AccessRole.viewer),
+        MeetingAccessEntry(user="S. Wong", role=AccessRole.viewer),
+    ],
 }
 
 SUMMARIES: dict[UUID, str] = {
@@ -282,6 +305,9 @@ def save_snapshot() -> None:
         "transcripts": {
             str(k): [s.model_dump(mode="json") for s in v] for k, v in TRANSCRIPTS.items()
         },
+        "access": {
+            str(k): [a.model_dump(mode="json") for a in v] for k, v in ACCESS.items()
+        },
         "people": [p.model_dump(mode="json") for p in PEOPLE],
         "audit_log": [e.model_dump(mode="json") for e in AUDIT_LOG],
     }
@@ -306,6 +332,14 @@ def load_snapshot() -> bool:
             UUID(k): [TranscriptSegment.model_validate(s) for s in v]
             for k, v in raw["transcripts"].items()
         }
+        access = (
+            {
+                UUID(k): [MeetingAccessEntry.model_validate(a) for a in v]
+                for k, v in raw["access"].items()
+            }
+            if "access" in raw
+            else None  # older snapshot: keep seeded defaults
+        )
         people = [PersonEnrollment.model_validate(p) for p in raw["people"]]
         audit = [AuditEntry.model_validate(e) for e in raw["audit_log"]]
     except Exception:
@@ -322,6 +356,9 @@ def load_snapshot() -> bool:
     PARTICIPANTS.update(participants)
     TRANSCRIPTS.clear()
     TRANSCRIPTS.update(transcripts)
+    if access is not None:
+        ACCESS.clear()
+        ACCESS.update(access)
     PEOPLE[:] = people
     AUDIT_LOG[:] = audit
     return True

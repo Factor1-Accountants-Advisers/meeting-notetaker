@@ -10,6 +10,8 @@ import { LoginScreen, type User } from './screens/LoginScreen'
 import { RecordingScreen, type RecordingSession } from './screens/RecordingScreen'
 import { createMeeting, uploadAudio } from './lib/api'
 import { capture, type CaptureStatus } from './lib/capture'
+import { loadPrefs } from './lib/prefs'
+import { useNotifications } from './lib/useNotifications'
 import { blobToBase64 } from './lib/recorder'
 import { elapsedMs } from './screens/RecordingScreen'
 import { useTheme } from './lib/theme'
@@ -35,6 +37,7 @@ function App(): JSX.Element {
   const [recording, setRecording] = useState<RecordingSession | null>(null)
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null)
   const { theme, toggle } = useTheme()
+  const { items: notifications, unread, markAllRead } = useNotifications(user !== null)
 
   // Keep the main process informed so backend calls carry the audit actor.
   useEffect(() => {
@@ -65,7 +68,7 @@ function App(): JSX.Element {
   const startCapture = async (title: string, link: string | null): Promise<void> => {
     const source = link ? ('online' as const) : ('in_person' as const)
     const created = await createMeeting(title, link)
-    const status = await capture.start(source)
+    const status = await capture.start(source, loadPrefs().micDeviceId)
     setCaptureStatus(status)
     setRecording({
       meetingId: created?.id ?? null,
@@ -138,6 +141,9 @@ function App(): JSX.Element {
         recording && view !== 'recording' ? () => setView('recording') : null
       }
       onOpenMeeting={openMeeting}
+      notifications={notifications}
+      unreadCount={unread}
+      onNotificationsOpened={markAllRead}
     >
       {view === 'recording' && recording && (
         <RecordingScreen

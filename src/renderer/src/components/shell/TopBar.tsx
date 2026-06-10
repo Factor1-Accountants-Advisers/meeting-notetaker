@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Search, Bell, FileText, ListChecks, Moon, Sparkles, Sun } from 'lucide-react'
 import { searchAll, type SearchResultDto } from '@renderer/lib/api'
+import type { AppNotification } from '@renderer/lib/useNotifications'
 import type { Theme } from '@renderer/lib/theme'
 
 interface TopBarProps {
@@ -9,6 +10,9 @@ interface TopBarProps {
   /** Set while a recording session is active and the user is on another screen. */
   onOpenRecording?: (() => void) | null
   onOpenMeeting?: (id: string) => void
+  notifications?: AppNotification[]
+  unreadCount?: number
+  onNotificationsOpened?: () => void
 }
 
 const kindIcon = {
@@ -22,10 +26,14 @@ export function TopBar({
   theme,
   onToggleTheme,
   onOpenRecording,
-  onOpenMeeting
+  onOpenMeeting,
+  notifications = [],
+  unreadCount = 0,
+  onNotificationsOpened
 }: TopBarProps): JSX.Element {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResultDto[] | null>(null)
+  const [bellOpen, setBellOpen] = useState(false)
   const debounceRef = useRef<number>()
 
   useEffect(() => {
@@ -122,14 +130,54 @@ export function TopBar({
         >
           {theme === 'dark' ? <Sun size={17} strokeWidth={1.75} /> : <Moon size={17} strokeWidth={1.75} />}
         </button>
-        <button
-          type="button"
-          title="Notifications"
-          aria-label="Notifications"
-          className="flex h-8 w-8 items-center justify-center rounded-md text-content-tertiary hover:bg-bg-tertiary hover:text-content-secondary"
-        >
-          <Bell size={17} strokeWidth={1.75} />
-        </button>
+        <div className="relative">
+          <button
+            type="button"
+            title="Notifications"
+            aria-label="Notifications"
+            onClick={() => {
+              const opening = !bellOpen
+              setBellOpen(opening)
+              if (opening) onNotificationsOpened?.()
+            }}
+            className="relative flex h-8 w-8 items-center justify-center rounded-md text-content-tertiary hover:bg-bg-tertiary hover:text-content-secondary"
+          >
+            <Bell size={17} strokeWidth={1.75} />
+            {unreadCount > 0 && (
+              <span className="absolute right-1 top-1 flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-edge-danger px-0.5 text-[9px] font-medium text-white">
+                {unreadCount}
+              </span>
+            )}
+          </button>
+          {bellOpen && (
+            <div className="absolute right-0 top-9 z-50 max-h-[300px] w-[280px] overflow-y-auto rounded-md border-[0.5px] border-edge-secondary bg-bg-primary py-1">
+              {notifications.length === 0 && (
+                <div className="px-3 py-2 text-[12px] text-content-tertiary">
+                  Nothing yet — pipeline events show here.
+                </div>
+              )}
+              {notifications.map((n) => (
+                <button
+                  key={n.id}
+                  type="button"
+                  onClick={() => {
+                    setBellOpen(false)
+                    onOpenMeeting?.(n.meetingId)
+                  }}
+                  className="block w-full px-3 py-1.5 text-left hover:bg-bg-secondary"
+                >
+                  <span className="block text-[12px] text-content-primary">{n.text}</span>
+                  <span className="block text-[11px] text-content-tertiary">
+                    {new Date(n.at).toLocaleTimeString('en-GB', {
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <div
           className="ml-1 flex h-7 w-7 items-center justify-center rounded-full bg-brand-navy text-[11px] font-medium text-white"
           title="Gerd Guerrero"

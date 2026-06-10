@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Download, Languages, LogOut, Mic, Moon, Sun, User } from 'lucide-react'
 import { Card, SectionHeader } from '@renderer/components/ui/Card'
 import { Avatar } from '@renderer/components/ui/Avatar'
 import { Pill } from '@renderer/components/ui/Pill'
+import { loadPrefs, savePrefs } from '@renderer/lib/prefs'
 import type { Theme } from '@renderer/lib/theme'
 
 interface Props {
@@ -20,8 +21,27 @@ export function SettingsScreen({
   userEmail,
   onSignOut
 }: Props): JSX.Element {
-  const [inputDevice, setInputDevice] = useState('default')
-  const [language, setLanguage] = useState('auto')
+  const [prefs, setPrefs] = useState(loadPrefs)
+  const [devices, setDevices] = useState<{ id: string; label: string }[]>([])
+
+  useEffect(() => {
+    navigator.mediaDevices
+      ?.enumerateDevices()
+      .then((all) =>
+        setDevices(
+          all
+            .filter((d) => d.kind === 'audioinput')
+            .map((d, i) => ({ id: d.deviceId, label: d.label || `Microphone ${i + 1}` }))
+        )
+      )
+      .catch(() => setDevices([]))
+  }, [])
+
+  const update = (changes: Partial<typeof prefs>): void => {
+    const next = { ...prefs, ...changes }
+    setPrefs(next)
+    savePrefs(next)
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -63,14 +83,17 @@ export function SettingsScreen({
           hint="Mixed with system audio for online meetings"
         >
           <select
-            value={inputDevice}
+            value={prefs.micDeviceId}
             aria-label="Microphone"
-            onChange={(e) => setInputDevice(e.target.value)}
-            className="h-8 rounded-md border-[0.5px] border-edge-tertiary bg-bg-primary px-2 text-[13px] text-content-primary focus:outline-none"
+            onChange={(e) => update({ micDeviceId: e.target.value })}
+            className="h-8 max-w-[220px] rounded-md border-[0.5px] border-edge-tertiary bg-bg-primary px-2 text-[13px] text-content-primary focus:outline-none"
           >
-            <option value="default">System default</option>
-            <option value="headset">Headset microphone</option>
-            <option value="room">Conference room array</option>
+            <option value="">System default</option>
+            {devices.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.label}
+              </option>
+            ))}
           </select>
         </SettingRow>
         <SettingRow
@@ -88,9 +111,9 @@ export function SettingsScreen({
           hint="Per-meeting override available; Taglish handling validated on real audio"
         >
           <select
-            value={language}
+            value={prefs.language}
             aria-label="Default language"
-            onChange={(e) => setLanguage(e.target.value)}
+            onChange={(e) => update({ language: e.target.value })}
             className="h-8 rounded-md border-[0.5px] border-edge-tertiary bg-bg-primary px-2 text-[13px] text-content-primary focus:outline-none"
           >
             <option value="auto">Auto-detect (English + Filipino)</option>
@@ -117,18 +140,52 @@ export function SettingsScreen({
           </button>
         </SettingRow>
         <SettingRow label="Version" hint="Updates download in the background and install on restart">
-          <span className="flex items-center gap-2">
-            <span className="text-[13px] text-content-secondary">0.1.0</span>
-            <button
-              type="button"
-              className="rounded-md border-[0.5px] border-edge-secondary px-2.5 py-1.5 text-[12px] text-content-primary hover:bg-bg-secondary"
-            >
-              Check for updates
-            </button>
-          </span>
+          <UpdateCheck />
         </SettingRow>
       </Card>
     </div>
+  )
+}
+
+function UpdateCheck(): JSX.Element {
+  const [status, setStatus] = useState<string>('0.1.0')
+  const [busy, setBusy] = useState(false)
+
+  const check = async (): Promise<void> => {
+    if (typeof window.api?.checkUpdates !== 'function') return
+    setBusy(true)
+    const result = await window.api.checkUpdates()
+    setBusy(false)
+    switch (result.state) {
+      case 'dev':
+        setStatus(`${result.version} (dev build — updates disabled)`)
+        break
+      case 'up-to-date':
+        setStatus(`${result.version} — up to date`)
+        break
+      case 'available':
+        setStatus(`Update ${result.version} downloading — installs on restart`)
+        break
+      case 'error':
+        setStatus('Update check failed — feed not reachable')
+        break
+      default:
+        setStatus(result.version ?? '0.1.0')
+    }
+  }
+
+  return (
+    <span className="flex items-center gap-2">
+      <span className="max-w-[220px] text-right text-[12px] text-content-secondary">{status}</span>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void check()}
+        className="rounded-md border-[0.5px] border-edge-secondary px-2.5 py-1.5 text-[12px] text-content-primary hover:bg-bg-secondary disabled:opacity-45"
+      >
+        {busy ? 'Checking…' : 'Check for updates'}
+      </button>
+    </span>
   )
 }
 

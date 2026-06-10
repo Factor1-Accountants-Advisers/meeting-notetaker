@@ -21,7 +21,14 @@ const api = {
     ipcRenderer.invoke('recording:save', name, data),
 
   /** Audit actor for backend calls; cleared on sign-out. */
-  setUser: (name: string): void => ipcRenderer.send('auth:set-user', name)
+  setUser: (name: string): void => ipcRenderer.send('auth:set-user', name),
+
+  /** Manual update check (Settings). */
+  checkUpdates: (): Promise<{
+    state: 'dev' | 'checking' | 'up-to-date' | 'available' | 'downloaded' | 'error'
+    version?: string
+    message?: string
+  }> => ipcRenderer.invoke('updates:check')
 }
 
 export type Api = typeof api

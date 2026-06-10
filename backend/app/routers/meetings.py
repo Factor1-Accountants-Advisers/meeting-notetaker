@@ -8,11 +8,14 @@ from fastapi.responses import FileResponse
 
 from app import store
 from app.schemas import (
+    AccessRole,
     AuditEntry,
     EditSegmentRequest,
     EmailRequest,
     EmailResult,
+    GrantAccessRequest,
     Meeting,
+    MeetingAccessEntry,
     MeetingCreate,
     MeetingReview,
     MeetingStatus,
@@ -28,9 +31,22 @@ Actor = Header("Unknown user", alias="X-MN-User")
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 
 
+def _can_see(meeting_id: UUID, actor: str) -> bool:
+    """Access check (decision #7). Meetings without access records stay
+    visible (dev/legacy data); enforcement hardens once Entra IDs replace
+    display names."""
+    entries = store.ACCESS.get(meeting_id)
+    if not entries:
+        return True
+    return any(e.user == actor for e in entries)
+
+
 @router.get("", response_model=list[Meeting])
-async def list_meetings(status_filter: MeetingStatus | None = None) -> list[Meeting]:
+async def list_meetings(
+    status_filter: MeetingStatus | None = None, actor: str = Actor
+) -> list[Meeting]:
     items = sorted(store.MEETINGS.values(), key=lambda m: m.created_at, reverse=True)
+    items = [m for m in items if _can_see(m.id, actor)]
     if status_filter is not None:
         items = [m for m in items if m.status == status_filter]
     return items
@@ -45,7 +61,7 @@ async def get_meeting(meeting_id: UUID) -> Meeting:
 
 
 @router.post("", response_model=Meeting, status_code=status.HTTP_201_CREATED)
-async def create_meeting(body: MeetingCreate) -> Meeting:
+async def create_meeting(body: MeetingCreate, actor: str = Actor) -> Meeting:
     meeting = Meeting(
         id=uuid4(),
         title=body.title,
@@ -55,7 +71,58 @@ async def create_meeting(body: MeetingCreate) -> Meeting:
         created_at=datetime.now(timezone.utc),
     )
     store.MEETINGS[meeting.id] = meeting
+    # Creator owns the meeting (decision #7).
+    store.ACCESS[meeting.id] = [MeetingAccessEntry(user=actor, role=AccessRole.owner)]
     return meeting
+
+
+@router.get("/{meeting_id}/access", response_model=list[MeetingAccessEntry])
+async def list_access(meeting_id: UUID) -> list[MeetingAccessEntry]:
+    if meeting_id not in store.MEETINGS:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    return store.ACCESS.get(meeting_id, [])
+
+
+@router.post("/{meeting_id}/access", response_model=list[MeetingAccessEntry])
+async def grant_access(
+    meeting_id: UUID, body: GrantAccessRequest, actor: str = Actor
+) -> list[MeetingAccessEntry]:
+    if meeting_id not in store.MEETINGS:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    entries = store.ACCESS.setdefault(meeting_id, [])
+    existing = next((e for e in entries if e.user == body.user), None)
+    if existing is None:
+        entries.append(MeetingAccessEntry(user=body.user, role=body.role))
+        store.add_audit(
+            actor, "access.grant", body.user, after=body.role.value, meeting_id=meeting_id
+        )
+    elif existing.role != body.role:
+        before = existing.role.value
+        existing.role = body.role
+        store.add_audit(
+            actor, "access.change", body.user,
+            before=before, after=body.role.value, meeting_id=meeting_id,
+        )
+    return entries
+
+
+@router.delete("/{meeting_id}/access/{user}", response_model=list[MeetingAccessEntry])
+async def revoke_access(
+    meeting_id: UUID, user: str, actor: str = Actor
+) -> list[MeetingAccessEntry]:
+    if meeting_id not in store.MEETINGS:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    entries = store.ACCESS.get(meeting_id, [])
+    target = next((e for e in entries if e.user == user), None)
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No access entry for that user")
+    if target.role is AccessRole.owner:
+        raise HTTPException(status.HTTP_409_CONFLICT, "The owner cannot be removed")
+    entries.remove(target)
+    store.add_audit(
+        actor, "access.revoke", user, before=target.role.value, meeting_id=meeting_id
+    )
+    return entries
 
 
 @router.post("/{meeting_id}/audio", response_model=Meeting)

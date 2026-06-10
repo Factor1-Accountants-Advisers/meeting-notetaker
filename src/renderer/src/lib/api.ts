@@ -261,6 +261,30 @@ export function audioUrl(meetingId: string): string {
   return `http://127.0.0.1:8787${PREFIX}/meetings/${meetingId}/audio`
 }
 
+export interface AccessEntryDto {
+  user: string
+  role: 'owner' | 'editor' | 'viewer'
+}
+
+export async function fetchAccess(meetingId: string): Promise<AccessEntryDto[] | null> {
+  return get<AccessEntryDto[]>(`/meetings/${meetingId}/access`)
+}
+
+export async function grantAccess(
+  meetingId: string,
+  user: string,
+  role: 'editor' | 'viewer'
+): Promise<AccessEntryDto[] | null> {
+  return call<AccessEntryDto[]>('POST', `/meetings/${meetingId}/access`, { user, role })
+}
+
+export async function revokeAccess(
+  meetingId: string,
+  user: string
+): Promise<AccessEntryDto[] | null> {
+  return call<AccessEntryDto[]>('DELETE', `/meetings/${meetingId}/access/${encodeURIComponent(user)}`)
+}
+
 export interface SearchResultDto {
   meeting_id: string
   meeting_title: string

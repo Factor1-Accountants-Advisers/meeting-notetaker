@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     similarity_threshold: float = 0.62
     pyannote_model_version: str = "pyannote/embedding-3.1"
 
+    # Raw-audio retention (requirements §6.2 engineering default).
+    audio_retention_days: int = 30
+
 
 @lru_cache
 def get_settings() -> Settings:

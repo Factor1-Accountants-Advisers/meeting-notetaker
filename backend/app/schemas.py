@@ -127,6 +127,19 @@ class NameSpeakerRequest(BaseModel):
     name: str = Field(min_length=1)
 
 
+class MeetingAccessEntry(BaseModel):
+    """Per-meeting access (decision #7): private to participants by default,
+    shareable by the owner. Keyed by display name until Entra IDs arrive."""
+
+    user: str
+    role: AccessRole
+
+
+class GrantAccessRequest(BaseModel):
+    user: str = Field(min_length=1)
+    role: AccessRole = AccessRole.viewer
+
+
 class AuditEntry(BaseModel):
     """Who/what/when for every edit, naming, and finalisation (requirements §4.6)."""
 

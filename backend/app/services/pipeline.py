@@ -17,7 +17,13 @@ from pathlib import Path
 from uuid import UUID
 
 from app import store
-from app.schemas import MeetingParticipant, PipelineStatus, TranscriptSegment
+from app.schemas import (
+    AccessRole,
+    MeetingAccessEntry,
+    MeetingParticipant,
+    PipelineStatus,
+    TranscriptSegment,
+)
 from app.services.llm import get_llm_provider
 from app.services.speech import get_speech_provider
 
@@ -109,6 +115,15 @@ async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
         store.SUMMARIES[meeting_id] = summary
         for item in items:
             store.ACTION_ITEMS[item.id] = item
+
+        # Private to participants by default (decision #7): matched (known)
+        # participants get viewer access automatically.
+        access = store.ACCESS.setdefault(meeting_id, [])
+        for participant in participants:
+            if participant.known and not any(e.user == participant.name for e in access):
+                access.append(
+                    MeetingAccessEntry(user=participant.name, role=AccessRole.viewer)
+                )
 
         updated = store.MEETINGS[meeting_id].model_copy(
             update={

@@ -10,7 +10,9 @@ import {
   Mail,
   Mic,
   Pencil,
+  Share2,
   Sparkles,
+  Trash2,
   UserRoundSearch,
   Users,
   Volume2
@@ -22,14 +24,18 @@ import {
   audioUrl,
   editSegment,
   emailNotes,
+  fetchAccess,
   fetchAudit,
   fetchMeetingReview,
   finalizeMeeting,
+  grantAccess,
   mapActionItem,
   nameSpeaker,
   patchActionItem,
   retryPipeline,
+  revokeAccess,
   toneFor,
+  type AccessEntryDto,
   type AuditEntryDto,
   type MeetingReviewDto
 } from '@renderer/lib/api'
@@ -140,6 +146,7 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
   const [live, setLive] = useState(false)
   const [audit, setAudit] = useState<AuditEntryDto[]>([])
   const [emailOpen, setEmailOpen] = useState(false)
+  const [shareOpen, setShareOpen] = useState(false)
 
   const inFlight = vm?.pipelineStatus === 'queued' || vm?.pipelineStatus === 'processing'
 
@@ -287,7 +294,18 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
         unknownLeft={unknownLeft}
         onFinalize={() => void handleFinalize()}
         onEmail={() => setEmailOpen(true)}
+        onShare={() => setShareOpen(true)}
       />
+      {shareOpen && (
+        <ShareModal
+          meetingId={meetingId}
+          live={live}
+          onClose={() => {
+            setShareOpen(false)
+            refreshAudit()
+          }}
+        />
+      )}
       {emailOpen && (
         <EmailModal
           meetingId={meetingId}
@@ -392,13 +410,15 @@ function Header({
   live,
   unknownLeft,
   onFinalize,
-  onEmail
+  onEmail,
+  onShare
 }: {
   vm: ReviewVm
   live: boolean
   unknownLeft: number
   onFinalize: () => void
   onEmail: () => void
+  onShare: () => void
 }): JSX.Element {
   const canFinalize = !vm.finalized && unknownLeft === 0 && vm.pipelineStatus === 'ready'
 
@@ -425,6 +445,15 @@ function Header({
           </div>
         </div>
         <div className="flex shrink-0 gap-2">
+          <button
+            type="button"
+            title="Share access"
+            aria-label="Share access"
+            onClick={onShare}
+            className="flex items-center justify-center rounded-md border-[0.5px] border-edge-secondary px-2.5 py-2 text-content-secondary hover:bg-bg-secondary"
+          >
+            <Share2 size={15} strokeWidth={1.75} />
+          </button>
           <button
             type="button"
             disabled={!canFinalize}
@@ -820,6 +849,126 @@ function EmailModal({
   )
 }
 
+function ShareModal({
+  meetingId,
+  live,
+  onClose
+}: {
+  meetingId: string
+  live: boolean
+  onClose: () => void
+}): JSX.Element {
+  const [entries, setEntries] = useState<AccessEntryDto[] | null>(null)
+  const [user, setUser] = useState('')
+  const [role, setRole] = useState<'viewer' | 'editor'>('viewer')
+
+  useEffect(() => {
+    if (live) void fetchAccess(meetingId).then(setEntries)
+  }, [meetingId, live])
+
+  const add = async (): Promise<void> => {
+    if (!user) return
+    const updated = await grantAccess(meetingId, user, role)
+    if (updated) setEntries(updated)
+    setUser('')
+  }
+
+  const remove = async (name: string): Promise<void> => {
+    const updated = await revokeAccess(meetingId, name)
+    if (updated) setEntries(updated)
+  }
+
+  const candidates = staffNames.filter((n) => !entries?.some((e) => e.user === n))
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6">
+      <div className="w-full max-w-[400px] rounded-lg border-[0.5px] border-edge-secondary bg-bg-primary p-5">
+        <h2 className="m-0 mb-1 text-[16px] font-medium text-content-primary">Share access</h2>
+        <p className="mb-3 mt-0 text-[12px] text-content-tertiary">
+          Notes are private to participants by default. Access changes are logged.
+        </p>
+
+        {!live ? (
+          <p className="mb-3 mt-0 text-[12px] text-content-warning">
+            Backend unavailable — sharing needs a connection.
+          </p>
+        ) : entries === null ? (
+          <p className="mb-3 mt-0 text-[12px] text-content-tertiary">Loading…</p>
+        ) : (
+          <>
+            <div className="mb-3 flex flex-col">
+              {entries.map((e, i) => (
+                <div
+                  key={e.user}
+                  className={`flex items-center gap-2 py-1.5 ${
+                    i > 0 ? 'border-t-[0.5px] border-edge-tertiary' : ''
+                  }`}
+                >
+                  <span className="min-w-0 flex-1 truncate text-[13px] text-content-primary">
+                    {e.user}
+                  </span>
+                  <Pill tone={e.role === 'owner' ? 'info' : 'secondary'}>{e.role}</Pill>
+                  {e.role !== 'owner' && (
+                    <button
+                      type="button"
+                      title={`Remove ${e.user}`}
+                      aria-label={`Remove ${e.user}`}
+                      onClick={() => void remove(e.user)}
+                      className="text-content-tertiary hover:text-content-danger"
+                    >
+                      <Trash2 size={13} strokeWidth={1.75} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="mb-4 flex gap-2">
+              <select
+                value={user}
+                aria-label="Person to add"
+                onChange={(e) => setUser(e.target.value)}
+                className="h-8 min-w-0 flex-1 rounded-md border-[0.5px] border-edge-tertiary bg-bg-primary px-2 text-[13px] text-content-primary focus:outline-none"
+              >
+                <option value="">Add person…</option>
+                {candidates.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={role}
+                aria-label="Role"
+                onChange={(e) => setRole(e.target.value as 'viewer' | 'editor')}
+                className="h-8 rounded-md border-[0.5px] border-edge-tertiary bg-bg-primary px-2 text-[13px] text-content-primary focus:outline-none"
+              >
+                <option value="viewer">Viewer</option>
+                <option value="editor">Editor</option>
+              </select>
+              <button
+                type="button"
+                disabled={!user}
+                onClick={() => void add()}
+                className="rounded-md border-[0.5px] border-edge-info bg-bg-info px-3 py-1.5 text-[13px] text-content-info disabled:opacity-45"
+              >
+                Add
+              </button>
+            </div>
+          </>
+        )}
+
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-md border-[0.5px] border-edge-secondary px-3 py-2 text-[13px] text-content-primary hover:bg-bg-secondary"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function describeAudit(e: AuditEntryDto): string {
   switch (e.action) {
     case 'transcript.edit':
@@ -830,6 +979,14 @@ function describeAudit(e: AuditEntryDto): string {
       return 'finalized the meeting'
     case 'meeting.email':
       return `emailed the notes to ${e.after ?? 'participants'}`
+    case 'access.grant':
+      return `shared with ${e.target} as ${e.after}`
+    case 'access.change':
+      return `changed ${e.target}'s access to ${e.after}`
+    case 'access.revoke':
+      return `removed ${e.target}'s access`
+    case 'audio.retention_delete':
+      return `deleted stored audio (${e.target})`
     default:
       if (e.action.startsWith('action_item.')) {
         const field = e.action.split('.')[1]

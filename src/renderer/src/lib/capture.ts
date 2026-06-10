@@ -32,7 +32,7 @@ class CaptureController {
     return this.status
   }
 
-  async start(source: 'online' | 'in_person'): Promise<CaptureStatus> {
+  async start(source: 'online' | 'in_person', micDeviceId = ''): Promise<CaptureStatus> {
     this.releaseAll() // defensive: never two captures at once
 
     const status: CaptureStatus = { mic: 'off', loopback: 'off', recording: false }
@@ -40,7 +40,9 @@ class CaptureController {
     const mixed = ctx.createMediaStreamDestination()
 
     try {
-      const mic = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mic = await navigator.mediaDevices.getUserMedia({
+        audio: micDeviceId ? { deviceId: { ideal: micDeviceId } } : true
+      })
       this.streams.push(mic)
       ctx.createMediaStreamSource(mic).connect(mixed)
       status.mic = 'active'

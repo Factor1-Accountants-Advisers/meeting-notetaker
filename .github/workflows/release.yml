@@ -1,0 +1,55 @@
+# Release build (decision #12): tag vX.Y.Z -> build, sign, publish.
+#
+# Until the code-signing certificate and the Azure Blob update feed exist,
+# this produces an UNSIGNED installer as a workflow artifact. To go live:
+#   1. Add secrets CSC_LINK (base64 PFX) + CSC_KEY_PASSWORD, or switch to
+#      Azure Trusted Signing, and remove the signAndEditExecutable override.
+#   2. Add AZURE_STORAGE_CONNECTION_STRING and uncomment the publish step
+#      so the installer + latest.yml land in the Blob update feed.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Build installer (unsigned until cert lands)
+        # CI runners have symlink rights, so exe metadata editing is re-enabled
+        # here (it is disabled in electron-builder.yml for dev machines).
+        run: npx electron-vite build && npx electron-builder --publish never --config.win.signAndEditExecutable=true
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: meeting-notetaker-installer
+          path: |
+            dist/*.exe
+            dist/latest.yml
+          if-no-files-found: error
+
+      # - name: Publish to Azure Blob update feed
+      #   run: |
+      #     az storage blob upload-batch \
+      #       --destination updates \
+      #       --source dist \
+      #       --pattern "*.exe" --pattern "latest.yml" \
+      #       --connection-string "$env:AZURE_STORAGE_CONNECTION_STRING" \
+      #       --overwrite
