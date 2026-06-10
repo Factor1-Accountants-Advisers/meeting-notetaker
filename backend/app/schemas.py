@@ -1,0 +1,105 @@
+"""Pydantic models mirroring the indicative schema (requirements §6.1).
+
+These are the API shapes the Electron client consumes. Database models arrive
+with the PostgreSQL work; keep the two aligned.
+"""
+
+from datetime import date, datetime
+from enum import Enum
+from uuid import UUID
+
+from pydantic import BaseModel, Field
+
+
+class MeetingStatus(str, Enum):
+    draft = "draft"
+    finalized = "finalized"
+
+
+class MeetingSource(str, Enum):
+    online = "online"  # WASAPI loopback + mic
+    in_person = "in_person"  # mic only
+    upload = "upload"
+
+
+class Priority(str, Enum):
+    high = "high"
+    medium = "medium"
+    low = "low"
+
+
+class ActionItemStatus(str, Enum):
+    open = "open"
+    done = "done"
+    # "overdue" is derived from deadline < today while open, not stored.
+
+
+class AccessRole(str, Enum):
+    owner = "owner"
+    editor = "editor"
+    viewer = "viewer"
+
+
+class TranscriptSegment(BaseModel):
+    speaker: str  # display name, or "Unknown N" until manually named
+    speaker_known: bool
+    text: str
+    start_ms: int
+    end_ms: int
+
+
+class Meeting(BaseModel):
+    id: UUID
+    title: str
+    context: str = "Internal"  # client name or "Internal"
+    source: MeetingSource
+    owner_id: str
+    status: MeetingStatus = MeetingStatus.draft
+    created_at: datetime
+    duration_seconds: int | None = None
+    unknown_speaker_count: int = 0
+    action_item_count: int = 0
+
+
+class MeetingCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    context: str = "Internal"
+    source: MeetingSource
+    meeting_link: str | None = None  # optional; only used for Graph auto-fill
+
+
+class Transcript(BaseModel):
+    meeting_id: UUID
+    segments: list[TranscriptSegment]
+
+
+class Summary(BaseModel):
+    meeting_id: UUID
+    summary_text: str
+    generated_at: datetime
+
+
+class ActionItem(BaseModel):
+    id: UUID
+    meeting_id: UUID
+    owner: str | None = None  # None when owned by an unnamed Unknown speaker
+    description: str
+    deadline: date | None = None
+    priority: Priority = Priority.medium
+    status: ActionItemStatus = ActionItemStatus.open
+
+
+class ActionItemUpdate(BaseModel):
+    owner: str | None = None
+    description: str | None = None
+    deadline: date | None = None
+    priority: Priority | None = None
+    status: ActionItemStatus | None = None
+
+
+class PersonEnrollment(BaseModel):
+    employee_id: str
+    display_name: str
+    enrolled: bool
+    model_version: str | None = None
+    reenrollment_required: bool = False

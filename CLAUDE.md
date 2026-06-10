@@ -84,4 +84,15 @@ Source layout: `src/main` (Electron main), `src/preload` (context bridge),
 Design tokens live as CSS variables in `src/renderer/src/assets/index.css` and are
 exposed to Tailwind via `tailwind.config.js`. Dark mode is class-based (`.dark`).
 
-_TODO: backend (FastAPI) commands once that skeleton lands._
+## Commands (backend)
+
+Skeleton in `backend/` (FastAPI + in-memory store standing in for PostgreSQL).
+
+- Setup: `cd backend && python -m venv .venv && .venv/Scripts/python -m pip install -r requirements.txt`
+- Run: `backend/.venv/Scripts/python -m uvicorn app.main:app --port 8787` (from `backend/`)
+- API docs (dev only): `http://127.0.0.1:8787/docs`
+
+Layout: `app/main.py` (factory), `app/config.py` (env-driven settings, `MN_` prefix),
+`app/schemas.py` (API models per requirements §6.1), `app/routers/` (health, meetings,
+action-items, people), `app/services/llm.py` (provider-agnostic LLM interface),
+`app/store.py` (seeded in-memory store — replace with Postgres repo).
