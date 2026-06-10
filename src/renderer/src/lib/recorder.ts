@@ -42,6 +42,24 @@ function preferredMime(): string {
   return candidates.find((m) => MediaRecorder.isTypeSupported(m)) ?? ''
 }
 
+/** Duration of an audio blob in whole seconds, or null if undecodable. */
+export async function audioDurationSeconds(blob: Blob): Promise<number | null> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(blob)
+    const el = new Audio()
+    el.preload = 'metadata'
+    el.onloadedmetadata = () => {
+      URL.revokeObjectURL(url)
+      resolve(Number.isFinite(el.duration) ? Math.round(el.duration) : null)
+    }
+    el.onerror = () => {
+      URL.revokeObjectURL(url)
+      resolve(null)
+    }
+    el.src = url
+  })
+}
+
 export async function blobToBase64(blob: Blob): Promise<string> {
   const dataUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader()

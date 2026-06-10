@@ -1,13 +1,15 @@
 import base64
 import binascii
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, status
 
 from app import store
 from app.config import get_settings
 from app.schemas import EnrollRequest, PersonEnrollment
 
 router = APIRouter(prefix="/people", tags=["people"])
+
+Actor = Header("Unknown user", alias="X-MN-User")
 
 
 @router.get("", response_model=list[PersonEnrollment])
@@ -18,7 +20,9 @@ async def list_people() -> list[PersonEnrollment]:
 
 
 @router.post("/{employee_id}/enroll", response_model=PersonEnrollment)
-async def enroll(employee_id: str, body: EnrollRequest) -> PersonEnrollment:
+async def enroll(
+    employee_id: str, body: EnrollRequest, actor: str = Actor
+) -> PersonEnrollment:
     person = next((p for p in store.PEOPLE if p.employee_id == employee_id), None)
     if person is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Employee not found")
@@ -46,4 +50,11 @@ async def enroll(employee_id: str, body: EnrollRequest) -> PersonEnrollment:
     person.reenrollment_required = False
     del clips
 
+    # Biometric action — always audit-logged (requirements §7).
+    store.add_audit(
+        actor,
+        "person.enroll",
+        person.display_name,
+        after=settings.pyannote_model_version,
+    )
     return person

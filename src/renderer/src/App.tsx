@@ -12,7 +12,7 @@ import { createMeeting, uploadAudio } from './lib/api'
 import { capture, type CaptureStatus } from './lib/capture'
 import { loadPrefs } from './lib/prefs'
 import { useNotifications } from './lib/useNotifications'
-import { blobToBase64 } from './lib/recorder'
+import { audioDurationSeconds, blobToBase64 } from './lib/recorder'
 import { elapsedMs } from './screens/RecordingScreen'
 import { useTheme } from './lib/theme'
 import type { ScreenId } from './lib/nav'
@@ -119,7 +119,8 @@ function App(): JSX.Element {
       return
     }
     const b64 = await blobToBase64(file)
-    await uploadAudio(created.id, b64, file.type || 'audio/webm', null)
+    const duration = await audioDurationSeconds(file)
+    await uploadAudio(created.id, b64, file.type || 'audio/webm', duration)
     openMeeting(created.id)
   }
 

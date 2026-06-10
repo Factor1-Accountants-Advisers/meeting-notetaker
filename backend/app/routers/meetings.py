@@ -7,6 +7,7 @@ from fastapi import APIRouter, Header, HTTPException, status
 from fastapi.responses import FileResponse
 
 from app import store
+from app.access import can_see, require
 from app.schemas import (
     AccessRole,
     AuditEntry,
@@ -31,32 +32,23 @@ Actor = Header("Unknown user", alias="X-MN-User")
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 
 
-def _can_see(meeting_id: UUID, actor: str) -> bool:
-    """Access check (decision #7). Meetings without access records stay
-    visible (dev/legacy data); enforcement hardens once Entra IDs replace
-    display names."""
-    entries = store.ACCESS.get(meeting_id)
-    if not entries:
-        return True
-    return any(e.user == actor for e in entries)
-
-
 @router.get("", response_model=list[Meeting])
 async def list_meetings(
     status_filter: MeetingStatus | None = None, actor: str = Actor
 ) -> list[Meeting]:
     items = sorted(store.MEETINGS.values(), key=lambda m: m.created_at, reverse=True)
-    items = [m for m in items if _can_see(m.id, actor)]
+    items = [m for m in items if can_see(m.id, actor)]
     if status_filter is not None:
         items = [m for m in items if m.status == status_filter]
     return items
 
 
 @router.get("/{meeting_id}", response_model=Meeting)
-async def get_meeting(meeting_id: UUID) -> Meeting:
+async def get_meeting(meeting_id: UUID, actor: str = Actor) -> Meeting:
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.viewer)
     return meeting
 
 
@@ -77,9 +69,10 @@ async def create_meeting(body: MeetingCreate, actor: str = Actor) -> Meeting:
 
 
 @router.get("/{meeting_id}/access", response_model=list[MeetingAccessEntry])
-async def list_access(meeting_id: UUID) -> list[MeetingAccessEntry]:
+async def list_access(meeting_id: UUID, actor: str = Actor) -> list[MeetingAccessEntry]:
     if meeting_id not in store.MEETINGS:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.viewer)
     return store.ACCESS.get(meeting_id, [])
 
 
@@ -89,6 +82,7 @@ async def grant_access(
 ) -> list[MeetingAccessEntry]:
     if meeting_id not in store.MEETINGS:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.owner)
     entries = store.ACCESS.setdefault(meeting_id, [])
     existing = next((e for e in entries if e.user == body.user), None)
     if existing is None:
@@ -112,6 +106,7 @@ async def revoke_access(
 ) -> list[MeetingAccessEntry]:
     if meeting_id not in store.MEETINGS:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.owner)
     entries = store.ACCESS.get(meeting_id, [])
     target = next((e for e in entries if e.user == user), None)
     if target is None:
@@ -126,11 +121,16 @@ async def revoke_access(
 
 
 @router.post("/{meeting_id}/audio", response_model=Meeting)
-async def upload_audio(meeting_id: UUID, body: UploadAudioRequest) -> Meeting:
+async def upload_audio(
+    meeting_id: UUID, body: UploadAudioRequest, actor: str = Actor
+) -> Meeting:
     """Store meeting audio (Blob stand-in) and queue the processing pipeline."""
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.editor)
+    if meeting.status is MeetingStatus.finalized:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Finalized meetings cannot be modified")
     if meeting.pipeline_status in (PipelineStatus.queued, PipelineStatus.processing):
         raise HTTPException(status.HTTP_409_CONFLICT, "Audio is already being processed")
 
@@ -156,11 +156,12 @@ async def upload_audio(meeting_id: UUID, body: UploadAudioRequest) -> Meeting:
 
 
 @router.post("/{meeting_id}/retry", response_model=Meeting)
-async def retry_pipeline(meeting_id: UUID) -> Meeting:
+async def retry_pipeline(meeting_id: UUID, actor: str = Actor) -> Meeting:
     """Re-queue a failed meeting (requirements §4.4: flag and retry)."""
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.editor)
     if meeting.pipeline_status is not PipelineStatus.failed:
         raise HTTPException(status.HTTP_409_CONFLICT, "Meeting is not in a failed state")
     path = audio_path_for(meeting_id, "audio/webm")
@@ -183,6 +184,7 @@ async def email_notes(
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.owner)
     if meeting.status is not MeetingStatus.finalized:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "Notes can only be emailed after finalisation"
@@ -231,16 +233,21 @@ def _build_review(meeting: Meeting) -> MeetingReview:
 
 
 @router.get("/{meeting_id}/review", response_model=MeetingReview)
-async def get_review(meeting_id: UUID) -> MeetingReview:
+async def get_review(meeting_id: UUID, actor: str = Actor) -> MeetingReview:
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.viewer)
     return _build_review(meeting)
 
 
 @router.get("/{meeting_id}/audio")
 async def get_audio(meeting_id: UUID) -> FileResponse:
-    """Stream the stored meeting audio (Blob stand-in; 30-day lifecycle there)."""
+    """Stream the stored meeting audio (Blob stand-in; 30-day lifecycle there).
+
+    No role check here: the renderer audio element cannot send the actor
+    header. Real deployment serves audio via short-lived Blob SAS URLs.
+    """
     if meeting_id not in store.MEETINGS:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
     path = audio_path_for(meeting_id, "audio/webm")
@@ -250,9 +257,10 @@ async def get_audio(meeting_id: UUID) -> FileResponse:
 
 
 @router.get("/{meeting_id}/audit", response_model=list[AuditEntry])
-async def get_audit(meeting_id: UUID) -> list[AuditEntry]:
+async def get_audit(meeting_id: UUID, actor: str = Actor) -> list[AuditEntry]:
     if meeting_id not in store.MEETINGS:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.viewer)
     return [e for e in store.AUDIT_LOG if e.meeting_id == meeting_id][::-1]
 
 
@@ -264,6 +272,9 @@ async def edit_segment(
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.editor)
+    if meeting.status is MeetingStatus.finalized:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Finalized meetings cannot be modified")
     segments = store.TRANSCRIPTS.get(meeting_id, [])
     if not 0 <= index < len(segments):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Segment not found")
@@ -288,11 +299,14 @@ async def name_speaker(
     """Manually name an unknown diarized speaker (requirements §4.4).
 
     Renames the speaker across transcript and participants and decrements the
-    meeting's unknown count. Audit logging attaches here later.
+    meeting's unknown count, and logs the change.
     """
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.editor)
+    if meeting.status is MeetingStatus.finalized:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Finalized meetings cannot be modified")
 
     participants = store.PARTICIPANTS.get(meeting_id, [])
     target = next((p for p in participants if p.name == body.label and not p.known), None)
@@ -328,8 +342,13 @@ async def finalize_meeting(meeting_id: UUID, actor: str = Actor) -> Meeting:
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.owner)
     if meeting.status is MeetingStatus.finalized:
         raise HTTPException(status.HTTP_409_CONFLICT, "Meeting is already finalized")
+    if meeting.pipeline_status is not PipelineStatus.ready:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "The recording must finish processing first"
+        )
     if meeting.unknown_speaker_count > 0:
         # Product rule: unknown speakers must be named before finalisation.
         raise HTTPException(

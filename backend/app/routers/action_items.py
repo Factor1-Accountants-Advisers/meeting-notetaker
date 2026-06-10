@@ -3,7 +3,8 @@ from uuid import UUID
 from fastapi import APIRouter, Header, HTTPException, status
 
 from app import store
-from app.schemas import ActionItem, ActionItemStatus, ActionItemUpdate
+from app.access import can_see, require
+from app.schemas import AccessRole, ActionItem, ActionItemStatus, ActionItemUpdate
 
 Actor = Header("Unknown user", alias="X-MN-User")
 
@@ -15,8 +16,9 @@ async def list_action_items(
     meeting_id: UUID | None = None,
     status_filter: ActionItemStatus | None = None,
     owner: str | None = None,
+    actor: str = Actor,
 ) -> list[ActionItem]:
-    items = list(store.ACTION_ITEMS.values())
+    items = [a for a in store.ACTION_ITEMS.values() if can_see(a.meeting_id, actor)]
     if meeting_id is not None:
         items = [a for a in items if a.meeting_id == meeting_id]
     if status_filter is not None:
@@ -43,6 +45,7 @@ async def update_action_item(
     item = store.ACTION_ITEMS.get(item_id)
     if item is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Action item not found")
+    require(item.meeting_id, actor, AccessRole.editor)
     changes = body.model_dump(exclude_unset=True)
     updated = item.model_copy(update=changes)
     store.ACTION_ITEMS[item_id] = updated
