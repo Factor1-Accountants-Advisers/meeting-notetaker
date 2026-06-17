@@ -16,6 +16,7 @@ import { uploadRecording, MeetingMetadata, UploadResult } from './uploader';
 import { setPendingMeeting, syncTrayToRecordingState } from './tray';
 import { getMainWindow } from './index';
 import { dismissAutoRecord } from './scheduler';
+import { saveRuntimeOverrideEnv, getRuntimeEnvStatus } from './backend-runtime';
 import ffmpegPath from 'ffmpeg-static';
 import { execFile, spawn } from 'child_process';
 
@@ -334,5 +335,16 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('scheduler:dismiss', (): void => {
     dismissAutoRecord();
+  });
+
+  // ── Runtime API key management ────────────────────────────────────
+  const userDataDir = app.getPath('userData');
+
+  ipcMain.handle('runtime:get-env-status', (): Record<string, boolean> => {
+    return getRuntimeEnvStatus(userDataDir);
+  });
+
+  ipcMain.handle('runtime:set-env-keys', (_e, keys: Record<string, string>): void => {
+    saveRuntimeOverrideEnv(userDataDir, keys);
   });
 }

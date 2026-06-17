@@ -46,4 +46,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Audio devices
   getAudioDevices: () => ipcRenderer.invoke('audio:get-devices'),
   getDefaultAudioDevices: () => ipcRenderer.invoke('audio:get-default-devices'),
+
+  // Runtime API key management
+  getRuntimeEnvStatus: (): Promise<Record<string, boolean>> => ipcRenderer.invoke('runtime:get-env-status'),
+  setRuntimeEnvKeys: (keys: Record<string, string>): Promise<void> => ipcRenderer.invoke('runtime:set-env-keys', keys),
 });

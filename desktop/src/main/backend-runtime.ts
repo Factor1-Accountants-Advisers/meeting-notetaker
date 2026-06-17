@@ -13,6 +13,46 @@ const RUNTIME_ENV_KEYS = ['ASSEMBLYAI_API_KEY', 'OPENAI_API_KEY', 'PYANNOTE_API_
 type RuntimeEnvKey = typeof RUNTIME_ENV_KEYS[number];
 type RuntimeOverrideEnv = Partial<Record<RuntimeEnvKey, string>>;
 
+export function saveRuntimeOverrideEnv(userDataDir: string, keys: RuntimeOverrideEnv): void {
+  const envPath = path.join(userDataDir, RUNTIME_ENV_FILE);
+
+  // Read existing lines, merge with new values
+  let existingLines: string[] = [];
+  if (fs.existsSync(envPath)) {
+    existingLines = fs.readFileSync(envPath, 'utf-8').split(/\r?\n/);
+  }
+
+  // Build a map of existing keys, removing any that match RUNTIME_ENV_KEYS
+  const keptLines = existingLines.filter((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) return true;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx === -1) return true;
+    const key = trimmed.slice(0, eqIdx).trim();
+    return !(RUNTIME_ENV_KEYS as readonly string[]).includes(key);
+  });
+
+  // Append new values (only non-empty)
+  for (const key of RUNTIME_ENV_KEYS) {
+    const value = keys[key]?.trim();
+    if (value) {
+      keptLines.push(`${key}=${value}`);
+    }
+  }
+
+  fs.writeFileSync(envPath, keptLines.join('\n') + '\n', 'utf-8');
+  console.log(`[runtime] Saved runtime env overrides to ${envPath}`);
+}
+
+export function getRuntimeEnvStatus(userDataDir: string): Record<string, boolean> {
+  const overrides = loadRuntimeOverrideEnv(userDataDir);
+  const status: Record<string, boolean> = {};
+  for (const key of RUNTIME_ENV_KEYS) {
+    status[key] = Boolean(overrides[key]?.trim());
+  }
+  return status;
+}
+
 export function loadRuntimeOverrideEnv(userDataDir: string): RuntimeOverrideEnv {
   const envPath = path.join(userDataDir, RUNTIME_ENV_FILE);
   if (!fs.existsSync(envPath)) {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Mic, Volume2, AlertTriangle, Info, LogOut, ShieldCheck, Upload, Trash2, Ban } from "lucide-react";
+import { Mic, Volume2, AlertTriangle, Info, LogOut, ShieldCheck, Upload, Trash2, Ban, Key, Eye, EyeOff } from "lucide-react";
 import { getElectronAPIOrNull } from "@/lib/electron-bridge";
 import type { AudioDevice } from "@/lib/electron-bridge";
 import {
@@ -32,6 +32,14 @@ export default function SettingsPage() {
   const [voiceprintError, setVoiceprintError] = useState<string | null>(null);
   const [voiceprintNotice, setVoiceprintNotice] = useState<string | null>(null);
   const { data: voiceprints, mutate: refreshVoiceprints, isLoading: voiceprintsLoading } = useVoiceprints();
+
+  // API key management
+  const [envStatus, setEnvStatus] = useState<Record<string, boolean> | null>(null);
+  const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
+  const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
+  const [apiKeysSaved, setApiKeysSaved] = useState(false);
+  const [apiKeysSaving, setApiKeysSaving] = useState(false);
+  const [apiKeysError, setApiKeysError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!api) return;
@@ -74,6 +82,11 @@ export default function SettingsPage() {
 
     api.getBackendUrl().then(setBackendUrl);
     setAppVersion(api.getAppVersion());
+
+    // Load runtime env key status
+    api.getRuntimeEnvStatus().then((status) => {
+      setEnvStatus(status);
+    });
   }, [api]);
 
   const handleSave = () => {
@@ -135,6 +148,27 @@ export default function SettingsPage() {
       setVoiceprintError(err instanceof Error ? err.message : "Failed to delete Voice ID");
     } finally {
       setVoiceprintBusy(false);
+    }
+  };
+
+  const handleToggleKeyVisibility = (keyName: string) => {
+    setShowKeys((prev) => ({ ...prev, [keyName]: !prev[keyName] }));
+  };
+
+  const handleSaveApiKeys = async () => {
+    if (!api) return;
+    setApiKeysSaving(true);
+    setApiKeysError(null);
+    try {
+      await api.setRuntimeEnvKeys(apiKeys);
+      setApiKeysSaved(true);
+      const status = await api.getRuntimeEnvStatus();
+      setEnvStatus(status);
+      setTimeout(() => setApiKeysSaved(false), 3000);
+    } catch (err) {
+      setApiKeysError(err instanceof Error ? err.message : "Failed to save API keys");
+    } finally {
+      setApiKeysSaving(false);
     }
   };
 
@@ -251,6 +285,100 @@ export default function SettingsPage() {
             </div>
           </section>
         )}
+
+        {/* ── API Keys ──────────────────────────────────────────────── */}
+        <section className="mt-8 rounded-[28px] border border-[color:var(--border-subtle)] bg-[color:var(--surface)] px-6 py-6">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[color:var(--accent-soft)] text-[color:var(--accent)]">
+              <Key className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-[color:var(--text-primary)]">
+                API Keys
+              </h2>
+              <p className="mt-1 text-sm leading-6 text-[color:var(--text-secondary)]">
+                These keys are stored on this device only. Get your keys from your IT team if you
+                don&apos;t have them.
+              </p>
+            </div>
+          </div>
+
+          {!api ? (
+            <div className="mt-5 rounded-[28px] border border-[color:var(--border-subtle)] bg-[color:var(--surface-soft)] p-5">
+              <p className="text-sm text-[color:var(--text-secondary)]">
+                API key setup is available when the app is running inside Electron.
+              </p>
+            </div>
+          ) : (
+            <div className="mt-5 space-y-5">
+              {[
+                { key: "ASSEMBLYAI_API_KEY", label: "AssemblyAI API Key", placeholder: "Enter your AssemblyAI API key" },
+                { key: "OPENAI_API_KEY", label: "OpenAI API Key", placeholder: "Enter your OpenAI API key" },
+                { key: "PYANNOTE_API_KEY", label: "Pyannote API Key", placeholder: "Enter your pyannote API key" },
+              ].map(({ key, label, placeholder }) => (
+                <div key={key}>
+                  <div className="mb-2 flex items-center justify-between">
+                    <label className="text-sm font-semibold text-[color:var(--text-primary)]">
+                      {label}
+                    </label>
+                    <span
+                      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium ${
+                        envStatus?.[key]
+                          ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                          : "bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-1.5 w-1.5 rounded-full ${
+                          envStatus?.[key] ? "bg-emerald-500" : "bg-amber-500"
+                        }`}
+                      />
+                      {envStatus?.[key] ? "Configured" : "Not set"}
+                    </span>
+                  </div>
+                  <div className="relative">
+                    <input
+                      type={showKeys[key] ? "text" : "password"}
+                      placeholder={placeholder}
+                      value={apiKeys[key] ?? ""}
+                      onChange={(e) => setApiKeys((prev) => ({ ...prev, [key]: e.target.value }))}
+                      className="h-12 w-full rounded-2xl border border-[color:var(--border-subtle)] bg-[color:var(--surface-elevated)] px-4 pr-11 text-sm text-[color:var(--text-primary)] outline-none transition placeholder:text-[color:var(--text-muted)] focus:border-[color:var(--border-strong)] focus:ring-2 focus:ring-[color:var(--accent-soft)]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleToggleKeyVisibility(key)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[color:var(--text-muted)] transition hover:text-[color:var(--text-primary)]"
+                      aria-label={showKeys[key] ? "Hide key" : "Show key"}
+                    >
+                      {showKeys[key] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>
+              ))}
+
+              {apiKeysError && (
+                <p className="rounded-2xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-sm text-red-600 dark:text-red-300">
+                  {apiKeysError}
+                </p>
+              )}
+
+              <div className="flex items-center justify-between gap-4 border-t border-[color:var(--border-subtle)] pt-5">
+                <p className="text-sm text-[color:var(--text-secondary)]">
+                  {apiKeysSaved
+                    ? "API keys saved. Restart the app for changes to take effect."
+                    : "Save keys to enable transcription, summarisation, and speaker identification."}
+                </p>
+                <button
+                  onClick={handleSaveApiKeys}
+                  disabled={apiKeysSaving}
+                  className="inline-flex h-11 items-center rounded-full bg-[color:var(--surface-inverse)] px-5 text-sm font-medium text-[color:var(--text-inverse)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {apiKeysSaving ? "Saving..." : apiKeysSaved ? "Saved" : "Save API Keys"}
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
 
         <section className="mt-8 rounded-[28px] border border-[color:var(--border-subtle)] bg-[color:var(--surface)] px-6 py-6">
           <div className="flex items-start gap-3">

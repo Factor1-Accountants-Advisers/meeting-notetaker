@@ -74,6 +74,10 @@ export interface ElectronAPI {
   // Audio devices
   getAudioDevices: () => Promise<AudioDevice[]>;
   getDefaultAudioDevices: () => Promise<{ micName: string; loopbackName: string }>;
+
+  // Runtime API key management
+  getRuntimeEnvStatus: () => Promise<Record<string, boolean>>;
+  setRuntimeEnvKeys: (keys: Record<string, string>) => Promise<void>;
 }
 
 declare global {

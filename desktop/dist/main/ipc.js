@@ -51,6 +51,7 @@ const uploader_1 = require("./uploader");
 const tray_1 = require("./tray");
 const index_1 = require("./index");
 const scheduler_1 = require("./scheduler");
+const backend_runtime_1 = require("./backend-runtime");
 const ffmpeg_static_1 = __importDefault(require("ffmpeg-static"));
 const child_process_1 = require("child_process");
 const FFMPEG_BINARY = (() => {
@@ -312,6 +313,14 @@ function registerIpcHandlers() {
     });
     electron_1.ipcMain.handle('scheduler:dismiss', () => {
         (0, scheduler_1.dismissAutoRecord)();
+    });
+    // ── Runtime API key management ────────────────────────────────────
+    const userDataDir = electron_1.app.getPath('userData');
+    electron_1.ipcMain.handle('runtime:get-env-status', () => {
+        return (0, backend_runtime_1.getRuntimeEnvStatus)(userDataDir);
+    });
+    electron_1.ipcMain.handle('runtime:set-env-keys', (_e, keys) => {
+        (0, backend_runtime_1.saveRuntimeOverrideEnv)(userDataDir, keys);
     });
 }
 //# sourceMappingURL=ipc.js.map

@@ -33,6 +33,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.saveRuntimeOverrideEnv = saveRuntimeOverrideEnv;
+exports.getRuntimeEnvStatus = getRuntimeEnvStatus;
 exports.loadRuntimeOverrideEnv = loadRuntimeOverrideEnv;
 exports.buildBackendEnv = buildBackendEnv;
 exports.startBackend = startBackend;
@@ -47,6 +49,42 @@ const dotenv = __importStar(require("dotenv"));
 let backendProcess = null;
 const RUNTIME_ENV_FILE = '.env.production.local';
 const RUNTIME_ENV_KEYS = ['ASSEMBLYAI_API_KEY', 'OPENAI_API_KEY', 'PYANNOTE_API_KEY'];
+function saveRuntimeOverrideEnv(userDataDir, keys) {
+    const envPath = path.join(userDataDir, RUNTIME_ENV_FILE);
+    // Read existing lines, merge with new values
+    let existingLines = [];
+    if (fs.existsSync(envPath)) {
+        existingLines = fs.readFileSync(envPath, 'utf-8').split(/\r?\n/);
+    }
+    // Build a map of existing keys, removing any that match RUNTIME_ENV_KEYS
+    const keptLines = existingLines.filter((line) => {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#'))
+            return true;
+        const eqIdx = trimmed.indexOf('=');
+        if (eqIdx === -1)
+            return true;
+        const key = trimmed.slice(0, eqIdx).trim();
+        return !RUNTIME_ENV_KEYS.includes(key);
+    });
+    // Append new values (only non-empty)
+    for (const key of RUNTIME_ENV_KEYS) {
+        const value = keys[key]?.trim();
+        if (value) {
+            keptLines.push(`${key}=${value}`);
+        }
+    }
+    fs.writeFileSync(envPath, keptLines.join('\n') + '\n', 'utf-8');
+    console.log(`[runtime] Saved runtime env overrides to ${envPath}`);
+}
+function getRuntimeEnvStatus(userDataDir) {
+    const overrides = loadRuntimeOverrideEnv(userDataDir);
+    const status = {};
+    for (const key of RUNTIME_ENV_KEYS) {
+        status[key] = Boolean(overrides[key]?.trim());
+    }
+    return status;
+}
 function loadRuntimeOverrideEnv(userDataDir) {
     const envPath = path.join(userDataDir, RUNTIME_ENV_FILE);
     if (!fs.existsSync(envPath)) {

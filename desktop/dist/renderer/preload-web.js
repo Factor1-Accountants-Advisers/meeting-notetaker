@@ -28,5 +28,8 @@ electron_1.contextBridge.exposeInMainWorld('electronAPI', {
     // Audio devices
     getAudioDevices: () => electron_1.ipcRenderer.invoke('audio:get-devices'),
     getDefaultAudioDevices: () => electron_1.ipcRenderer.invoke('audio:get-default-devices'),
+    // Runtime API key management
+    getRuntimeEnvStatus: () => electron_1.ipcRenderer.invoke('runtime:get-env-status'),
+    setRuntimeEnvKeys: (keys) => electron_1.ipcRenderer.invoke('runtime:set-env-keys', keys),
 });
 //# sourceMappingURL=preload-web.js.map
