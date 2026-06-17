@@ -17,6 +17,7 @@ import { setPendingMeeting, syncTrayToRecordingState } from './tray';
 import { getMainWindow } from './index';
 import { dismissAutoRecord } from './scheduler';
 import { saveRuntimeOverrideEnv, getRuntimeEnvStatus } from './backend-runtime';
+import { getLogInfo } from './logger';
 import ffmpegPath from 'ffmpeg-static';
 import { execFile, spawn } from 'child_process';
 
@@ -346,5 +347,10 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('runtime:set-env-keys', (_e, keys: Record<string, string>): void => {
     saveRuntimeOverrideEnv(userDataDir, keys);
+  });
+
+  // ── Logging ───────────────────────────────────────────────────────
+  ipcMain.handle('app:get-log-info', () => {
+    return getLogInfo();
   });
 }

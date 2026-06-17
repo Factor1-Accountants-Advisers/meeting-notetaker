@@ -31,5 +31,7 @@ electron_1.contextBridge.exposeInMainWorld('electronAPI', {
     // Runtime API key management
     getRuntimeEnvStatus: () => electron_1.ipcRenderer.invoke('runtime:get-env-status'),
     setRuntimeEnvKeys: (keys) => electron_1.ipcRenderer.invoke('runtime:set-env-keys', keys),
+    // Logging
+    getLogInfo: () => electron_1.ipcRenderer.invoke('app:get-log-info'),
 });
 //# sourceMappingURL=preload-web.js.map

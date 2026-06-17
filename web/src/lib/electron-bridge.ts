@@ -78,6 +78,9 @@ export interface ElectronAPI {
   // Runtime API key management
   getRuntimeEnvStatus: () => Promise<Record<string, boolean>>;
   setRuntimeEnvKeys: (keys: Record<string, string>) => Promise<void>;
+
+  // Logging
+  getLogInfo: () => Promise<{ logDir: string; mainLog: string; backendLog: string; rendererLog: string }>;
 }
 
 declare global {

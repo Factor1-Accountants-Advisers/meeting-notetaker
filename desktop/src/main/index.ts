@@ -10,43 +10,13 @@ import { startBackend, stopBackend } from './backend-runtime';
 import { initializeWasapiCapture, destroyCaptureWindow } from './wasapi-capture';
 import { isRecording } from './recorder';
 import { initUpdater } from './updater';
+import { initLogger } from './logger';
 
 // Load environment — must happen before anything reads process.env
 loadEnv();
 
-// Mirror console output to a file in packaged mode. On Windows, console.log
-// in a packaged Electron app goes nowhere visible, which makes diagnosing
-// install-time failures (backend spawn, WASAPI renderer hangs) impossible.
-// Log file lives at %APPDATA%\meeting-notetaker-desktop\logs\main.log.
-if (app.isPackaged) {
-  try {
-    const logDir = path.join(app.getPath('userData'), 'logs');
-    fs.mkdirSync(logDir, { recursive: true });
-    const stream = fs.createWriteStream(path.join(logDir, 'main.log'), { flags: 'a' });
-    const fmt = (args: unknown[]): string => args.map((a) => {
-      if (a instanceof Error) return `${a.message}\n${a.stack ?? ''}`;
-      return typeof a === 'string' ? a : JSON.stringify(a);
-    }).join(' ');
-    const origLog = console.log;
-    const origWarn = console.warn;
-    const origError = console.error;
-    console.log = (...args: unknown[]): void => {
-      stream.write(`[${new Date().toISOString()}] ${fmt(args)}\n`);
-      origLog(...args);
-    };
-    console.warn = (...args: unknown[]): void => {
-      stream.write(`[${new Date().toISOString()}] WARN ${fmt(args)}\n`);
-      origWarn(...args);
-    };
-    console.error = (...args: unknown[]): void => {
-      stream.write(`[${new Date().toISOString()}] ERROR ${fmt(args)}\n`);
-      origError(...args);
-    };
-    stream.write(`\n=== App started ${new Date().toISOString()} ===\n`);
-  } catch {
-    // Logging setup failed — not fatal. Carry on with default console behavior.
-  }
-}
+// Initialize file-based logging (captures all console output + crashes)
+initLogger();
 
 // Must be called BEFORE app.whenReady(). Without this the app:// scheme is
 // treated as opaque/non-secure, which breaks ES modules, fetch, and

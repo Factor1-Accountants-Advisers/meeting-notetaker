@@ -52,6 +52,7 @@ const tray_1 = require("./tray");
 const index_1 = require("./index");
 const scheduler_1 = require("./scheduler");
 const backend_runtime_1 = require("./backend-runtime");
+const logger_1 = require("./logger");
 const ffmpeg_static_1 = __importDefault(require("ffmpeg-static"));
 const child_process_1 = require("child_process");
 const FFMPEG_BINARY = (() => {
@@ -321,6 +322,10 @@ function registerIpcHandlers() {
     });
     electron_1.ipcMain.handle('runtime:set-env-keys', (_e, keys) => {
         (0, backend_runtime_1.saveRuntimeOverrideEnv)(userDataDir, keys);
+    });
+    // ── Logging ───────────────────────────────────────────────────────
+    electron_1.ipcMain.handle('app:get-log-info', () => {
+        return (0, logger_1.getLogInfo)();
     });
 }
 //# sourceMappingURL=ipc.js.map

@@ -41,6 +41,9 @@ export default function SettingsPage() {
   const [apiKeysSaving, setApiKeysSaving] = useState(false);
   const [apiKeysError, setApiKeysError] = useState<string | null>(null);
 
+  // Logging
+  const [logInfo, setLogInfo] = useState<{ logDir: string; mainLog: string } | null>(null);
+
   useEffect(() => {
     if (!api) return;
 
@@ -87,6 +90,9 @@ export default function SettingsPage() {
     api.getRuntimeEnvStatus().then((status) => {
       setEnvStatus(status);
     });
+
+    // Load log file info
+    api.getLogInfo().then(setLogInfo);
   }, [api]);
 
   const handleSave = () => {
@@ -482,6 +488,14 @@ export default function SettingsPage() {
                 <dt className="text-[color:var(--text-secondary)]">Backend URL</dt>
                 <dd className="break-all font-mono text-xs text-[color:var(--text-primary)]">
                   {backendUrl}
+                </dd>
+              </div>
+            )}
+            {logInfo && (
+              <div className="flex items-start justify-between gap-4">
+                <dt className="text-[color:var(--text-secondary)]">Log File</dt>
+                <dd className="break-all font-mono text-xs text-[color:var(--text-primary)]">
+                  {logInfo.mainLog}
                 </dd>
               </div>
             )}

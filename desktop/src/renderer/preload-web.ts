@@ -50,4 +50,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Runtime API key management
   getRuntimeEnvStatus: (): Promise<Record<string, boolean>> => ipcRenderer.invoke('runtime:get-env-status'),
   setRuntimeEnvKeys: (keys: Record<string, string>): Promise<void> => ipcRenderer.invoke('runtime:set-env-keys', keys),
+
+  // Logging
+  getLogInfo: (): Promise<{ logDir: string; mainLog: string; backendLog: string; rendererLog: string }> =>
+    ipcRenderer.invoke('app:get-log-info'),
 });

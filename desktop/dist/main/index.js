@@ -38,7 +38,6 @@ exports.showMainWindow = showMainWindow;
 exports.getMainWindow = getMainWindow;
 exports.prepareForUpdateInstall = prepareForUpdateInstall;
 const path = __importStar(require("path"));
-const fs = __importStar(require("fs"));
 const electron_1 = require("electron");
 const tray_1 = require("./tray");
 const ipc_1 = require("./ipc");
@@ -49,43 +48,11 @@ const backend_runtime_1 = require("./backend-runtime");
 const wasapi_capture_1 = require("./wasapi-capture");
 const recorder_1 = require("./recorder");
 const updater_1 = require("./updater");
+const logger_1 = require("./logger");
 // Load environment — must happen before anything reads process.env
 (0, runtime_paths_1.loadEnv)();
-// Mirror console output to a file in packaged mode. On Windows, console.log
-// in a packaged Electron app goes nowhere visible, which makes diagnosing
-// install-time failures (backend spawn, WASAPI renderer hangs) impossible.
-// Log file lives at %APPDATA%\meeting-notetaker-desktop\logs\main.log.
-if (electron_1.app.isPackaged) {
-    try {
-        const logDir = path.join(electron_1.app.getPath('userData'), 'logs');
-        fs.mkdirSync(logDir, { recursive: true });
-        const stream = fs.createWriteStream(path.join(logDir, 'main.log'), { flags: 'a' });
-        const fmt = (args) => args.map((a) => {
-            if (a instanceof Error)
-                return `${a.message}\n${a.stack ?? ''}`;
-            return typeof a === 'string' ? a : JSON.stringify(a);
-        }).join(' ');
-        const origLog = console.log;
-        const origWarn = console.warn;
-        const origError = console.error;
-        console.log = (...args) => {
-            stream.write(`[${new Date().toISOString()}] ${fmt(args)}\n`);
-            origLog(...args);
-        };
-        console.warn = (...args) => {
-            stream.write(`[${new Date().toISOString()}] WARN ${fmt(args)}\n`);
-            origWarn(...args);
-        };
-        console.error = (...args) => {
-            stream.write(`[${new Date().toISOString()}] ERROR ${fmt(args)}\n`);
-            origError(...args);
-        };
-        stream.write(`\n=== App started ${new Date().toISOString()} ===\n`);
-    }
-    catch {
-        // Logging setup failed — not fatal. Carry on with default console behavior.
-    }
-}
+// Initialize file-based logging (captures all console output + crashes)
+(0, logger_1.initLogger)();
 // Must be called BEFORE app.whenReady(). Without this the app:// scheme is
 // treated as opaque/non-secure, which breaks ES modules, fetch, and
 // localStorage — causing Next.js to throw a client-side exception on mount.
