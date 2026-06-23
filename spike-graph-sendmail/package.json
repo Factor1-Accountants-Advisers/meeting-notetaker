@@ -1,0 +1,17 @@
+{
+  "name": "spike-graph-sendmail",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Spike: Graph Mail.Send with factor1.com.au recipient filter",
+  "type": "module",
+  "scripts": {
+    "test": "node recipient-filter.test.mjs",
+    "spike": "node send-mail-spike.mjs",
+    "spike:dry-run": "node send-mail-spike.mjs --dry-run"
+  },
+  "dependencies": {
+    "@azure/msal-node": "^2.16.2",
+    "axios": "^1.7.9",
+    "dotenv": "^16.4.7"
+  }
+}
