@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron'
+import { logger } from './logger'
 
 // Signed-in display name; sent as the audit actor on every backend call.
 // Replaced by the Entra ID token subject once real auth lands.
@@ -11,5 +12,6 @@ export function getCurrentUser(): string {
 export function registerAuthSessionIpc(): void {
   ipcMain.on('auth:set-user', (_event, name: string) => {
     currentUser = name || 'Unknown user'
+    logger().info('[auth] actor updated', { actorKnown: currentUser !== 'Unknown user' })
   })
 }

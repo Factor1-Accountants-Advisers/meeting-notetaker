@@ -1,8 +1,10 @@
 import { BrowserWindow, shell } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
+import { logger } from './logger'
 
 export function createWindow(): void {
+  logger().info('[window] creating main window')
   const mainWindow = new BrowserWindow({
     width: 1100,
     height: 760,
@@ -20,10 +22,12 @@ export function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => {
+    logger().info('[window] ready to show')
     mainWindow.show()
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
+    logger().info('[window] opening external URL', { origin: safeOrigin(details.url) })
     shell.openExternal(details.url)
     return { action: 'deny' }
   })
@@ -33,5 +37,13 @@ export function createWindow(): void {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  }
+}
+
+function safeOrigin(url: string): string {
+  try {
+    return new URL(url).origin
+  } catch {
+    return 'invalid-url'
   }
 }

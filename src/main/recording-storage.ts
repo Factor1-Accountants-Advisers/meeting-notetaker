@@ -2,6 +2,7 @@ import { app, ipcMain } from 'electron'
 import { mkdir, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
+import { logger } from './logger'
 
 export function registerRecordingStorageIpc(): void {
   // Save a finished capture to disk. Files live under userData/recordings until
@@ -21,6 +22,11 @@ export function registerRecordingStorageIpc(): void {
       const safe = name.replace(/[^a-zA-Z0-9._-]/g, '_')
       const filePath = join(dir, safe)
       await writeFile(filePath, Buffer.from(data))
+      logger().info('[recording] saved local capture', {
+        fileName: safe,
+        bytes: data.byteLength,
+        devMode: is.dev
+      })
       return { path: filePath }
     }
   )
