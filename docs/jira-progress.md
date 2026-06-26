@@ -83,18 +83,31 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Verification: email flow tested — stub without token, Graph with token, transcript attachment built.
   - Commit: `(pending)`
 
-## In progress
+- [x] `IN-72` — UI cleanup: remove per-calendar-meeting Record button
+  - Per-calendar Record button absent — whole meeting list/view removed per IN-73.
 
-- [ ] `IN-68` — Implement MS Graph meeting detection in Electron main process
+- [x] `IN-74` — UI cleanup: remove full meeting detail page
+  - MeetingReviewScreen, MeetingsScreen removed from App. Navigation removed.
+  - Transcript/summary/waveform/speaker review/export all removed.
+
+- [x] `IN-75` — UI cleanup: remove action items view
+  - ActionItemsScreen removed from App and navigation.
+  - Dashboard action items card removed from HomeScreen.
+
+- [x] (IN-73) Dashboard cleanup
+  - UpcomingCard (calendar strip), RecordingsCard, ActionItemsCard removed from HomeScreen.
+  - Navigation reduced to Home, People, Settings.
+  - Manual recording controls, audio setup, capture/status UI preserved.
+
+- [ ] `IN-68` — Implement MS Graph meeting detection
+
+## Not started
   - All code implemented and fixture-verified. Blocked on live tenant credentials for final smoke.
   - Graph client, filter, normaliser, time/poller, runtime with polling + resume, MSAL public-client auth, interactive sign-in.
   - Remaining: live tenant config, interactive sign-in smoke, live calendar sync, redacted payload smoke.
 
 ## Not started
 
-- [ ] `IN-72` — UI cleanup: remove per-calendar-meeting Record button
-- [ ] `IN-74` — UI cleanup: remove full meeting detail page
-- [ ] `IN-75` — UI cleanup: remove action items view and aggregated action items page
 - [ ] `IN-81` — Packaging, signing, and installer update
 
 ## Test items to satisfy later

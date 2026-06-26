@@ -1,9 +1,6 @@
 import { useEffect, useState } from 'react'
 import { AppShell } from './components/shell/AppShell'
 import { HomeScreen } from './screens/HomeScreen'
-import { MeetingsScreen } from './screens/MeetingsScreen'
-import { MeetingReviewScreen } from './screens/MeetingReviewScreen'
-import { ActionItemsScreen } from './screens/ActionItemsScreen'
 import { PeopleScreen } from './screens/PeopleScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
 import { LoginScreen, type User } from './screens/LoginScreen'
@@ -33,7 +30,6 @@ type View = ScreenId | 'recording'
 function App(): JSX.Element {
   const [user, setUser] = useState<User | null>(loadUser)
   const [view, setView] = useState<View>('home')
-  const [reviewMeetingId, setReviewMeetingId] = useState<string | null>(null)
   const [recording, setRecording] = useState<RecordingSession | null>(null)
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null)
   const [autoRecordingState, setAutoRecordingState] = useState<'idle' | 'recording' | 'processing'>('idle')
@@ -119,13 +115,7 @@ function App(): JSX.Element {
   }
 
   const navigate = (id: ScreenId): void => {
-    setReviewMeetingId(null)
     setView(id)
-  }
-
-  const openMeeting = (id: string): void => {
-    setView('meetings')
-    setReviewMeetingId(id)
   }
 
   const startCapture = async (title: string, link: string | null): Promise<void> => {
@@ -170,27 +160,24 @@ function App(): JSX.Element {
     }
     setRecording(null)
     setCaptureStatus(null)
-    if (meetingId) openMeeting(meetingId)
-    else navigate('meetings')
+    setView('home')
   }
 
   const uploadRecording = async (title: string, file: File): Promise<void> => {
     const created = await createMeeting(title, null, 'upload')
     if (!created) {
       console.warn('Upload needs the backend — start it and try again')
-      navigate('meetings')
       return
     }
     const b64 = await blobToBase64(file)
     const duration = await audioDurationSeconds(file)
-    await uploadAudio(created.id, b64, file.type || 'audio/webm', duration)
-    openMeeting(created.id)
+    const uploaded = await uploadAudio(created.id, b64, file.type || 'audio/webm', duration)
+    if (!uploaded) console.warn('Audio upload failed — backend unreachable')
   }
 
   const signOut = (): void => {
     localStorage.removeItem(USER_KEY)
     setRecording(null)
-    setReviewMeetingId(null)
     setView('home')
     setUser(null)
   }
@@ -204,7 +191,6 @@ function App(): JSX.Element {
       onOpenRecording={
         recording && view !== 'recording' ? () => setView('recording') : null
       }
-      onOpenMeeting={openMeeting}
       notifications={notifications}
       unreadCount={unread}
       onNotificationsOpened={markAllRead}
@@ -233,20 +219,9 @@ function App(): JSX.Element {
           userName={user.name}
           onStartCapture={(t, l) => void startCapture(t, l)}
           onUploadRecording={(t, f) => void uploadRecording(t, f)}
-          onOpenMeeting={openMeeting}
           recordingState={autoRecordingState}
         />
       )}
-      {view === 'meetings' &&
-        (reviewMeetingId ? (
-          <MeetingReviewScreen
-            meetingId={reviewMeetingId}
-            onBack={() => setReviewMeetingId(null)}
-          />
-        ) : (
-          <MeetingsScreen onOpenMeeting={setReviewMeetingId} />
-        ))}
-      {view === 'actions' && <ActionItemsScreen onOpenMeeting={openMeeting} />}
       {view === 'people' && <PeopleScreen />}
       {view === 'settings' && (
         <SettingsScreen
