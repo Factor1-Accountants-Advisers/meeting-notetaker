@@ -21,6 +21,10 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
 
 ## In progress
 
+- [ ] `IN-66` — Wire auto-start and auto-stop recording to Graph meeting events
+  - Current slice: Recording state machine (`src/main/recording-state.ts`) with idle/recording/processing lifecycle, idempotency by event key, manual-wins-over-auto conflict resolution. Integrated into Graph runtime via `onAutoRecordEligible` callback. Fixture-verified state transitions, conflict rules, and callback invocation.
+  - Remaining before crossing out: main-to-renderer IPC for actual recording commands, renderer-side auto-start/stop handler, auto-stop timing logic.
+
 - [ ] `IN-68` — Implement MS Graph meeting detection in Electron main process
   - Current slice: Polling runtime with resume-aware lifecycle. `startGraphDetectionRuntime` now returns `{ syncNow, startPolling, stopPolling, scheduleResumeSync }`. Polling auto-starts on successful sync (token available + Graph call succeeded), stops on auth_required or 5 consecutive failures. Resume sync debounces 15s after system wake/unlock via `powerMonitor`.
   - Runtime startup currently skips cleanly until MSAL provides a cached Graph access token (no polling auto-starts without token).
@@ -32,7 +36,6 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
 
 ## Not started
 
-- [ ] `IN-66` — Wire auto-start and auto-stop recording to Graph meeting events
 - [ ] `IN-71` — Configure app to run at Windows startup and persist in system tray
 - [ ] `IN-77` — UI updates: auto-recording status alongside manual recording
 - [ ] `IN-69` — Wire Pyannote transcription and voiceprint identification into production pipeline

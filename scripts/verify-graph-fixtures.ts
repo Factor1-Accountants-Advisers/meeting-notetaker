@@ -9,6 +9,7 @@ import { normaliseGraphEvent } from '../src/main/graph/normalise.ts'
 import { detectGraphMeetings } from '../src/main/graph/poller.ts'
 import { syncGraphDetectionOnce, startGraphDetectionRuntime } from '../src/main/graph/runtime.ts'
 import { evaluateHostGate } from '../src/main/graph/host-gate.ts'
+import { createRecordingStateMachine } from '../src/main/recording-state.ts'
 import { parseGraphDateTime } from '../src/main/graph/time.ts'
 import type { GraphDecisionReason, GraphFilterOptions, RawGraphEvent } from '../src/main/graph/types.ts'
 
@@ -156,6 +157,53 @@ async function main(): Promise<void> {
   assert.equal(configuredMsalConfig.configured, true)
   assert.equal(configuredMsalConfig.config?.authority, 'https://login.microsoftonline.com/tenant-id')
 
+  // Recording state machine (IN-66)
+  const sm = createRecordingStateMachine()
+  assert.equal(sm.getState(), 'idle')
+  assert.equal(sm.getActiveRecording(), null)
+
+  // Can start auto when idle
+  assert.equal(sm.canStartAutoRecording('key-1'), true)
+
+  // Start auto recording
+  sm.startAutoRecording({
+    eventId: 'event-1',
+    idempotencyKey: 'key-1',
+    startTimeUtc: '2026-06-26T01:00:00.000Z',
+    endTimeUtc: '2026-06-26T02:00:00.000Z',
+    source: 'auto'
+  })
+  assert.equal(sm.getState(), 'recording')
+  assert.equal(sm.getActiveRecording()?.eventId, 'event-1')
+
+  // Cannot start another auto while recording
+  assert.equal(sm.canStartAutoRecording('key-2'), false)
+
+  // Manual recording wins over auto
+  sm.startManualRecording({
+    eventId: 'event-2',
+    idempotencyKey: 'key-2',
+    startTimeUtc: '2026-06-26T03:00:00.000Z',
+    endTimeUtc: '2026-06-26T04:00:00.000Z',
+    source: 'manual'
+  })
+  assert.equal(sm.getState(), 'recording')
+  assert.equal(sm.getActiveRecording()?.source, 'manual')
+
+  // Stop transitions to processing
+  const finished = sm.stopRecording()
+  assert.equal(finished?.eventId, 'event-2')
+  assert.equal(sm.getState(), 'processing')
+
+  // Complete processing returns to idle
+  sm.completeProcessing()
+  assert.equal(sm.getState(), 'idle')
+
+  // Cannot re-record the same key
+  assert.equal(sm.canStartAutoRecording('key-1'), false)
+  assert.equal(sm.canStartAutoRecording('key-2'), false)
+  assert.equal(sm.canStartAutoRecording('key-3'), true)
+
   const runtimeDir = await mkdtemp(join(tmpdir(), 'notetaker-graph-fixtures-'))
   try {
     const skipped = await syncGraphDetectionOnce({
@@ -182,6 +230,28 @@ async function main(): Promise<void> {
     assert.equal(synced.status, 'success')
     assert.equal(synced.decisions.length, 1)
     assert.equal(synced.state.decisions['runtime-eligible:2026-06-26T01:00:00.000Z'].autoRecordEligible, true)
+
+    // Verify onAutoRecordEligible callback is invoked (IN-66)
+    let callbackDecisions: typeof synced.decisions = []
+    const callbackRuntime = startGraphDetectionRuntime({
+      statePath: join(runtimeDir, 'callback.json'),
+      getAccessToken: async () => 'redacted-token',
+      getSignedInEmail: () => signedInEmail,
+      logger: { info: () => undefined, warn: () => undefined },
+      now: () => now,
+      clientFactory: () => ({
+        fetchCalendarView: async () => ({ value: [baseEvent({ id: 'callback-eligible' })] }),
+        fetchDeltaLink: async () => ({ value: [] })
+      }),
+      onAutoRecordEligible: (decisions) => {
+        callbackDecisions = decisions
+      }
+    })
+    // Wait for startup sync to complete and call the callback
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    callbackRuntime.stopPolling()
+    assert.equal(callbackDecisions.length, 1)
+    assert.equal(callbackDecisions[0].autoRecordEligible, true)
 
     // Polling lifecycle: start/stop/resume API surface
     const pollRuntime = startGraphDetectionRuntime({

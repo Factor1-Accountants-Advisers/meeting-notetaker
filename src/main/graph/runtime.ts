@@ -28,6 +28,7 @@ export interface GraphRuntimeOptions {
   now?: () => Date
   clientFactory?: (accessToken: string) => GraphCalendarClient
   resumeDebounceMs?: number
+  onAutoRecordEligible?: (decisions: GraphEventDecision[]) => void
 }
 
 export interface GraphCalendarClient {
@@ -202,6 +203,10 @@ export async function syncGraphDetectionOnce(options: GraphRuntimeOptions): Prom
       options.logger.info('[graph] host-gate evaluated', hostGateLogContext(gate))
     }
 
+    // Notify caller of auto-record-eligible candidates (IN-66)
+    if (detection.autoRecordEligible.length > 0 && options.onAutoRecordEligible) {
+      options.onAutoRecordEligible(detection.autoRecordEligible)
+    }
 
     return { status: 'success', state: nextState, decisions: detection.decisions }
   } catch (err) {
