@@ -61,6 +61,17 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Confidence, match_source, and match_reason tracked per match.
   - Verification: backend import OK, pipeline end-to-end with meeting create → upload → process → ready, stub behavior preserved.
 
+- [x] `IN-76` — Voiceprint enrollment/admin utility
+  - Enrollment extracts embeddings from 3 audio clips, averages them into one voiceprint.
+  - Source audio deleted immediately after embedding extraction.
+  - Voiceprint stored via `VoiceprintRepository` with model version and timestamp.
+  - Re-enrollment supported via `flag-reenrollment` endpoint.
+  - Exactly 3 clips enforced (Pydantic `min_length=3, max_length=3` on `EnrollRequest`).
+  - All enrollment actions audit-logged (enroll, flag_reenrollment).
+  - No raw audio persisted; no embeddings logged.
+  - Verification: API tested — enroll with 3 clips, reject 2 clips, flag re-enrollment, all passed.
+  - Commit: `(pending)`
+
 ## In progress
 
 - [ ] `IN-68` — Implement MS Graph meeting detection in Electron main process
@@ -70,7 +81,6 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
 
 ## Not started
 
-- [ ] `IN-76` — Admin voiceprint upload and registration utility
 - [ ] `IN-93` — Implement MS Outlook emailing of Transcript
 - [ ] `IN-72` — UI cleanup: remove per-calendar-meeting Record button
 - [ ] `IN-74` — UI cleanup: remove full meeting detail page
