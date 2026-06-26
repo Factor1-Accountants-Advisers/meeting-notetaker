@@ -11,6 +11,8 @@ import type { GraphEventDecision, GraphFilterOptions, RawGraphEvent } from './ty
 
 const DEFAULT_LOOKAHEAD_MS = 24 * 60 * 60 * 1000
 const DEFAULT_GRACE_MS = 10 * 60 * 1000
+const DEFAULT_POLL_INTERVAL_MS = 5 * 60 * 1000
+const RESUME_DEBOUNCE_MS = 15_000
 
 export interface GraphRuntimeLogger {
   info: (message: string, context?: Record<string, unknown>) => void
@@ -24,6 +26,7 @@ export interface GraphRuntimeOptions {
   logger: GraphRuntimeLogger
   now?: () => Date
   clientFactory?: (accessToken: string) => GraphCalendarClient
+  resumeDebounceMs?: number
 }
 
 export interface GraphCalendarClient {
@@ -46,17 +49,97 @@ export interface GraphSyncResult {
   errorMessage?: string
 }
 
-export function startGraphDetectionRuntime(options: GraphRuntimeOptions): { syncNow: () => Promise<GraphSyncResult> } {
-  const syncNow = async (): Promise<GraphSyncResult> => syncGraphDetectionOnce(options)
+export interface GraphDetectionRuntime {
+  syncNow: () => Promise<GraphSyncResult>
+  startPolling: (intervalMs?: number) => void
+  stopPolling: () => void
+  scheduleResumeSync: () => void
+}
 
+export function startGraphDetectionRuntime(options: GraphRuntimeOptions): GraphDetectionRuntime {
+  let pollTimer: ReturnType<typeof setInterval> | null = null
+  let resumeTimer: ReturnType<typeof setTimeout> | null = null
+  let stopped = false
+  let consecutiveFailures = 0
+
+  const syncNow = (): Promise<GraphSyncResult> => syncGraphDetectionOnce(options)
+
+  const startPolling = (intervalMs = DEFAULT_POLL_INTERVAL_MS): void => {
+    if (pollTimer) return
+
+    options.logger.info('[graph] polling started', { intervalMs })
+    stopped = false
+    consecutiveFailures = 0
+
+    const poll = async (): Promise<void> => {
+      if (stopped) return
+      const result = await syncNow()
+
+      if (stopped) return
+
+      if (result.status === 'auth_required') {
+        options.logger.warn('[graph] polling paused: sign-in required')
+        stopPolling()
+        return
+      }
+
+      if (result.status === 'error' || result.status === 'throttled') {
+        consecutiveFailures++
+        if (consecutiveFailures >= 5) {
+          options.logger.warn('[graph] polling paused after consecutive failures', { consecutiveFailures })
+          stopPolling()
+          return
+        }
+      } else {
+        consecutiveFailures = 0
+      }
+    }
+
+    pollTimer = setInterval(poll, intervalMs)
+  }
+
+  const stopPolling = (): void => {
+    stopped = true
+    if (pollTimer) {
+      clearInterval(pollTimer)
+      pollTimer = null
+      options.logger.info('[graph] polling stopped')
+    }
+    if (resumeTimer) {
+      clearTimeout(resumeTimer)
+      resumeTimer = null
+    }
+  }
+
+  const scheduleResumeSync = (): void => {
+    if (resumeTimer) clearTimeout(resumeTimer)
+
+    const debounceMs = options.resumeDebounceMs ?? RESUME_DEBOUNCE_MS
+    resumeTimer = setTimeout(() => {
+      resumeTimer = null
+      options.logger.info('[graph] resume sync triggered')
+      void syncNow().then((result) => {
+        options.logger.info('[graph] resume sync finished', {
+          status: result.status,
+          decisions: result.decisions.length
+        })
+      })
+    }, debounceMs)
+  }
+
+  // Startup sync
   void syncNow().then((result) => {
     options.logger.info('[graph] startup sync finished', {
       status: result.status,
       decisions: result.decisions.length
     })
+    // Auto-start polling only when we have a working token and the sync succeeded.
+    // On skipped_no_token, skipped_backoff, or error, the caller must call
+    // startPolling() explicitly (e.g., after sign-in).
+    if (result.status === 'success') startPolling()
   })
 
-  return { syncNow }
+  return { syncNow, startPolling, stopPolling, scheduleResumeSync }
 }
 
 export async function syncGraphDetectionOnce(options: GraphRuntimeOptions): Promise<GraphSyncResult> {

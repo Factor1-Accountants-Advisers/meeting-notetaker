@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, powerMonitor } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { join } from 'path'
 import { registerApiProxyIpc } from './api-proxy'
@@ -22,7 +22,7 @@ app.whenReady().then(() => {
 
   checkForUpdatesOnLaunch()
   registerMediaPermissions()
-  startGraphDetectionRuntime({
+  const graphRuntime = startGraphDetectionRuntime({
     statePath: join(app.getPath('userData'), 'graph', 'scheduler-state.json'),
     getAccessToken: getGraphAccessToken,
     getSignedInEmail: getCurrentUserEmail,
@@ -32,6 +32,18 @@ app.whenReady().then(() => {
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
+
+  // Trigger a sync when the system wakes from sleep.
+  if (powerMonitor) {
+    powerMonitor.on('resume', () => {
+      logger().info('[app] system resumed from sleep')
+      graphRuntime.scheduleResumeSync()
+    })
+    powerMonitor.on('unlock-screen', () => {
+      logger().info('[app] screen unlocked')
+      graphRuntime.scheduleResumeSync()
+    })
+  }
 
   createWindow()
 

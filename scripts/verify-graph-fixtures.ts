@@ -7,7 +7,7 @@ import { getRetryAfterMs } from '../src/main/graph/client.ts'
 import { decideGraphEvent } from '../src/main/graph/filter.ts'
 import { normaliseGraphEvent } from '../src/main/graph/normalise.ts'
 import { detectGraphMeetings } from '../src/main/graph/poller.ts'
-import { syncGraphDetectionOnce } from '../src/main/graph/runtime.ts'
+import { syncGraphDetectionOnce, startGraphDetectionRuntime } from '../src/main/graph/runtime.ts'
 import { parseGraphDateTime } from '../src/main/graph/time.ts'
 import type { GraphDecisionReason, GraphFilterOptions, RawGraphEvent } from '../src/main/graph/types.ts'
 
@@ -161,6 +161,51 @@ async function main(): Promise<void> {
     assert.equal(synced.status, 'success')
     assert.equal(synced.decisions.length, 1)
     assert.equal(synced.state.decisions['runtime-eligible:2026-06-26T01:00:00.000Z'].autoRecordEligible, true)
+
+    // Polling lifecycle: start/stop/resume API surface
+    const pollRuntime = startGraphDetectionRuntime({
+      statePath: join(runtimeDir, 'poll.json'),
+      getAccessToken: async () => null,
+      getSignedInEmail: () => signedInEmail,
+      logger: { info: () => undefined, warn: () => undefined },
+      now: () => now
+    })
+    assert.equal(typeof pollRuntime.syncNow, 'function')
+    assert.equal(typeof pollRuntime.startPolling, 'function')
+    assert.equal(typeof pollRuntime.stopPolling, 'function')
+    assert.equal(typeof pollRuntime.scheduleResumeSync, 'function')
+
+    // start/stop shouldn't throw
+    pollRuntime.startPolling(100)
+    pollRuntime.stopPolling()
+    pollRuntime.startPolling()
+    pollRuntime.stopPolling()
+
+    // scheduleResumeSync should trigger a sync after debounce
+    let resumeSynced = false
+    const resumeRuntime = startGraphDetectionRuntime({
+      statePath: join(runtimeDir, 'resume.json'),
+      getAccessToken: async () => 'redacted-token',
+      getSignedInEmail: () => signedInEmail,
+      logger: {
+        info: (msg: string) => { if (msg === '[graph] resume sync finished') resumeSynced = true },
+        warn: () => undefined
+      },
+      now: () => now,
+      resumeDebounceMs: 0,
+      clientFactory: () => ({
+        fetchCalendarView: async () => ({ value: [] }),
+        fetchDeltaLink: async () => ({ value: [] })
+      })
+    })
+    // Wait for startup sync to complete (it auto-starts polling on success)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    resumeRuntime.stopPolling()
+    resumeRuntime.scheduleResumeSync()
+    // Wait for the debounced resume sync to fire (debounce is 0ms)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    resumeRuntime.stopPolling()
+    assert.equal(resumeSynced, true)
   } finally {
     await rm(runtimeDir, { recursive: true, force: true })
   }
