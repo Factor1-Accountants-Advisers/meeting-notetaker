@@ -112,12 +112,27 @@ backend/app/
 
 ## Current state / what's left
 
-Everything credential-free is built and audited (22-check E2E green).
-Remaining (all blocked on credentials, see `docs/azure-setup.md`):
+Slice 1 (v1.0.0) is code-complete and fixture-verified. Remaining:
 
-1. MSAL/Entra wiring in the main process (login is a stub; session in
-   localStorage `mn.user`)
-2. SQLAlchemy/Postgres repository replacing the JSON snapshot
-3. Real providers: AI Speech, Azure OpenAI, Graph email/calendar, Blob
-   storage + SAS audio URLs, pyannote embeddings
-4. Code signing + Blob update feed (workflow steps are commented, ready)
+1. Live tenant credentials for Entra ID / MS Graph (IN-68 blocked until
+   MN_ENTRA_CLIENT_ID + MN_ENTRA_TENANT_ID are set in the desktop env).
+2. Code signing certificate for Windows installer (IN-81 — signing disabled
+   locally; enabled in CI release workflow).
+3. Intune Win32 packaging per DV confirmation (IN-89 — NSIS → Intune prep
+   tool, see electron-builder.yml).
+4. SQLAlchemy/Postgres repository replacing the JSON snapshot.
+5. Real providers: Azure AI Speech, Azure OpenAI, Azure Blob storage,
+   pyannote embeddings (all behind provider interfaces — drop-in).
+6. Blob update feed URL for electron-updater (REPLACE_ME in config).
+
+Slice 1 delivered features:
+- MS Graph meeting detection with polling runtime + resume-aware lifecycle
+- Host-only recording gate (organiser check)
+- Auto-start/stop recording state machine with idempotency
+- MSAL public-client auth with interactive PKCE sign-in
+- System tray with status + startup persistence
+- Pyannote voiceprint pipeline: embeddings, enrollment, speaker matching
+- Attendee-first candidate selection + controlled expansion + false-positive suppression
+- Graph delegated email with transcript attachment (Mail.Send)
+- Simplified UI: manual recording, audio setup, people, settings
+- Fixture-driven verification (scripts/verify-graph-fixtures.ts)

@@ -1,7 +1,7 @@
 {
   "name": "meeting-notetaker",
-  "version": "0.1.0",
-  "description": "Internal meeting notetaker for Factor1 Accountants & Advisers",
+  "version": "1.0.0",
+  "description": "Slice 1 — Auto-triggered recording, Pyannote speaker ID, Graph email, UI modernisation",
   "main": "./out/main/index.js",
   "author": "Factor1",
   "private": true,

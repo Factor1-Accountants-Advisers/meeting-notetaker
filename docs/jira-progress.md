@@ -98,17 +98,21 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - UpcomingCard (calendar strip), RecordingsCard, ActionItemsCard removed from HomeScreen.
   - Navigation reduced to Home, People, Settings.
   - Manual recording controls, audio setup, capture/status UI preserved.
+  - Commit: `e225a21`
+
+- [x] `IN-81` — Packaging, signing, and installer update
+  - Version bumped to 1.0.0 reflecting Slice 1 completion.
+  - electron-builder.yml updated: Intune Win32 note per DV, backend/.env/scripts excluded from package.
+  - `npm run package:dir` verified — builds cleanly, no secrets or local artefacts in asar.
+  - Release workflow and signing left for CI (cert required).
+  - AGENTS.md updated with Slice 1 delivered features and remaining blockers.
+  - Commit: `(pending)`
 
 - [ ] `IN-68` — Implement MS Graph meeting detection
-
 ## Not started
   - All code implemented and fixture-verified. Blocked on live tenant credentials for final smoke.
   - Graph client, filter, normaliser, time/poller, runtime with polling + resume, MSAL public-client auth, interactive sign-in.
   - Remaining: live tenant config, interactive sign-in smoke, live calendar sync, redacted payload smoke.
-
-## Not started
-
-- [ ] `IN-81` — Packaging, signing, and installer update
 
 ## Test items to satisfy later
 

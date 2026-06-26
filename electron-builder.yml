@@ -8,19 +8,24 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
   - '!{tailwind.config.js,postcss.config.js}'
   - '!docs/*'
+  - '!.env*'
+  - '!backend/*'
+  - '!scripts/*'
+extraMetadata:
+  SliceVersion: 1.0.0
 win:
   target:
     - nsis
-  # Code-signing certificate to be supplied before first release (see requirements §8.1).
-  # Dev-machine note: exe metadata editing needs the winCodeSign cache, whose
-  # extraction requires Windows symlink privilege (Developer Mode). Disabled for
-  # local dry runs; release builds happen in CI where this is enabled + signed.
+    # Intune Win32 packaging (IN-89): DV confirmed approach. See:
+    # https://learn.microsoft.com/en-us/intune/app-management/deployment/create-win32-package
+    # NSIS -> Intune Win32 prep tool flow to be added after signing.
   signAndEditExecutable: false
+  # Note: code signing requires certificate (IN-81). Release builds run in CI
+  # with signing enabled. Local dev uses signAndEditExecutable: false.
 nsis:
   oneClick: true
   perMachine: false
   artifactName: ${productName}-${version}-setup.${ext}
-# electron-updater feed: static Azure Blob container (configured at release time).
 publish:
   provider: generic
   url: https://REPLACE_ME.blob.core.windows.net/updates/
