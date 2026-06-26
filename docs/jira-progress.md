@@ -16,9 +16,10 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
 
 - [ ] `IN-68` — Implement MS Graph meeting detection in Electron main process
   - Current slice: detection-only Graph foundation is implemented and wired into Electron main as an inert runtime path.
-  - Runtime startup currently skips cleanly until MSAL provides a Graph access token.
+  - Runtime startup currently skips cleanly until MSAL provides a cached Graph access token.
+  - MSAL public-client config boundary exists via `MN_ENTRA_TENANT_ID` and `MN_ENTRA_CLIENT_ID`; missing config returns no token without attempting Graph calls.
   - Verified fixture coverage includes filtering, timezone parsing, `Retry-After`, no-token runtime skip, and fake-client runtime sync.
-  - Remaining before crossing out: real MSAL token acquisition, live/persisted calendar sync with tenant credentials, startup/resume polling policy, and live redacted payload smoke if credentials are available.
+  - Remaining before crossing out: interactive sign-in/token cache population, live/persisted calendar sync with tenant credentials, startup/resume polling policy, and live redacted payload smoke if credentials are available.
   - Must not start recordings yet.
   - Must preserve manual recording.
 

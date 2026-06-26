@@ -14,8 +14,13 @@ Portal → Entra ID → App registrations → New registration:
 - API permissions (delegated): `User.Read`, `Calendars.Read`, `Mail.Send`
   (admin consent for the tenant)
 
-Collect: **Tenant ID**, **Client ID** → main-process MSAL wiring (next task
-once these exist). Decide the authorised-users mechanism (security group
+Set public-client desktop config for the Electron main process:
+
+- `MN_ENTRA_TENANT_ID=<Tenant ID>`
+- `MN_ENTRA_CLIENT_ID=<Client ID>`
+
+These IDs are public-client configuration, not secrets. Do not add a client
+secret to the desktop app. Decide the authorised-users mechanism (security group
 membership — open item in requirements §10).
 
 ## 2. Resource group + storage
