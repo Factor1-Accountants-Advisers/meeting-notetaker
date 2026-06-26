@@ -395,7 +395,7 @@ async def finalize_meeting(meeting_id: UUID, actor: str = Actor) -> Meeting:
     if meeting.unknown_speaker_count > 0:
         # Product rule: unknown speakers must be named before finalisation.
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_409_CONFLICT,
             f"{meeting.unknown_speaker_count} unknown speaker(s) must be named first",
         )
     updated = meeting.model_copy(update={"status": MeetingStatus.finalized})
