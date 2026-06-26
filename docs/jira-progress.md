@@ -70,6 +70,17 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - All enrollment actions audit-logged (enroll, flag_reenrollment).
   - No raw audio persisted; no embeddings logged.
   - Verification: API tested — enroll with 3 clips, reject 2 clips, flag re-enrollment, all passed.
+  - Commit: `b469eeb`
+
+- [x] `IN-93` — Implement MS Outlook emailing of Transcript
+  - `GraphEmailProvider` sends via delegated Microsoft Graph `POST /me/sendMail`.
+  - Transcript attached as `.txt` file via `build_transcript_attachment()`.
+  - Token injection: `api-proxy.ts` attaches `X-MN-Graph-Token` header on email endpoints.
+  - Hard-gated on finalisation (409 if not finalised).
+  - Error handling: 502 with logged detail on Graph delivery failure.
+  - Stub fallback when no Graph token available (logs instead of sending).
+  - All email actions audit-logged with recipients.
+  - Verification: email flow tested — stub without token, Graph with token, transcript attachment built.
   - Commit: `(pending)`
 
 ## In progress
@@ -81,7 +92,6 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
 
 ## Not started
 
-- [ ] `IN-93` — Implement MS Outlook emailing of Transcript
 - [ ] `IN-72` — UI cleanup: remove per-calendar-meeting Record button
 - [ ] `IN-74` — UI cleanup: remove full meeting detail page
 - [ ] `IN-75` — UI cleanup: remove action items view and aggregated action items page

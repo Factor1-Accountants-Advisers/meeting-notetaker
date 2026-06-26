@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { getCurrentUser } from './auth-session'
+import { getCurrentUser, getGraphAccessToken } from './auth-session'
 import { logger } from './logger'
 
 // All backend traffic goes through the main process: the renderer never holds
@@ -23,6 +23,13 @@ export function registerApiProxyIpc(): void {
     try {
       const headers: Record<string, string> = { 'X-MN-User': getCurrentUser() }
       if (req.body !== undefined) headers['content-type'] = 'application/json'
+
+      // Inject Graph token for email endpoints (IN-93: delegated Mail.Send)
+      if (req.path.includes('/email') && req.method === 'POST') {
+        const token = await getGraphAccessToken()
+        if (token) headers['X-MN-Graph-Token'] = token
+      }
+
       const res = await fetch(`${API_BASE}${req.path}`, {
         method: req.method,
         headers,

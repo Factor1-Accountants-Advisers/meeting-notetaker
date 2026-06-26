@@ -1,5 +1,6 @@
 import base64
 import binascii
+import logging
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
@@ -8,6 +9,8 @@ from fastapi.responses import FileResponse
 
 from app import store
 from app.access import can_see, require
+
+logger = logging.getLogger(__name__)
 from app.schemas import (
     AccessRole,
     AuditEntry,
@@ -24,7 +27,7 @@ from app.schemas import (
     PipelineStatus,
     UploadAudioRequest,
 )
-from app.services.email import get_email_provider
+from app.services.email import build_transcript_attachment, get_email_provider
 from app.services.pipeline import AUDIO_DIR, audio_path_for, kick_pipeline
 
 Actor = Header("Unknown user", alias="X-MN-User")
@@ -173,13 +176,16 @@ async def retry_pipeline(meeting_id: UUID, actor: str = Actor) -> Meeting:
 
 @router.post("/{meeting_id}/email", response_model=EmailResult)
 async def email_notes(
-    meeting_id: UUID, body: EmailRequest, actor: str = Actor
+    meeting_id: UUID,
+    body: EmailRequest,
+    actor: str = Actor,
+    graph_token: str = Header("", alias="X-MN-Graph-Token"),
 ) -> EmailResult:
-    """Email finalised notes to participants (requirements §4.7).
+    """Email finalised notes to participants (requirements §4.7, IN-93).
 
     Distribution is hard-gated on finalisation — nothing is sent unreviewed.
-    Real recipient addresses come from Graph attendee lookup later; the stub
-    derives placeholder addresses from participant names.
+    Uses delegated Microsoft Graph Mail.Send via the user's own Outlook.
+    Transcript is attached as a text file.
     """
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is None:
@@ -203,9 +209,31 @@ async def email_notes(
     note = f"{body.note}\n\n" if body.note else ""
     email_body = f"{note}{summary}"
 
-    await get_email_provider().send_meeting_notes(
-        recipients, f"Meeting notes: {meeting.title}", email_body
-    )
+    # Build transcript attachment (IN-93)
+    segments = store.TRANSCRIPTS.get(meeting_id, [])
+    transcript_text = _format_transcript(segments, meeting.title, participants)
+    attachments = [
+        build_transcript_attachment(
+            filename=f"transcript-{meeting.title[:40]}.txt",
+            content=transcript_text,
+        )
+    ] if segments else None
+
+    try:
+        await get_email_provider(graph_token or None).send_meeting_notes(
+            recipients,
+            f"Meeting notes: {meeting.title}",
+            email_body,
+            attachments=attachments,
+            access_token=graph_token or None,
+        )
+    except Exception as exc:
+        logger.exception("Email delivery failed for %s", meeting_id)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Email delivery failed: {exc}",
+        )
+
     sent_at = datetime.now(timezone.utc)
     store.add_audit(
         actor,
@@ -335,6 +363,21 @@ async def name_speaker(
         meeting_id=meeting_id,
     )
     return _build_review(updated)
+
+
+def _format_transcript(
+    segments, title: str, participants
+) -> str:
+    """Format transcript segments as a readable text file."""
+    lines = [f"Meeting: {title}", f"Date: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}", ""]
+    current_speaker = None
+    for seg in segments:
+        if seg.speaker != current_speaker:
+            current_speaker = seg.speaker
+            known = "✓" if seg.speaker_known else "?"
+            lines.append(f"\n[{known}] {seg.speaker}:")
+        lines.append(f"  {seg.text}")
+    return "\n".join(lines)
 
 
 @router.post("/{meeting_id}/finalize", response_model=Meeting)
