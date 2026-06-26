@@ -201,7 +201,9 @@ async def email_notes(
         return ".".join(slug.split()) + "@factor1.ph"
 
     participants = store.PARTICIPANTS.get(meeting_id, [])
-    recipients = [placeholder_address(p.name) for p in participants if p.known]
+    recipients = list(
+        dict.fromkeys(placeholder_address(p.name) for p in participants if p.known)
+    )
     if not recipients:
         raise HTTPException(status.HTTP_409_CONFLICT, "No named participants to email")
 
