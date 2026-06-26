@@ -2,6 +2,7 @@ import { BrowserWindow, shell } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { logger } from './logger'
+import { setMainWindow } from './recording-ipc'
 
 export function createWindow(): void {
   logger().info('[window] creating main window')
@@ -21,9 +22,16 @@ export function createWindow(): void {
     }
   })
 
+  // Expose the window for main→renderer IPC (recording commands, etc.)
+  setMainWindow(mainWindow)
+
   mainWindow.on('ready-to-show', () => {
     logger().info('[window] ready to show')
     mainWindow.show()
+  })
+
+  mainWindow.on('closed', () => {
+    setMainWindow(null as unknown as BrowserWindow)
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {

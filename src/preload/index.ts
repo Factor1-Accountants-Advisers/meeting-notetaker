@@ -1,10 +1,23 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 
 export interface ApiResponse<T = unknown> {
   ok: boolean
   status: number // 0 = backend unreachable
   body: T | null
+}
+
+export interface AutoStartRequest {
+  eventId: string
+  idempotencyKey: string
+  startTimeUtc: string
+  endTimeUtc: string
+  source: 'auto' | 'manual'
+}
+
+export interface AutoStopRequest {
+  eventId: string
+  idempotencyKey: string
 }
 
 // Single funnel to the FastAPI backend via the main process. The renderer
@@ -32,7 +45,34 @@ const api = {
 
   /** Interactive Microsoft sign-in via MSAL. Returns user info or null if failed/not configured. */
   signIn: (): Promise<{ ok: boolean; name?: string; email?: string; error?: string }> =>
-    ipcRenderer.invoke('auth:sign-in')
+    ipcRenderer.invoke('auth:sign-in'),
+
+  /** Listen for main→renderer auto-start recording commands. Returns unsubscribe function. */
+  onAutoStartRequest: (callback: (data: AutoStartRequest) => void): (() => void) => {
+    const handler = (_event: IpcRendererEvent, data: AutoStartRequest) => callback(data)
+    ipcRenderer.on('recording:auto-start-request', handler)
+    return () => {
+      ipcRenderer.removeListener('recording:auto-start-request', handler)
+    }
+  },
+
+  /** Listen for main→renderer auto-stop recording commands. Returns unsubscribe function. */
+  onAutoStopRequest: (callback: (data: AutoStopRequest) => void): (() => void) => {
+    const handler = (_event: IpcRendererEvent, data: AutoStopRequest) => callback(data)
+    ipcRenderer.on('recording:auto-stop-request', handler)
+    return () => {
+      ipcRenderer.removeListener('recording:auto-stop-request', handler)
+    }
+  },
+
+  /** Notify main process that the renderer started recording successfully. */
+  notifyRecordingStarted: (): void => ipcRenderer.send('recording:started'),
+
+  /** Notify main process that recording stopped. */
+  notifyRecordingStopped: (): void => ipcRenderer.send('recording:stopped'),
+
+  /** Notify main process of a recording error. */
+  notifyRecordingError: (message: string): void => ipcRenderer.send('recording:error', message)
 }
 
 export type Api = typeof api

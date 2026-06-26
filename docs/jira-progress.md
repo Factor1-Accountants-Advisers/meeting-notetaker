@@ -21,9 +21,14 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
 
 ## In progress
 
-- [ ] `IN-66` — Wire auto-start and auto-stop recording to Graph meeting events
-  - Current slice: Recording state machine (`src/main/recording-state.ts`) with idle/recording/processing lifecycle, idempotency by event key, manual-wins-over-auto conflict resolution. Integrated into Graph runtime via `onAutoRecordEligible` callback. Fixture-verified state transitions, conflict rules, and callback invocation.
-  - Remaining before crossing out: main-to-renderer IPC for actual recording commands, renderer-side auto-start/stop handler, auto-stop timing logic.
+- [x] `IN-66` — Wire auto-start and auto-stop recording to Graph meeting events
+  - Recording state machine with idle/recording/processing lifecycle, idempotency by event key, manual-wins-over-auto conflict resolution.
+  - Main→renderer IPC bridge: `recording:auto-start-request` / `recording:auto-stop-request` via `webContents.send`.
+  - Renderer→main IPC: `recording:started` / `recording:stopped` / `recording:error` via `ipcRenderer.send`.
+  - Auto-stop timer: schedules `setTimeout` for meeting end time, clears on manual stop or error.
+  - Renderer integration: `App.tsx` listens for auto-start/stop, creates meeting, starts capture, stops and uploads on auto-stop.
+  - Fixture-verified: state machine transitions, conflict rules, callback invocation.
+  - Verification: `npm run verify:graph`, `npm run typecheck`, `npm run build` all passed.
 
 - [ ] `IN-68` — Implement MS Graph meeting detection in Electron main process
   - Current slice: Polling runtime with resume-aware lifecycle. `startGraphDetectionRuntime` now returns `{ syncNow, startPolling, stopPolling, scheduleResumeSync }`. Polling auto-starts on successful sync (token available + Graph call succeeded), stops on auth_required or 5 consecutive failures. Resume sync debounces 15s after system wake/unlock via `powerMonitor`.

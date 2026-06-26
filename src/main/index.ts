@@ -1,4 +1,4 @@
-import { app, BrowserWindow, powerMonitor } from 'electron'
+import { app, BrowserWindow, ipcMain, powerMonitor } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { join } from 'path'
 import { registerApiProxyIpc } from './api-proxy'
@@ -7,7 +7,14 @@ import { startGraphDetectionRuntime } from './graph/runtime'
 import { evaluateHostGate, hostGateLogContext } from './graph/host-gate'
 import { initLogger, logger } from './logger'
 import { registerMediaPermissions } from './media-permissions'
-import { createRecordingStateMachine } from './recording-state'
+import {
+  cleanupRecordingIpc,
+  getRecordingStateMachine,
+  handleRendererRecordingError,
+  handleRendererRecordingStarted,
+  handleRendererRecordingStopped,
+  sendAutoStartRequest
+} from './recording-ipc'
 import { registerRecordingStorageIpc } from './recording-storage'
 import { checkForUpdatesOnLaunch, registerUpdaterIpc } from './updater'
 import { createWindow } from './window'
@@ -19,14 +26,20 @@ registerApiProxyIpc()
 registerRecordingStorageIpc()
 registerUpdaterIpc()
 
+function registerRecordingIpcHandlers(): void {
+  ipcMain.on('recording:started', () => handleRendererRecordingStarted())
+  ipcMain.on('recording:stopped', () => handleRendererRecordingStopped())
+  ipcMain.on('recording:error', (_event, message: string) => handleRendererRecordingError(message))
+}
+
+registerRecordingIpcHandlers()
+
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.factor1.notetaker')
   logger().info('[app] ready')
 
   checkForUpdatesOnLaunch()
   registerMediaPermissions()
-
-  const recordingSM = createRecordingStateMachine()
 
   function handleAutoRecordEligible(decisions: GraphEventDecision[]): void {
     const eligible = decisions.filter((d) => d.autoRecordEligible && d.status === 'candidate')
@@ -42,20 +55,28 @@ app.whenReady().then(() => {
       }
 
       const key = decision.idempotencyKey ?? decision.eventId
-      if (!recordingSM.canStartAutoRecording(key)) {
+      const sm = getRecordingStateMachine()
+      if (!sm.canStartAutoRecording(key)) {
         logger().info('[app] auto-record skipped: already recorded or recording active', {
           idempotencyKey: key
         })
         continue
       }
 
-      logger().info('[app] auto-record candidate detected', {
+      logger().info('[app] auto-record triggered', {
         idempotencyKey: key,
+        startUtc: decision.logContext.startUtc,
+        endUtc: decision.logContext.endUtc,
         ...decision.logContext
       })
 
-      // TODO: Trigger actual recording via IPC to renderer when auto-start
-      // timing logic is implemented. For now, log the candidate.
+      sendAutoStartRequest({
+        eventId: decision.eventId,
+        idempotencyKey: key,
+        startTimeUtc: decision.logContext.startUtc ?? '',
+        endTimeUtc: decision.logContext.endUtc ?? '',
+        source: 'auto'
+      })
     }
   }
 
@@ -92,4 +113,8 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('before-quit', () => {
+  cleanupRecordingIpc()
 })

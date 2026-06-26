@@ -44,6 +44,66 @@ function App(): JSX.Element {
     if (typeof window.api?.setUser === 'function') window.api.setUser(user?.name ?? '')
   }, [user])
 
+  // Listen for auto-recording commands from the main process (IN-66).
+  useEffect(() => {
+    if (!user || typeof window.api?.onAutoStartRequest !== 'function') return
+
+    const unsubStart = window.api.onAutoStartRequest(async (_data) => {
+      try {
+        const created = await createMeeting('Auto-recorded meeting', null)
+        const status = await capture.start('online', loadPrefs().micDeviceId)
+        setCaptureStatus(status)
+        setRecording({
+          meetingId: created?.id ?? null,
+          title: 'Auto-recorded meeting',
+          source: 'online',
+          startedAt: Date.now(),
+          pausedAccum: 0,
+          pausedAt: null
+        })
+        setView('recording')
+        window.api.notifyRecordingStarted()
+      } catch (err) {
+        window.api.notifyRecordingError(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+    const unsubStop = window.api.onAutoStopRequest(async () => {
+      try {
+        const session = recording
+        const meetingId = session?.meetingId ?? null
+        const durationSeconds = session ? Math.round(elapsedMs(session) / 1000) : null
+        const blob = await capture.stop(session ? elapsedMs(session) : undefined)
+        if (blob) {
+          const name = `${meetingId ?? `auto-${Date.now()}`}.webm`
+          try {
+            await window.api.saveRecording(name, await blob.arrayBuffer())
+          } catch {
+            // Local save failed — still try upload
+          }
+          if (meetingId) {
+            await uploadAudio(
+              meetingId,
+              await blobToBase64(blob),
+              blob.type || 'audio/webm',
+              durationSeconds
+            )
+          }
+        }
+        setRecording(null)
+        setCaptureStatus(null)
+        window.api.notifyRecordingStopped()
+      } catch (err) {
+        window.api.notifyRecordingError(err instanceof Error ? err.message : String(err))
+      }
+    })
+
+    return () => {
+      unsubStart()
+      unsubStop()
+    }
+  }, [user])
+
   if (!user) {
     return (
       <LoginScreen
