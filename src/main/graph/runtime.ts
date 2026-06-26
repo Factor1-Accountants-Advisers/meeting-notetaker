@@ -1,5 +1,6 @@
 import { GraphClient, GraphClientError, GraphThrottleError } from './client'
 import { detectGraphMeetings } from './poller'
+import { evaluateHostGate, hostGateLogContext } from './host-gate'
 import {
   EMPTY_GRAPH_SCHEDULER_STATE,
   readGraphSchedulerState,
@@ -194,6 +195,13 @@ export async function syncGraphDetectionOnce(options: GraphRuntimeOptions): Prom
       autoRecordEligible: detection.autoRecordEligible.length,
       excluded: detection.excluded.length
     })
+
+    // Log host-gate decisions for diagnostics (IN-67)
+    for (const decision of detection.candidates) {
+      const gate = evaluateHostGate(decision, options.getSignedInEmail?.())
+      options.logger.info('[graph] host-gate evaluated', hostGateLogContext(gate))
+    }
+
 
     return { status: 'success', state: nextState, decisions: detection.decisions }
   } catch (err) {

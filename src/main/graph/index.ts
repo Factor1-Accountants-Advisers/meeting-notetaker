@@ -1,5 +1,6 @@
 export * from './client'
 export * from './filter'
+export * from './host-gate'
 export * from './normalise'
 export * from './poller'
 export * from './runtime'

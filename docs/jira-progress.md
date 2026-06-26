@@ -12,6 +12,13 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Commit: `9486bd9 document Graph meeting detection spike`
   - Verification: documentation self-check passed; fresh `npm run typecheck`, `npm run build`, and `git diff --check` passed after the doc change.
 
+- [x] `IN-67` — Host-only gate
+  - Explicit organiser-only boundary in `src/main/graph/host-gate.ts`.
+  - Integrated into runtime for diagnostics logging.
+  - Fixture-verified: organiser passes, non-organiser blocked, excluded events blocked, email-less gate works.
+  - Manual recording bypasses the gate entirely.
+  - Verification: `npm run verify:graph`, `npm run typecheck`, `npm run build` all passed.
+
 ## In progress
 
 - [ ] `IN-68` — Implement MS Graph meeting detection in Electron main process
@@ -25,7 +32,6 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
 
 ## Not started
 
-- [ ] `IN-67` — Implement host-only recording gate for auto-triggered meetings
 - [ ] `IN-66` — Wire auto-start and auto-stop recording to Graph meeting events
 - [ ] `IN-71` — Configure app to run at Windows startup and persist in system tray
 - [ ] `IN-77` — UI updates: auto-recording status alongside manual recording

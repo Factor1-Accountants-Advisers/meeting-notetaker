@@ -8,6 +8,7 @@ import { decideGraphEvent } from '../src/main/graph/filter.ts'
 import { normaliseGraphEvent } from '../src/main/graph/normalise.ts'
 import { detectGraphMeetings } from '../src/main/graph/poller.ts'
 import { syncGraphDetectionOnce, startGraphDetectionRuntime } from '../src/main/graph/runtime.ts'
+import { evaluateHostGate } from '../src/main/graph/host-gate.ts'
 import { parseGraphDateTime } from '../src/main/graph/time.ts'
 import type { GraphDecisionReason, GraphFilterOptions, RawGraphEvent } from '../src/main/graph/types.ts'
 
@@ -95,6 +96,26 @@ async function main(): Promise<void> {
   const nonOrganiser = decisionFor(baseEvent({ id: 'non-organiser-auto', isOrganizer: false }))
   assert.equal(nonOrganiser.status, 'candidate')
   assert.equal(nonOrganiser.autoRecordEligible, false)
+
+  // Host-gate (IN-67): explicit organiser-only boundary
+  const organiserGate = evaluateHostGate(organiser, signedInEmail)
+  assert.equal(organiserGate.allowed, true)
+  assert.equal(organiserGate.reason, 'organizer_verified')
+
+  const nonOrganiserGate = evaluateHostGate(nonOrganiser, signedInEmail)
+  assert.equal(nonOrganiserGate.allowed, false)
+  assert.equal(nonOrganiserGate.reason, 'not_auto_record_eligible')
+
+  const excludedGate = evaluateHostGate(
+    decisionFor(baseEvent({ id: 'excluded-gate', isCancelled: true })),
+    signedInEmail
+  )
+  assert.equal(excludedGate.allowed, false)
+  assert.equal(excludedGate.reason, 'excluded_by_filter')
+
+  const noEmailGate = evaluateHostGate(organiser)
+  assert.equal(noEmailGate.allowed, true)
+  assert.equal(noEmailGate.reason, 'organizer_confirmed')
 
   const batch = detectGraphMeetings(
     [baseEvent({ id: 'batch-eligible' }), baseEvent({ id: 'batch-cancelled', isCancelled: true })],
