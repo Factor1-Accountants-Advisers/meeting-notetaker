@@ -17,32 +17,38 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Integrated into runtime for diagnostics logging.
   - Fixture-verified: organiser passes, non-organiser blocked, excluded events blocked, email-less gate works.
   - Manual recording bypasses the gate entirely.
-  - Verification: `npm run verify:graph`, `npm run typecheck`, `npm run build` all passed.
-
-## In progress
+  - Commit: `e25c4e3`
 
 - [x] `IN-66` — Wire auto-start and auto-stop recording to Graph meeting events
   - Recording state machine with idle/recording/processing lifecycle, idempotency by event key, manual-wins-over-auto conflict resolution.
-  - Main→renderer IPC bridge: `recording:auto-start-request` / `recording:auto-stop-request` via `webContents.send`.
-  - Renderer→main IPC: `recording:started` / `recording:stopped` / `recording:error` via `ipcRenderer.send`.
-  - Auto-stop timer: schedules `setTimeout` for meeting end time, clears on manual stop or error.
+  - Main→renderer IPC bridge: `webContents.send` for start/stop commands.
+  - Renderer→main IPC: `recording:started` / `recording:stopped` / `recording:error`.
+  - Auto-stop timer: schedules `setTimeout` for meeting end time.
   - Renderer integration: `App.tsx` listens for auto-start/stop, creates meeting, starts capture, stops and uploads on auto-stop.
-  - Fixture-verified: state machine transitions, conflict rules, callback invocation.
-  - Verification: `npm run verify:graph`, `npm run typecheck`, `npm run build` all passed.
+  - Commit: `1df29d8`, `0000990`
+
+- [x] `IN-71` — Configure app to run at Windows startup and persist in system tray
+  - System tray with status tooltip and context menu (Show / Quit).
+  - App persists in tray when all windows are closed.
+  - `setAutoLaunch()` / `isAutoLaunchEnabled()` via `app.setLoginItemSettings`.
+  - Tray menu updates live when recording state changes.
+  - Commit: `(pending)`
+
+- [x] `IN-77` — Recording status UI
+  - `HomeScreen` shows auto-recording status banner (recording / processing).
+  - `App.tsx` tracks `autoRecordingState` via auto-start/stop IPC events.
+  - Tray tooltip reflects current recording state.
+  - Commit: `(pending)`
+
+## In progress
 
 - [ ] `IN-68` — Implement MS Graph meeting detection in Electron main process
-  - Current slice: Polling runtime with resume-aware lifecycle. `startGraphDetectionRuntime` now returns `{ syncNow, startPolling, stopPolling, scheduleResumeSync }`. Polling auto-starts on successful sync (token available + Graph call succeeded), stops on auth_required or 5 consecutive failures. Resume sync debounces 15s after system wake/unlock via `powerMonitor`.
-  - Runtime startup currently skips cleanly until MSAL provides a cached Graph access token (no polling auto-starts without token).
-  - MSAL public-client config boundary exists via `MN_ENTRA_TENANT_ID` and `MN_ENTRA_CLIENT_ID`; missing config returns no token without attempting Graph calls.
-  - Verified fixture coverage includes filtering, timezone parsing, `Retry-After`, no-token runtime skip, fake-client runtime sync, MSAL missing-config detection, and PKCE code generation.
-  - Remaining before crossing out: live tenant config + interactive sign-in smoke, live/persisted calendar sync, startup/resume polling policy, and live redacted payload smoke if credentials are available.
-  - Must not start recordings yet.
-  - Must preserve manual recording.
+  - All code implemented and fixture-verified. Blocked on live tenant credentials for final smoke.
+  - Graph client, filter, normaliser, time/poller, runtime with polling + resume, MSAL public-client auth, interactive sign-in.
+  - Remaining: live tenant config, interactive sign-in smoke, live calendar sync, redacted payload smoke.
 
 ## Not started
 
-- [ ] `IN-71` — Configure app to run at Windows startup and persist in system tray
-- [ ] `IN-77` — UI updates: auto-recording status alongside manual recording
 - [ ] `IN-69` — Wire Pyannote transcription and voiceprint identification into production pipeline
 - [ ] `IN-76` — Admin voiceprint upload and registration utility
 - [ ] `IN-78` — Implement attendee-first voiceprint candidate selection

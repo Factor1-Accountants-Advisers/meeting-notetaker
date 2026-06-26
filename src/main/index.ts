@@ -16,6 +16,7 @@ import {
   sendAutoStartRequest
 } from './recording-ipc'
 import { registerRecordingStorageIpc } from './recording-storage'
+import { createTray, destroyTray, updateTrayMenu } from './tray'
 import { checkForUpdatesOnLaunch, registerUpdaterIpc } from './updater'
 import { createWindow } from './window'
 import type { GraphEventDecision } from './graph/types'
@@ -27,9 +28,18 @@ registerRecordingStorageIpc()
 registerUpdaterIpc()
 
 function registerRecordingIpcHandlers(): void {
-  ipcMain.on('recording:started', () => handleRendererRecordingStarted())
-  ipcMain.on('recording:stopped', () => handleRendererRecordingStopped())
-  ipcMain.on('recording:error', (_event, message: string) => handleRendererRecordingError(message))
+  ipcMain.on('recording:started', () => {
+    handleRendererRecordingStarted()
+    updateTrayMenu()
+  })
+  ipcMain.on('recording:stopped', () => {
+    handleRendererRecordingStopped()
+    updateTrayMenu()
+  })
+  ipcMain.on('recording:error', (_event, message: string) => {
+    handleRendererRecordingError(message)
+    updateTrayMenu()
+  })
 }
 
 registerRecordingIpcHandlers()
@@ -105,16 +115,27 @@ app.whenReady().then(() => {
   }
 
   createWindow()
+  createTray(() => {
+    const windows = BrowserWindow.getAllWindows()
+    if (windows.length > 0) {
+      windows[0].show()
+      windows[0].focus()
+    } else {
+      createWindow()
+    }
+  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
 
+// With a tray, closing all windows should not quit the app.
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  // Keep running in tray on all platforms.
 })
 
 app.on('before-quit', () => {
   cleanupRecordingIpc()
+  destroyTray()
 })

@@ -36,6 +36,7 @@ function App(): JSX.Element {
   const [reviewMeetingId, setReviewMeetingId] = useState<string | null>(null)
   const [recording, setRecording] = useState<RecordingSession | null>(null)
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null)
+  const [autoRecordingState, setAutoRecordingState] = useState<'idle' | 'recording' | 'processing'>('idle')
   const { theme, toggle } = useTheme()
   const { items: notifications, unread, markAllRead } = useNotifications(user !== null)
 
@@ -62,6 +63,7 @@ function App(): JSX.Element {
           pausedAt: null
         })
         setView('recording')
+        setAutoRecordingState('recording')
         window.api.notifyRecordingStarted()
       } catch (err) {
         window.api.notifyRecordingError(err instanceof Error ? err.message : String(err))
@@ -70,6 +72,7 @@ function App(): JSX.Element {
 
     const unsubStop = window.api.onAutoStopRequest(async () => {
       try {
+        setAutoRecordingState('processing')
         const session = recording
         const meetingId = session?.meetingId ?? null
         const durationSeconds = session ? Math.round(elapsedMs(session) / 1000) : null
@@ -231,6 +234,7 @@ function App(): JSX.Element {
           onStartCapture={(t, l) => void startCapture(t, l)}
           onUploadRecording={(t, f) => void uploadRecording(t, f)}
           onOpenMeeting={openMeeting}
+          recordingState={autoRecordingState}
         />
       )}
       {view === 'meetings' &&

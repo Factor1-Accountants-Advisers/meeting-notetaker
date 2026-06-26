@@ -28,17 +28,25 @@ interface HomeProps {
   onStartCapture: (title: string, link: string | null) => void
   onUploadRecording: (title: string, file: File) => void
   onOpenMeeting: (id: string) => void
+  recordingState?: 'idle' | 'recording' | 'processing'
 }
 
 export function HomeScreen({
   userName,
   onStartCapture,
   onUploadRecording,
-  onOpenMeeting
+  onOpenMeeting,
+  recordingState
 }: HomeProps): JSX.Element {
   return (
     <div className="flex flex-col gap-4">
       <Greeting userName={userName} />
+      {recordingState && recordingState !== 'idle' && (
+        <div className="flex items-center gap-2 rounded-md border-[0.5px] border-edge-info bg-bg-info px-3 py-2 text-[13px] text-content-info">
+          <span className={`h-2 w-2 rounded-full ${recordingState === 'recording' ? 'animate-pulse bg-edge-danger' : 'bg-edge-info'}`} />
+          {recordingState === 'recording' ? 'Auto-recording in progress' : 'Processing recording…'}
+        </div>
+      )}
       <CaptureCard onStart={onStartCapture} onUpload={onUploadRecording} />
       <div className="grid grid-cols-2 gap-3.5">
         <UpcomingCard />
