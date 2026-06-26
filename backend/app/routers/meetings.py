@@ -62,7 +62,7 @@ async def create_meeting(body: MeetingCreate, actor: str = Actor) -> Meeting:
         title=body.title,
         context=body.context,
         source=body.source,
-        owner_id="gerd",  # from auth once Entra ID lands
+        owner_id="joseph",  # from auth once Entra ID lands
         created_at=datetime.now(timezone.utc),
     )
     store.MEETINGS[meeting.id] = meeting

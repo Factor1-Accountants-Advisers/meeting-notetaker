@@ -74,7 +74,7 @@ MEETINGS: dict[UUID, Meeting] = {
             title="Q2 review — Henderson & Co",
             context="Henderson & Co",
             source=MeetingSource.online,
-            owner_id="gerd",
+            owner_id="joseph",
             status=MeetingStatus.draft,
             created_at=datetime(2026, 6, 9, 9, 0, tzinfo=timezone.utc),
             duration_seconds=42 * 60 + 10,
@@ -86,7 +86,7 @@ MEETINGS: dict[UUID, Meeting] = {
             id=_mid("standup-0608"),
             title="Daily stand-up",
             source=MeetingSource.online,
-            owner_id="gerd",
+            owner_id="joseph",
             status=MeetingStatus.finalized,
             created_at=datetime(2026, 6, 8, 11, 0, tzinfo=timezone.utc),
             duration_seconds=12 * 60 + 30,
@@ -98,7 +98,7 @@ MEETINGS: dict[UUID, Meeting] = {
             title="Tax compliance — Acme Retail",
             context="Acme Retail",
             source=MeetingSource.in_person,
-            owner_id="gerd",
+            owner_id="joseph",
             status=MeetingStatus.finalized,
             created_at=datetime(2026, 6, 6, 14, 0, tzinfo=timezone.utc),
             duration_seconds=35 * 60 + 2,
@@ -109,7 +109,7 @@ MEETINGS: dict[UUID, Meeting] = {
             id=_mid("payroll-hr"),
             title="Payroll discussion — HR",
             source=MeetingSource.in_person,
-            owner_id="gerd",
+            owner_id="joseph",
             status=MeetingStatus.finalized,
             created_at=datetime(2026, 6, 4, 16, 0, tzinfo=timezone.utc),
             duration_seconds=28 * 60 + 44,
@@ -122,19 +122,19 @@ MEETINGS: dict[UUID, Meeting] = {
 # Decision #7: private to participants by default; owner can share.
 ACCESS: dict[UUID, list[MeetingAccessEntry]] = {
     _mid("q2-henderson"): [
-        MeetingAccessEntry(user="Gerd Guerrero", role=AccessRole.owner),
+        MeetingAccessEntry(user="Joseph Guerrero", role=AccessRole.owner),
         MeetingAccessEntry(user="M. Santos", role=AccessRole.viewer),
     ],
     _mid("standup-0608"): [
-        MeetingAccessEntry(user="Gerd Guerrero", role=AccessRole.owner),
+        MeetingAccessEntry(user="Joseph Guerrero", role=AccessRole.owner),
         MeetingAccessEntry(user="R. Abad", role=AccessRole.viewer),
     ],
     _mid("tax-acme"): [
-        MeetingAccessEntry(user="Gerd Guerrero", role=AccessRole.owner),
+        MeetingAccessEntry(user="Joseph Guerrero", role=AccessRole.owner),
         MeetingAccessEntry(user="M. Santos", role=AccessRole.editor),
     ],
     _mid("payroll-hr"): [
-        MeetingAccessEntry(user="Gerd Guerrero", role=AccessRole.owner),
+        MeetingAccessEntry(user="Joseph Guerrero", role=AccessRole.owner),
         MeetingAccessEntry(user="L. Perez", role=AccessRole.viewer),
         MeetingAccessEntry(user="S. Wong", role=AccessRole.viewer),
     ],
@@ -152,7 +152,7 @@ SUMMARIES: dict[UUID, str] = {
 
 PARTICIPANTS: dict[UUID, list[MeetingParticipant]] = {
     _mid("q2-henderson"): [
-        MeetingParticipant(name="Gerd Guerrero", known=True),
+        MeetingParticipant(name="Joseph Guerrero", known=True),
         MeetingParticipant(name="M. Santos", known=True),
         MeetingParticipant(name="Unknown 1", known=False),
     ],
@@ -161,7 +161,7 @@ PARTICIPANTS: dict[UUID, list[MeetingParticipant]] = {
 TRANSCRIPTS: dict[UUID, list[TranscriptSegment]] = {
     _mid("q2-henderson"): [
         TranscriptSegment(
-            speaker="Gerd Guerrero", speaker_known=True, start_ms=12_000, end_ms=24_000,
+            speaker="Joseph Guerrero", speaker_known=True, start_ms=12_000, end_ms=24_000,
             text="Thanks for joining. Agenda today is the Q2 numbers, the depreciation "
                  "schedule, and the provisional tax estimate for FY25.",
         ),
@@ -176,7 +176,7 @@ TRANSCRIPTS: dict[UUID, list[TranscriptSegment]] = {
                  "Friday, if that's workable. The board meets Monday.",
         ),
         TranscriptSegment(
-            speaker="Gerd Guerrero", speaker_known=True, start_ms=242_000, end_ms=260_000,
+            speaker="Joseph Guerrero", speaker_known=True, start_ms=242_000, end_ms=260_000,
             text="Workable. I'll take that one. We'll also need the updated depreciation "
                  "schedule before the estimate — Marco, can you own that?",
         ),
@@ -194,7 +194,7 @@ ACTION_ITEMS: dict[UUID, ActionItem] = {
         ActionItem(
             id=_aid("reconcile-smiths"),
             meeting_id=_mid("q2-henderson"),
-            owner="Gerd Guerrero",
+            owner="Joseph Guerrero",
             description="Reconcile Smith's Bakery accounts",
             deadline=date(2026, 6, 6),
             priority=Priority.high,
@@ -203,7 +203,7 @@ ACTION_ITEMS: dict[UUID, ActionItem] = {
         ActionItem(
             id=_aid("depreciation"),
             meeting_id=_mid("q2-henderson"),
-            owner="Gerd Guerrero",
+            owner="Joseph Guerrero",
             description="Update depreciation schedule",
             deadline=date(2026, 6, 13),
             priority=Priority.medium,
@@ -212,7 +212,7 @@ ACTION_ITEMS: dict[UUID, ActionItem] = {
         ActionItem(
             id=_aid("fy25-estimate"),
             meeting_id=_mid("q2-henderson"),
-            owner="Gerd Guerrero",
+            owner="Joseph Guerrero",
             description="Send FY25 provisional tax estimate",
             deadline=date(2026, 6, 16),
             priority=Priority.medium,
@@ -221,7 +221,7 @@ ACTION_ITEMS: dict[UUID, ActionItem] = {
         ActionItem(
             id=_aid("payroll-summary"),
             meeting_id=_mid("payroll-hr"),
-            owner="Gerd Guerrero",
+            owner="Joseph Guerrero",
             description="Draft payroll summary for HR",
             deadline=date(2026, 6, 18),
             priority=Priority.low,
@@ -259,8 +259,8 @@ ACTION_ITEMS: dict[UUID, ActionItem] = {
 
 PEOPLE: list[PersonEnrollment] = [
     PersonEnrollment(
-        employee_id="gerd",
-        display_name="Gerd Guerrero",
+        employee_id="joseph",
+        display_name="Joseph Guerrero",
         role="AI engineer",
         enrolled=True,
         model_version="pyannote/embedding-3.1",

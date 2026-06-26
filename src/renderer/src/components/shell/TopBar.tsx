@@ -180,9 +180,9 @@ export function TopBar({
         </div>
         <div
           className="ml-1 flex h-7 w-7 items-center justify-center rounded-full bg-brand-navy text-[11px] font-medium text-white"
-          title="Gerd Guerrero"
+          title="Joseph Guerrero"
         >
-          GG
+          JG
         </div>
       </div>
     </header>

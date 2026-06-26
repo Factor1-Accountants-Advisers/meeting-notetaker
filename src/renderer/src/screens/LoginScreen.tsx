@@ -35,7 +35,7 @@ export function LoginScreen({ onSignedIn }: Props): JSX.Element {
 
     // Stub fallback when MSAL is not configured or sign-in failed.
     setTimeout(() => {
-      onSignedIn({ name: 'Gerd Guerrero', email: 'gerd@factor1.ph' })
+      onSignedIn({ name: 'Joseph Guerrero', email: 'joseph.guerrero@factor1.ph' })
     }, 700)
   }
 

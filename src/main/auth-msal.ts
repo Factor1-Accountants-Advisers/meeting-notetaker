@@ -1,6 +1,7 @@
 import { randomBytes, createHash } from 'crypto'
 import { createServer } from 'http'
 import type { AddressInfo } from 'net'
+import { execFile } from 'child_process'
 import { shell } from 'electron'
 import {
   PublicClientApplication,
@@ -250,12 +251,39 @@ function openBrowserAndWaitForCode(
       if (timeout) resolve(null) // shouldn't double-resolve, but safe
     })
 
-    // Open the system browser
-    shell.openExternal(authUrl).catch(() => {
+    // Open the system browser. In WSL dev, Electron's shell.openExternal may
+    // resolve without opening a Windows browser, so prefer cmd.exe there.
+    openAuthUrl(authUrl).catch(() => {
       clearTimeout(timeout)
       server.close()
       activeAuthServer = null
       resolve(null)
+    })
+  })
+}
+
+async function openAuthUrl(authUrl: string): Promise<void> {
+  if (process.platform === 'linux' && process.env.WSL_DISTRO_NAME) {
+    // Use PowerShell instead of `cmd.exe /c start`: OAuth URLs contain `&`,
+    // which cmd treats as a command separator and truncates query parameters
+    // like `scope`, causing AADSTS900144.
+    const escapedAuthUrl = authUrl.replace(/'/g, "''")
+    await execFileAsync('/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe', [
+      '-NoProfile',
+      '-Command',
+      `Start-Process -FilePath '${escapedAuthUrl}'`
+    ])
+    return
+  }
+
+  await shell.openExternal(authUrl)
+}
+
+function execFileAsync(file: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, (error) => {
+      if (error) reject(error)
+      else resolve()
     })
   })
 }

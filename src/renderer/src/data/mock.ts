@@ -127,7 +127,7 @@ export const myActionItems: ActionItem[] = [
     description: "Reconcile Smith's Bakery accounts",
     sourceMeeting: 'Accounts review',
     meetingId: null,
-    owner: 'Gerd Guerrero',
+    owner: 'Joseph Guerrero',
     dueLabel: 'due 6 Jun',
     dueISO: '2026-06-06',
     overdue: true,
@@ -139,7 +139,7 @@ export const myActionItems: ActionItem[] = [
     description: 'Update depreciation schedule',
     sourceMeeting: 'Q2 review — Henderson',
     meetingId: 'm1',
-    owner: 'Gerd Guerrero',
+    owner: 'Joseph Guerrero',
     dueLabel: 'due 13 Jun',
     dueISO: '2026-06-13',
     overdue: false,
@@ -151,7 +151,7 @@ export const myActionItems: ActionItem[] = [
     description: 'Send FY25 provisional tax estimate',
     sourceMeeting: 'Tax compliance — Henderson',
     meetingId: 'm1',
-    owner: 'Gerd Guerrero',
+    owner: 'Joseph Guerrero',
     dueLabel: 'due 16 Jun',
     dueISO: '2026-06-16',
     overdue: false,
@@ -163,7 +163,7 @@ export const myActionItems: ActionItem[] = [
     description: 'Draft payroll summary for HR',
     sourceMeeting: 'Payroll discussion',
     meetingId: 'm4',
-    owner: 'Gerd Guerrero',
+    owner: 'Joseph Guerrero',
     dueLabel: 'due 18 Jun',
     dueISO: '2026-06-18',
     overdue: false,
@@ -225,7 +225,7 @@ export interface StaffMember {
 }
 
 export const staff: StaffMember[] = [
-  { id: 'gerd', name: 'Gerd Guerrero', role: 'AI engineer', tone: 'info', enrollment: 'enrolled', modelVersion: 'pyannote/embedding-3.1' },
+  { id: 'joseph', name: 'Joseph Guerrero', role: 'AI engineer', tone: 'info', enrollment: 'enrolled', modelVersion: 'pyannote/embedding-3.1' },
   { id: 'msantos', name: 'M. Santos', role: 'Senior accountant', tone: 'success', enrollment: 'enrolled', modelVersion: 'pyannote/embedding-3.1' },
   { id: 'jlim', name: 'J. Lim', role: 'Accountant', tone: 'warning', enrollment: 'not_enrolled', modelVersion: null },
   { id: 'rabad', name: 'R. Abad', role: 'Adviser', tone: 'secondary', enrollment: 'reenroll_required', modelVersion: 'pyannote/embedding-3.0' },
@@ -256,14 +256,14 @@ export const meetingDetails: Record<string, MeetingDetail> = {
     summary:
       'Quarterly review of Henderson & Co accounts. Revenue is tracking 8% ahead of forecast; depreciation schedule needs updating before the FY25 provisional tax estimate goes out. Client asked for a reconciliation of the Smith’s Bakery subsidiary accounts by end of week. Next review booked for early September.',
     participants: [
-      { name: 'Gerd Guerrero', tone: 'info' },
+      { name: 'Joseph Guerrero', tone: 'info' },
       { name: 'M. Santos', tone: 'success' },
       { name: 'Unknown 1', tone: 'danger', unknown: true }
     ],
     transcript: [
       {
         id: 't1',
-        speaker: 'Gerd Guerrero',
+        speaker: 'Joseph Guerrero',
         known: true,
         time: '00:12',
         text: 'Thanks for joining. Agenda today is the Q2 numbers, the depreciation schedule, and the provisional tax estimate for FY25.'
@@ -284,7 +284,7 @@ export const meetingDetails: Record<string, MeetingDetail> = {
       },
       {
         id: 't4',
-        speaker: 'Gerd Guerrero',
+        speaker: 'Joseph Guerrero',
         known: true,
         time: '04:02',
         text: 'Workable. I’ll take that one. We’ll also need the updated depreciation schedule before the estimate — Marco, can you own that?'
