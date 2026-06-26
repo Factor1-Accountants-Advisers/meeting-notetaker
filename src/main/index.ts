@@ -1,7 +1,9 @@
 import { app, BrowserWindow } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
+import { join } from 'path'
 import { registerApiProxyIpc } from './api-proxy'
-import { registerAuthSessionIpc } from './auth-session'
+import { getCurrentUserEmail, getGraphAccessToken, registerAuthSessionIpc } from './auth-session'
+import { startGraphDetectionRuntime } from './graph/runtime'
 import { initLogger, logger } from './logger'
 import { registerMediaPermissions } from './media-permissions'
 import { registerRecordingStorageIpc } from './recording-storage'
@@ -20,6 +22,12 @@ app.whenReady().then(() => {
 
   checkForUpdatesOnLaunch()
   registerMediaPermissions()
+  startGraphDetectionRuntime({
+    statePath: join(app.getPath('userData'), 'graph', 'scheduler-state.json'),
+    getAccessToken: getGraphAccessToken,
+    getSignedInEmail: getCurrentUserEmail,
+    logger: logger()
+  })
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)

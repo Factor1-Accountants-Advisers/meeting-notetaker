@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { getRetryAfterMs } from '../src/main/graph/client.ts'
 import { decideGraphEvent } from '../src/main/graph/filter.ts'
 import { normaliseGraphEvent } from '../src/main/graph/normalise.ts'
 import { detectGraphMeetings } from '../src/main/graph/poller.ts'
+import { syncGraphDetectionOnce } from '../src/main/graph/runtime.ts'
 import { parseGraphDateTime } from '../src/main/graph/time.ts'
 import type { GraphDecisionReason, GraphFilterOptions, RawGraphEvent } from '../src/main/graph/types.ts'
 
@@ -114,5 +118,35 @@ assert.equal(unsupportedNamedZone.reason, 'unsupported_timezone')
 
 assert.equal(getRetryAfterMs('10'), 10_000)
 assert.equal(getRetryAfterMs('not-a-date'), 30_000)
+
+const runtimeDir = await mkdtemp(join(tmpdir(), 'notetaker-graph-fixtures-'))
+try {
+  const skipped = await syncGraphDetectionOnce({
+    statePath: join(runtimeDir, 'skipped.json'),
+    getAccessToken: async () => null,
+    getSignedInEmail: () => signedInEmail,
+    logger: { info: () => undefined, warn: () => undefined },
+    now: () => now
+  })
+  assert.equal(skipped.status, 'skipped_no_token')
+  assert.equal(skipped.decisions.length, 0)
+
+  const synced = await syncGraphDetectionOnce({
+    statePath: join(runtimeDir, 'synced.json'),
+    getAccessToken: async () => 'redacted-token',
+    getSignedInEmail: () => signedInEmail,
+    logger: { info: () => undefined, warn: () => undefined },
+    now: () => now,
+    clientFactory: () => ({
+      fetchCalendarView: async () => ({ value: [baseEvent({ id: 'runtime-eligible' })] }),
+      fetchDeltaLink: async () => ({ value: [] })
+    })
+  })
+  assert.equal(synced.status, 'success')
+  assert.equal(synced.decisions.length, 1)
+  assert.equal(synced.state.decisions['runtime-eligible:2026-06-26T01:00:00.000Z'].autoRecordEligible, true)
+} finally {
+  await rm(runtimeDir, { recursive: true, force: true })
+}
 
 console.log('Graph fixture verification passed')
