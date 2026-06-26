@@ -9,12 +9,12 @@ and action items for review and email distribution.
 
 ## Read first
 
-- `docs/requirements.md` — what to build and why: the 12 locked decisions,
-  data model, retention, security/compliance, packaging, open items.
+- `C:\\Users\\JosephMiguelGuerrero\\Downloads\\Jira.csv` (`/mnt/c/Users/JosephMiguelGuerrero/Downloads/Jira.csv`) — **source of truth** for Slice 1 scope and provider choices.
+- `docs/requirements.md` — historical/background doc only; do not override Jira with it.
 - `docs/design-handoff.md` — design tokens, layout system, component
   inventory, icon mapping. UI work must follow it.
 - `docs/azure-setup.md` — provisioning runbook + stub→real map. The app runs
-  fully on local stubs today; each Azure credential flips one via `MN_*` env.
+  fully on local stubs today; each credential flips one via `MN_*` env.
 
 ## Stack
 
@@ -22,7 +22,7 @@ and action items for review and email distribution.
   scaffolded with electron-vite; icons `lucide-react`
 - **Backend**: Python + FastAPI — the ONLY component that touches data
 - **Cloud (pending credentials)**: Azure Blob, PostgreSQL, Key Vault,
-  AI Speech, OpenAI; Entra ID + Graph
+  Azure OpenAI; Entra ID + Graph; PyannoteAI for transcription and speaker ID
 
 ## Architecture rules (do not violate)
 
@@ -30,8 +30,8 @@ and action items for review and email distribution.
   renderer → preload bridge (`window.api`) → main-process IPC → FastAPI.
 - All client/meeting data and the LLM stay inside the Factor1 Azure tenant.
 - Transcription + diarization are post-meeting batch, never live.
-- Azure AI Speech owns diarization; pyannote only matches voiceprints.
-- Azure services sit behind provider interfaces (`backend/app/services/`);
+- PyannoteAI owns transcription and voiceprint speaker identification per Jira IN-64/IN-69.
+- Cloud services sit behind provider interfaces (`backend/app/services/`);
   stubs activate automatically when `MN_*` config is empty. Never bypass them.
 - Secrets live in Key Vault / env. Never in the repo or the client.
 
@@ -121,8 +121,8 @@ Slice 1 (v1.0.0) is code-complete and fixture-verified. Remaining:
 3. Intune Win32 packaging per DV confirmation (IN-89 — NSIS → Intune prep
    tool, see electron-builder.yml).
 4. SQLAlchemy/Postgres repository replacing the JSON snapshot.
-5. Real providers: Azure AI Speech, Azure OpenAI, Azure Blob storage,
-   pyannote embeddings (all behind provider interfaces — drop-in).
+5. Real providers: PyannoteAI transcription/speaker ID, Azure OpenAI,
+   Azure Blob storage (all behind provider interfaces — drop-in).
 6. Blob update feed URL for electron-updater (REPLACE_ME in config).
 
 Slice 1 delivered features:

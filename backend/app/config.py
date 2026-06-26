@@ -16,18 +16,18 @@ class Settings(BaseSettings):
     environment: str = "dev"
     api_v1_prefix: str = "/api/v1"
 
-    # Azure resource endpoints (placeholders until provisioning).
+    # Cloud resource endpoints (placeholders until provisioning).
     blob_account_url: str = ""
     postgres_dsn: str = ""
     key_vault_url: str = ""
-    speech_endpoint: str = ""
     openai_endpoint: str = ""
     openai_deployment: str = ""
 
-    # Speaker matching (requirements §4.4); tuned on real Factor1 audio later.
+    # PyannoteAI transcription + voiceprint identification per Jira IN-64/IN-69.
     similarity_threshold: float = 0.62
+    pyannote_api_endpoint: str = ""
     pyannote_model_version: str = "pyannote/embedding-3.1"
-    pyannote_hf_token: str = ""  # HuggingFace token for pyannote model access
+    pyannote_hf_token: str = ""  # HuggingFace/Pyannote token for API/model access
 
     # Raw-audio retention (requirements §6.2 engineering default).
     audio_retention_days: int = 30

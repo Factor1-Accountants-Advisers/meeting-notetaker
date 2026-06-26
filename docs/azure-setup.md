@@ -1,6 +1,6 @@
-# Azure setup — plug-and-play checklist
+# Cloud setup — plug-and-play checklist
 
-Everything in the app runs today against local stand-ins. Each Azure resource
+Everything in the app runs today against local stand-ins. Each real resource
 below replaces its stand-in by setting environment variables — no code changes.
 Provider factories check config at call time and switch automatically.
 
@@ -45,11 +45,16 @@ membership — open item in requirements §10).
   Postgres password
 - Set `MN_KEY_VAULT_URL` → also flips email from stub to Graph provider
 
-## 5. AI Speech
+## 5. PyannoteAI
 
-- Speech resource (S0); batch transcription API with diarization
-- Set `MN_SPEECH_ENDPOINT` (+ key via Key Vault) → replaces the stub
-  transcript provider in `backend/app/services/speech.py`
+Jira CSV is the source of truth for Slice 1. IN-64/IN-69 call for PyannoteAI
+transcription and voiceprint identification.
+
+- PyannoteAI account/API access for transcription + speaker ID
+- Set `MN_PYANNOTE_API_ENDPOINT` if the hosted API exposes a tenant endpoint
+- Set `MN_PYANNOTE_HF_TOKEN` / equivalent API token → replaces the stub
+  transcript provider in `backend/app/services/speech.py` and enables real
+  voiceprint embeddings in `backend/app/services/speaker_embeddings.py`
 
 ## 6. Azure OpenAI
 
@@ -71,7 +76,7 @@ membership — open item in requirements §10).
 |---|---|---|
 | `backend/var/audio` files | Blob Storage `audio` container | `MN_BLOB_ACCOUNT_URL` |
 | `backend/var/store.json` | PostgreSQL | `MN_POSTGRES_DSN` |
-| `StubSpeechProvider` | Azure AI Speech | `MN_SPEECH_ENDPOINT` |
+| `StubSpeechProvider` | PyannoteAI transcription/speaker ID | `MN_PYANNOTE_API_ENDPOINT` / `MN_PYANNOTE_HF_TOKEN` |
 | `StubLLMProvider` | Azure OpenAI | `MN_OPENAI_ENDPOINT` + `MN_OPENAI_DEPLOYMENT` |
 | `StubEmailProvider` (logs) | Graph sendMail | `MN_KEY_VAULT_URL` |
 | Dev sign-in stub | Entra ID via MSAL | tenant + client ID (main process) |

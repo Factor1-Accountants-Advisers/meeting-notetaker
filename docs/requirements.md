@@ -1,4 +1,11 @@
-# Meeting Notetaker — Project Requirements
+# Meeting Notetaker — Requirements Draft (historical)
+
+> **Status:** Historical/background only. The authoritative Slice 1 plan is
+> `C:\Users\JosephMiguelGuerrero\Downloads\Jira.csv`
+> (`/mnt/c/Users/JosephMiguelGuerrero/Downloads/Jira.csv`). Where this document
+> conflicts with Jira, Jira wins. In particular, Jira IN-64/IN-69 require
+> PyannoteAI transcription + voiceprint identification; do not use this draft to
+> reintroduce Azure AI Speech as the primary transcription provider.
 
 **Factor1 Accountants & Advisers · Internal AI & Digital Solutions**
 Version 0.2 — Draft for Review · Prepared by Gerd (AI Engineer)

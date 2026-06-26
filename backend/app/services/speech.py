@@ -1,7 +1,8 @@
-"""Transcription + diarization provider (decision #1: Azure AI Speech, batch).
+"""Transcription + speaker-label provider per Jira IN-64/IN-69.
 
-Stubbed until the Azure Speech resource is provisioned; the pipeline only
-talks to the protocol, so the real client is a drop-in.
+Jira CSV is the source of truth for Slice 1: PyannoteAI owns transcription and
+voiceprint/speaker identification. The stub remains until PyannoteAI API
+credentials are configured; the pipeline talks only to this protocol.
 """
 
 from pathlib import Path
@@ -21,7 +22,7 @@ class SpeechProvider(Protocol):
 
 class StubSpeechProvider:
     """Generates a plausible diarized transcript so the end-to-end flow can be
-    exercised without Azure. Speaker labels are generic — speaker matching
+    exercised without PyannoteAI. Speaker labels are generic — speaker matching
     happens downstream, exactly as it will with the real service."""
 
     async def transcribe_diarized(
@@ -51,17 +52,17 @@ class StubSpeechProvider:
         ]
 
 
-class AzureSpeechProvider:
-    """Real batch client lands once the Speech resource exists."""
+class PyannoteAITranscriptionProvider:
+    """Real PyannoteAI transcription/speaker-label client lands once API access exists."""
 
     async def transcribe_diarized(
         self, audio_path: Path, meeting: Meeting
     ) -> list[TranscriptSegment]:
-        raise NotImplementedError("Azure AI Speech wiring requires a provisioned resource")
+        raise NotImplementedError("PyannoteAI transcription wiring requires API credentials")
 
 
 def get_speech_provider() -> SpeechProvider:
     settings = get_settings()
-    if settings.speech_endpoint:
-        return AzureSpeechProvider()
+    if settings.pyannote_api_endpoint:
+        return PyannoteAITranscriptionProvider()
     return StubSpeechProvider()

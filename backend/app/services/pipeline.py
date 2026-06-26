@@ -1,13 +1,13 @@
-"""Post-meeting processing pipeline (requirements §3.2).
+"""Post-meeting processing pipeline (Jira CSV is source of truth).
 
 audio stored -> queued -> processing:
-  1. Azure AI Speech: batch transcribe + diarize (Speaker 1, 2, …)
-  2. pyannote: embedding per diarized speaker, matched against enrolled staff
+  1. PyannoteAI: transcription + diarization/speaker labels
+  2. pyannote voiceprints: identify known speakers above threshold
   3. Azure OpenAI: summary + action items
 -> ready (or failed, flagged for retry)
 
-Stages run behind provider interfaces; with no Azure configured the stubs
-produce plausible output so the end-to-end flow works in dev.
+Stages run behind provider interfaces; with no PyannoteAI/Azure OpenAI configured
+the stubs produce plausible output so the end-to-end flow works in dev.
 """
 
 import asyncio
