@@ -1,5 +1,8 @@
+import { randomBytes, createHash } from 'crypto'
+import { createServer } from 'http'
+import type { AddressInfo } from 'net'
+import { shell } from 'electron'
 import {
-  InteractionRequiredAuthError,
   PublicClientApplication,
   type AccountInfo,
   type AuthenticationResult,
@@ -7,6 +10,7 @@ import {
 } from '@azure/msal-node'
 
 export const GRAPH_DETECTION_SCOPES = ['User.Read', 'Calendars.Read'] as const
+const SIGN_IN_SCOPES = ['User.Read'] as const
 
 export interface MsalPublicClientConfig {
   clientId: string
@@ -25,6 +29,13 @@ export interface MsalTokenResult {
   accountEmail?: string
   reason?: 'missing_config' | 'no_cached_account' | 'interaction_required' | 'error'
   errorMessage?: string
+}
+
+export interface MsalSignInResult {
+  ok: boolean
+  name?: string
+  email?: string
+  error?: string
 }
 
 let cachedApp: PublicClientApplication | null = null
@@ -68,13 +79,60 @@ export async function acquireGraphTokenSilent(
     currentAccount = result?.account ?? account
     return toTokenResult(result)
   } catch (err) {
-    if (err instanceof InteractionRequiredAuthError) {
+    if (isInteractionRequired(err)) {
       return { accessToken: null, reason: 'interaction_required' }
     }
     return {
       accessToken: null,
       reason: 'error',
       errorMessage: err instanceof Error ? err.message : String(err)
+    }
+  }
+}
+
+export async function signInInteractively(): Promise<MsalSignInResult> {
+  const status = getMsalConfigStatus()
+  if (!status.configured || !status.config) {
+    return { ok: false, error: 'MSAL public-client config missing' }
+  }
+
+  const app = getPublicClientApplication(status.config)
+  const { verifier, challenge } = generatePkceCodes()
+  const redirectUri = await startAuthRedirectServer()
+
+  try {
+    const authCodeUrl = await app.getAuthCodeUrl({
+      scopes: [...SIGN_IN_SCOPES],
+      redirectUri,
+      codeChallenge: challenge,
+      codeChallengeMethod: 'S256'
+    })
+
+    const code = await openBrowserAndWaitForCode(authCodeUrl, redirectUri)
+    if (!code) return { ok: false, error: 'Sign-in was cancelled or timed out' }
+
+    const result = await app.acquireTokenByCode({
+      code,
+      scopes: [...SIGN_IN_SCOPES],
+      redirectUri,
+      codeVerifier: verifier
+    })
+
+    if (!result) return { ok: false, error: 'Token acquisition returned no result' }
+
+    currentAccount = result.account ?? null
+    const email = currentAccount?.username ||
+      currentAccount?.idTokenClaims?.preferred_username?.toString()
+    const name = currentAccount?.name ||
+      currentAccount?.idTokenClaims?.name?.toString() ||
+      email ||
+      'Unknown user'
+
+    return { ok: true, name, email }
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err)
     }
   }
 }
@@ -121,3 +179,93 @@ function toTokenResult(result: AuthenticationResult | null): MsalTokenResult {
     accountEmail: result.account?.username || result.account?.idTokenClaims?.preferred_username?.toString()
   }
 }
+
+function isInteractionRequired(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false
+  const errObj = err as Record<string, unknown>
+  const name = errObj.name as string | undefined
+  const code = errObj.errorCode as string | undefined
+  return name === 'InteractionRequiredAuthError' ||
+    code === 'interaction_required' ||
+    code === 'consent_required' ||
+    code === 'login_required'
+}
+
+function generatePkceCodes(): { verifier: string; challenge: string } {
+  const verifier = randomBytes(32).toString('base64url')
+  const challenge = createHash('sha256').update(verifier).digest('base64url')
+  return { verifier, challenge }
+}
+
+function startAuthRedirectServer(): Promise<string> {
+  return new Promise((resolve) => {
+    const server = createServer()
+    server.listen(0, '127.0.0.1', () => {
+      const port = (server.address() as AddressInfo).port
+      const redirectUri = `http://localhost:${port}`
+      // Store the server reference for the code capture
+      activeAuthServer = { server, redirectUri }
+      resolve(redirectUri)
+    })
+  })
+}
+
+let activeAuthServer: { server: ReturnType<typeof createServer>; redirectUri: string } | null = null
+
+function openBrowserAndWaitForCode(
+  authUrl: string,
+  redirectUri: string,
+  timeoutMs = 120_000
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    const server = activeAuthServer?.server
+    if (!server || !activeAuthServer || activeAuthServer.redirectUri !== redirectUri) {
+      resolve(null)
+      return
+    }
+
+    const timeout = setTimeout(() => {
+      server.close()
+      activeAuthServer = null
+      resolve(null)
+    }, timeoutMs)
+
+    server.on('request', (req, res) => {
+      const url = new URL(req.url ?? '/', redirectUri)
+      const code = url.searchParams.get('code')
+      const error = url.searchParams.get('error')
+
+      res.writeHead(200, { 'Content-Type': 'text/html' })
+      res.end(AUTH_RESPONSE_HTML)
+
+      clearTimeout(timeout)
+      server.close()
+      activeAuthServer = null
+      resolve(error ? null : code)
+    })
+
+    server.on('close', () => {
+      clearTimeout(timeout)
+      activeAuthServer = null
+      if (timeout) resolve(null) // shouldn't double-resolve, but safe
+    })
+
+    // Open the system browser
+    shell.openExternal(authUrl).catch(() => {
+      clearTimeout(timeout)
+      server.close()
+      activeAuthServer = null
+      resolve(null)
+    })
+  })
+}
+
+const AUTH_RESPONSE_HTML = [
+  '<!doctype html>',
+  '<html>',
+  '<head><meta charset="utf-8"><title>Sign-in complete</title></head>',
+  '<body style="font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#111;color:#eee;text-align:center">',
+  '  <p style="font-size:14px">Sign-in complete — you may close this window.</p>',
+  '</body>',
+  '</html>'
+].join('\n')

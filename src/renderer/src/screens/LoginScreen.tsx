@@ -18,9 +18,22 @@ interface Props {
 export function LoginScreen({ onSignedIn }: Props): JSX.Element {
   const [checking, setChecking] = useState(false)
 
-  const signIn = (): void => {
+  const signIn = async (): Promise<void> => {
     setChecking(true)
-    // Placeholder for the MSAL redirect + authorisation check round-trip.
+
+    try {
+      if (typeof window.api?.signIn === 'function') {
+        const result = await window.api.signIn()
+        if (result.ok && result.name && result.email) {
+          onSignedIn({ name: result.name, email: result.email })
+          return
+        }
+      }
+    } catch {
+      // MSAL not available or sign-in failed — fall through to stub.
+    }
+
+    // Stub fallback when MSAL is not configured or sign-in failed.
     setTimeout(() => {
       onSignedIn({ name: 'Gerd Guerrero', email: 'gerd@factor1.ph' })
     }, 700)

@@ -28,7 +28,11 @@ const api = {
     state: 'dev' | 'checking' | 'up-to-date' | 'available' | 'downloaded' | 'error'
     version?: string
     message?: string
-  }> => ipcRenderer.invoke('updates:check')
+  }> => ipcRenderer.invoke('updates:check'),
+
+  /** Interactive Microsoft sign-in via MSAL. Returns user info or null if failed/not configured. */
+  signIn: (): Promise<{ ok: boolean; name?: string; email?: string; error?: string }> =>
+    ipcRenderer.invoke('auth:sign-in')
 }
 
 export type Api = typeof api
