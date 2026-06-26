@@ -38,7 +38,28 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - `HomeScreen` shows auto-recording status banner (recording / processing).
   - `App.tsx` tracks `autoRecordingState` via auto-start/stop IPC events.
   - Tray tooltip reflects current recording state.
-  - Commit: `(pending)`
+  - Commit: `132cb77`
+
+- [x] `IN-69` — Wire Pyannote transcription and voiceprint identification into production pipeline
+  - Extracted speaker matching from pipeline into `backend/app/services/speaker_matching.py`.
+  - Added `SpeakerEmbeddingProvider` interface with stub + pyannote implementations.
+  - Added `VoiceprintRepository` interface with in-memory stub.
+  - Pipeline now uses `get_speaker_matcher()` factory — stub heuristic when no voiceprints enrolled, cosine matcher when voiceprints exist.
+  - Stub behavior preserved: owner recognised, unknown speakers labelled Unknown N.
+
+- [x] `IN-78` — Attendee-first voiceprint candidate selection
+  - `CosineSpeakerMatcher` checks meeting attendees first before expanded staff.
+  - `StubSpeakerMatcher` assigns owner as first speaker (stand-in for attendee-first).
+
+- [x] `IN-79` — Controlled voiceprint candidate expansion
+  - If no attendee match above threshold, enrolled staff are checked.
+  - Match source tracked as "attendee" or "expanded_staff".
+
+- [x] `IN-80` — False-positive suppression for non-attendee detections
+  - Cosine similarity threshold (`MN_SIMILARITY_THRESHOLD`, default 0.62).
+  - Matches below threshold rejected — speaker remains Unknown.
+  - Confidence, match_source, and match_reason tracked per match.
+  - Verification: backend import OK, pipeline end-to-end with meeting create → upload → process → ready, stub behavior preserved.
 
 ## In progress
 
@@ -49,11 +70,7 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
 
 ## Not started
 
-- [ ] `IN-69` — Wire Pyannote transcription and voiceprint identification into production pipeline
 - [ ] `IN-76` — Admin voiceprint upload and registration utility
-- [ ] `IN-78` — Implement attendee-first voiceprint candidate selection
-- [ ] `IN-79` — Implement voiceprint candidate expansion rules for key uninvited people
-- [ ] `IN-80` — Check: false-positive suppression for non-attendee detections
 - [ ] `IN-93` — Implement MS Outlook emailing of Transcript
 - [ ] `IN-72` — UI cleanup: remove per-calendar-meeting Record button
 - [ ] `IN-74` — UI cleanup: remove full meeting detail page

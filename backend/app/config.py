@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     # Speaker matching (requirements §4.4); tuned on real Factor1 audio later.
     similarity_threshold: float = 0.62
     pyannote_model_version: str = "pyannote/embedding-3.1"
+    pyannote_hf_token: str = ""  # HuggingFace token for pyannote model access
 
     # Raw-audio retention (requirements §6.2 engineering default).
     audio_retention_days: int = 30

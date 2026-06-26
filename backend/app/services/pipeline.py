@@ -26,6 +26,7 @@ from app.schemas import (
 )
 from app.services.llm import get_llm_provider
 from app.services.speech import get_speech_provider
+from app.services.speaker_matching import get_speaker_matcher
 
 logger = logging.getLogger(__name__)
 
@@ -47,41 +48,6 @@ def _set_status(meeting_id: UUID, status: PipelineStatus) -> None:
         store.MEETINGS[meeting_id] = meeting.model_copy(update={"pipeline_status": status})
 
 
-def _match_speakers(segments: list[TranscriptSegment], owner_name: str) -> tuple[
-    list[TranscriptSegment], list[MeetingParticipant], int
-]:
-    """pyannote stand-in (decision #2): match diarized speakers to enrolled staff.
-
-    Until embeddings exist, the heuristic mirrors the common case: the meeting
-    owner is recognised (they are enrolled), other speakers fall below the
-    similarity threshold and become Unknown N for manual naming.
-    """
-    label_map: dict[str, tuple[str, bool]] = {}
-    unknown_counter = 0
-    for seg in segments:
-        if seg.speaker in label_map:
-            continue
-        if not label_map:  # first diarized speaker -> owner match
-            label_map[seg.speaker] = (owner_name, True)
-        else:
-            unknown_counter += 1
-            label_map[seg.speaker] = (f"Unknown {unknown_counter}", False)
-
-    matched = [
-        seg.model_copy(
-            update={
-                "speaker": label_map[seg.speaker][0],
-                "speaker_known": label_map[seg.speaker][1],
-            }
-        )
-        for seg in segments
-    ]
-    participants = [
-        MeetingParticipant(name=name, known=known) for name, known in label_map.values()
-    ]
-    return matched, participants, unknown_counter
-
-
 async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is None:
@@ -94,11 +60,15 @@ async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
         raw_segments = await speech.transcribe_diarized(audio_path, meeting)
         await asyncio.sleep(STAGE_DELAY_S)
 
-        owner = next(
-            (p.display_name for p in store.PEOPLE if p.employee_id == meeting.owner_id),
-            "Gerd Guerrero",
+        # Speaker matching via the pluggable matcher (IN-69). The stub
+        # heuristically assigns the owner to the first speaker; the real
+        # cosine matcher uses voiceprint embeddings with attendee-first
+        # candidate selection (IN-78), controlled expansion (IN-79), and
+        # false-positive suppression (IN-80).
+        matcher = get_speaker_matcher()
+        segments, participants, unknown_count = await matcher.match_speakers(
+            raw_segments, meeting
         )
-        segments, participants, unknown_count = _match_speakers(raw_segments, owner)
 
         llm = get_llm_provider()
         summary = await llm.summarize(segments)
