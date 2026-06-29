@@ -247,6 +247,34 @@ Once tenant/client IDs are available and MSAL is wired, capture a redacted sampl
 - join URLs removed;
 - body omitted.
 
+## Live validation update — 2026-06-29
+
+The MVP polling recommendation has now been validated against a real delegated MSAL session and live Microsoft Graph calendar data.
+
+Evidence from the live smoke:
+
+- The old repo's public Entra desktop app registration works for v2 when mapped to `MN_ENTRA_TENANT_ID` and `MN_ENTRA_CLIENT_ID`.
+- MSAL interactive sign-in succeeds with delegated permissions including `User.Read`, `Calendars.Read`, and `Mail.Send`.
+- Immediate post-sign-in sync is required; waiting for the normal poll interval made the app feel inert after authentication.
+- `/me/calendarView` successfully returned the hosted Teams event and the host gate evaluated `isOrganizer === true`.
+- Graph may initially report a newly created/edited meeting without online-meeting metadata (`not_online_meeting`) and then return `isOnlineMeeting: true` / `onlineMeetingProvider: teamsForBusiness` on a later poll. This supports a resilient polling/resync model rather than one-shot detection.
+- The app now gates auto-recording to the meeting start window (`not_due_yet` until within the configured lead time), preventing a 24-hour lookahead candidate from starting early.
+- The app has duplicate/spam protection: once a recording is active or an event idempotency key has been handled, later polls skip the same event.
+- Webhook subscriptions remain unnecessary for Slice 1 because the app is intentionally a startup/tray desktop process with local recording side effects.
+
+Additional commits after the original spike:
+
+- `cf2a475` — trigger Graph sync immediately after MSAL sign-in.
+- `a59bd92` — gate auto-recording to the meeting start window.
+- `778d294` — show global recording status indicator.
+- `a7db862`, `0630750` — default packaged Windows startup/tray behaviour and single-instance handling.
+
+Updated recommendation:
+
+Approve Electron main-process delegated polling for Slice 1, with `/me/calendarView` as the proven baseline and `/me/calendarView/delta` as the later optimisation once packaged/startup verification is complete.
+
+Do not introduce Graph webhooks/change notifications unless Factor1 later approves a backend notification relay for server-side fleet orchestration or detection while user desktops are offline.
+
 ## Recommendation for David/Benjamin review
 
 Approve Electron main-process delegated polling/delta polling for Slice 1.
