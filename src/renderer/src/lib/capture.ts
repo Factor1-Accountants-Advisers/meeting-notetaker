@@ -6,6 +6,12 @@
  *
  * Module-level singleton so a capture keeps running while the user navigates;
  * the recording screen only renders its status.
+ *
+ * NOTE: Web Audio API does NOT reliably capture system/display audio in
+ * Electron/Chromium — createMediaStreamSource silently drops loopback tracks.
+ * Instead, audio tracks from both sources are combined into one MediaStream
+ * and fed directly to MediaRecorder, which handles multi-track mixing
+ * natively.
  */
 
 import fixWebmDuration from 'fix-webm-duration'
@@ -15,14 +21,12 @@ export type StreamState = 'active' | 'error' | 'off'
 export interface CaptureStatus {
   mic: StreamState
   loopback: StreamState
-  /** False when neither stream could start — session is timer-only. */
   recording: boolean
 }
 
 const IDLE: CaptureStatus = { mic: 'off', loopback: 'off', recording: false }
 
 class CaptureController {
-  private ctx: AudioContext | null = null
   private recorder: MediaRecorder | null = null
   private chunks: BlobPart[] = []
   private streams: MediaStream[] = []
@@ -33,18 +37,17 @@ class CaptureController {
   }
 
   async start(source: 'online' | 'in_person', micDeviceId = ''): Promise<CaptureStatus> {
-    this.releaseAll() // defensive: never two captures at once
+    this.releaseAll()
 
     const status: CaptureStatus = { mic: 'off', loopback: 'off', recording: false }
-    const ctx = new AudioContext()
-    const mixed = ctx.createMediaStreamDestination()
+    const audioTracks: MediaStreamTrack[] = []
 
     try {
       const mic = await navigator.mediaDevices.getUserMedia({
         audio: micDeviceId ? { deviceId: { ideal: micDeviceId } } : true
       })
       this.streams.push(mic)
-      ctx.createMediaStreamSource(mic).connect(mixed)
+      audioTracks.push(...mic.getAudioTracks())
       status.mic = 'active'
     } catch {
       status.mic = 'error'
@@ -52,37 +55,34 @@ class CaptureController {
 
     if (source === 'online') {
       try {
-        // Main process answers with a screen source + WASAPI loopback audio.
         const sys = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
         if (sys.getAudioTracks().length === 0) throw new Error('no loopback track')
-        // Audio-first, but do NOT stop the video track: on Windows, stopping it
-        // tears down the whole capture session and silences the loopback audio.
-        // Disable it instead; it is stopped with everything else on release.
+        // Disable video track — stopping it tears down WASAPI on Windows.
         sys.getVideoTracks().forEach((t) => {
           t.enabled = false
         })
         this.streams.push(sys)
-        ctx.createMediaStreamSource(new MediaStream(sys.getAudioTracks())).connect(mixed)
+        audioTracks.push(...sys.getAudioTracks())
         status.loopback = 'active'
       } catch {
         status.loopback = 'error'
       }
     }
 
-    if (status.mic === 'active' || status.loopback === 'active') {
+    if (audioTracks.length > 0) {
+      const combinedStream = new MediaStream(audioTracks)
+      this.streams.push(combinedStream)
+
       const mime = ['audio/webm;codecs=opus', 'audio/webm'].find((m) =>
         MediaRecorder.isTypeSupported(m)
       )
-      this.recorder = new MediaRecorder(mixed.stream, mime ? { mimeType: mime } : undefined)
+      this.recorder = new MediaRecorder(combinedStream, mime ? { mimeType: mime } : undefined)
       this.chunks = []
       this.recorder.ondataavailable = (e) => {
         if (e.data.size > 0) this.chunks.push(e.data)
       }
-      this.recorder.start(1000) // timeslice so long captures aren't one giant buffer
-      this.ctx = ctx
+      this.recorder.start(1000)
       status.recording = true
-    } else {
-      void ctx.close()
     }
 
     this.status = status
@@ -97,11 +97,6 @@ class CaptureController {
     if (this.recorder?.state === 'paused') this.recorder.resume()
   }
 
-  /** Stop and return the captured audio; null when nothing was recorded.
-   *
-   * MediaRecorder webm has no duration in its header (players show 0:00 until
-   * they scan the file), so the measured duration is patched in before return.
-   */
   async stop(durationMs?: number): Promise<Blob | null> {
     const recorder = this.recorder
     if (!recorder || recorder.state === 'inactive') {
@@ -130,8 +125,6 @@ class CaptureController {
     this.chunks = []
     this.streams.forEach((s) => s.getTracks().forEach((t) => t.stop()))
     this.streams = []
-    void this.ctx?.close()
-    this.ctx = null
     this.status = { ...IDLE }
   }
 }
