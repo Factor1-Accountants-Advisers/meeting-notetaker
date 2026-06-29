@@ -5,7 +5,6 @@ supported through a provider-agnostic interface. A stub keeps the pipeline
 runnable without either.
 """
 
-import os
 from datetime import date, timedelta
 from typing import Protocol
 from uuid import UUID, uuid4
@@ -208,7 +207,6 @@ def get_llm_provider() -> SummaryProvider:
     settings = get_settings()
     if settings.openai_endpoint and settings.openai_deployment:
         return AzureOpenAIProvider()
-    api_key = os.getenv("MN_OPENAI_API_KEY") or ""
-    if api_key:
-        return OpenAIProvider(api_key)
+    if settings.openai_api_key:
+        return OpenAIProvider(settings.openai_api_key)
     return StubLLMProvider()

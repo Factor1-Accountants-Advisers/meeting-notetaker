@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     blob_account_url: str = ""
     postgres_dsn: str = ""
     key_vault_url: str = ""
+    # OpenAI / Azure OpenAI (summaries + action items).
+    openai_api_key: str = ""  # direct OpenAI API key (sk-...)
     openai_endpoint: str = ""
     openai_deployment: str = ""
 
