@@ -114,16 +114,14 @@ backend/app/
 
 Slice 1 (v1.0.0) is code-complete and fixture-verified. Remaining:
 
-1. Live tenant credentials for Entra ID / MS Graph (IN-68 blocked until
-   MN_ENTRA_CLIENT_ID + MN_ENTRA_TENANT_ID are set in the desktop env).
-2. Code signing certificate for Windows installer (IN-81 — signing disabled
+1. Code signing certificate for Windows installer (IN-81 — signing disabled
    locally; enabled in CI release workflow).
-3. Intune Win32 packaging per DV confirmation (IN-89 — NSIS → Intune prep
+2. Intune Win32 packaging per DV confirmation (IN-89 — NSIS → Intune prep
    tool, see electron-builder.yml).
-4. SQLAlchemy/Postgres repository replacing the JSON snapshot.
-5. Real providers: PyannoteAI transcription/speaker ID, Azure OpenAI,
+3. SQLAlchemy/Postgres repository replacing the JSON snapshot.
+4. Real providers: PyannoteAI transcription/speaker ID, Azure OpenAI,
    Azure Blob storage (all behind provider interfaces — drop-in).
-6. Blob update feed URL for electron-updater (REPLACE_ME in config).
+5. Blob update feed URL for electron-updater (REPLACE_ME in config).
 
 Slice 1 delivered features:
 - MS Graph meeting detection with polling runtime + resume-aware lifecycle
