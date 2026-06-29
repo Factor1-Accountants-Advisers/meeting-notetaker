@@ -17,9 +17,11 @@ interface Props {
  */
 export function LoginScreen({ onSignedIn }: Props): JSX.Element {
   const [checking, setChecking] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const signIn = async (): Promise<void> => {
     setChecking(true)
+    setError(null)
 
     try {
       if (typeof window.api?.signIn === 'function') {
@@ -28,12 +30,19 @@ export function LoginScreen({ onSignedIn }: Props): JSX.Element {
           onSignedIn({ name: result.name, email: result.email })
           return
         }
+        if (result.error && result.error !== 'MSAL config missing') {
+          setError(result.error)
+          setChecking(false)
+          return
+        }
       }
-    } catch {
-      // MSAL not available or sign-in failed — fall through to stub.
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Microsoft sign-in failed')
+      setChecking(false)
+      return
     }
 
-    // Stub fallback when MSAL is not configured or sign-in failed.
+    // Stub fallback only when MSAL is not configured (local/dev mode).
     setTimeout(() => {
       onSignedIn({ name: 'Joseph Guerrero', email: 'joseph.guerrero@factor1.ph' })
     }, 700)
@@ -70,6 +79,11 @@ export function LoginScreen({ onSignedIn }: Props): JSX.Element {
               Authorised Factor1 staff only. Meetings routinely contain confidential client
               information — access is checked on every sign-in.
             </p>
+            {error && (
+              <p className="mb-0 mt-3 rounded-md border-[0.5px] border-edge-danger bg-bg-danger px-3 py-2 text-[11px] leading-relaxed text-content-danger">
+                {error}
+              </p>
+            )}
           </>
         )}
       </div>

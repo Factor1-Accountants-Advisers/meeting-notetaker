@@ -6,6 +6,11 @@ import { logger } from './logger'
 // Replaced by the Entra ID token subject once real auth lands.
 let currentUser = 'Unknown user'
 let currentUserEmail: string | undefined
+let afterMsalSignIn: (() => void | Promise<void>) | undefined
+
+export function onMsalSignedIn(callback: () => void | Promise<void>): void {
+  afterMsalSignIn = callback
+}
 
 export function getCurrentUser(): string {
   return currentUser
@@ -64,6 +69,13 @@ export function registerAuthSessionIpc(): void {
       logger().info('[auth] actor updated via MSAL sign-in', {
         nameKnown: Boolean(result.name),
         emailKnown: Boolean(result.email)
+      })
+    }
+    if (afterMsalSignIn) {
+      void Promise.resolve(afterMsalSignIn()).catch((err) => {
+        logger().warn('[auth] post-sign-in hook failed', {
+          message: err instanceof Error ? err.message : String(err)
+        })
       })
     }
     return result

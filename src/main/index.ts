@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, powerMonitor } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { join } from 'path'
 import { registerApiProxyIpc } from './api-proxy'
-import { getCurrentUserEmail, getGraphAccessToken, registerAuthSessionIpc } from './auth-session'
+import { getCurrentUserEmail, getGraphAccessToken, onMsalSignedIn, registerAuthSessionIpc } from './auth-session'
 import { startGraphDetectionRuntime } from './graph/runtime'
 import { evaluateHostGate, hostGateLogContext } from './graph/host-gate'
 import { initLogger, logger } from './logger'
@@ -96,6 +96,17 @@ app.whenReady().then(() => {
     getSignedInEmail: getCurrentUserEmail,
     logger: logger(),
     onAutoRecordEligible: handleAutoRecordEligible
+  })
+
+  onMsalSignedIn(() => {
+    logger().info('[graph] sign-in completed; triggering immediate sync')
+    void graphRuntime.syncNow().then((result) => {
+      logger().info('[graph] post-sign-in sync finished', {
+        status: result.status,
+        decisions: result.decisions.length
+      })
+      if (result.status === 'success') graphRuntime.startPolling()
+    })
   })
 
   app.on('browser-window-created', (_, window) => {
