@@ -232,6 +232,7 @@ function App(): JSX.Element {
             )
           }}
           onStop={() => void stopRecording()}
+          saving={submitting}
         />
       )}
       {view === 'home' && (
@@ -240,7 +241,6 @@ function App(): JSX.Element {
           onStartCapture={(t, l) => void startCapture(t, l)}
           onUploadRecording={(t, f) => void uploadRecording(t, f)}
           recordingState={autoRecordingState}
-          submitting={submitting}
         />
       )}
       {view === 'people' && <PeopleScreen />}

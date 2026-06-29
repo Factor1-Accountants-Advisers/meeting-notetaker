@@ -35,6 +35,7 @@ interface Props {
   onPause: () => void
   onResume: () => void
   onStop: () => void
+  saving?: boolean
 }
 
 export function RecordingScreen({
@@ -42,16 +43,36 @@ export function RecordingScreen({
   captureStatus,
   onPause,
   onResume,
-  onStop
+  onStop,
+  saving
 }: Props): JSX.Element {
   const [now, setNow] = useState(Date.now())
   const paused = session.pausedAt !== null
 
   useEffect(() => {
-    if (paused) return
+    if (paused || saving) return
     const id = window.setInterval(() => setNow(Date.now()), 500)
     return () => window.clearInterval(id)
-  }, [paused])
+  }, [paused, saving])
+
+  if (saving) {
+    return (
+      <div className="flex flex-col gap-4">
+        <div>
+          <div className="mb-0.5 text-[12px] text-content-tertiary">Finishing up</div>
+          <h1 className="truncate text-[22px] font-medium text-content-primary">{session.title}</h1>
+        </div>
+        <Card className="flex flex-col items-center gap-5 !py-9">
+          <div className="flex items-center gap-3">
+            <span className="h-3 w-3 animate-pulse rounded-full bg-edge-success" />
+            <span className="text-[16px] font-medium text-content-primary">Saving and uploading your recording…</span>
+          </div>
+          <Pill tone="info">Processing</Pill>
+          <div className="text-[13px] text-content-secondary">You'll receive an email with the notes when ready</div>
+        </Card>
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col gap-4">
