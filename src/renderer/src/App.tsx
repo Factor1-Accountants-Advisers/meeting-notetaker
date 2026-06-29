@@ -35,6 +35,7 @@ function App(): JSX.Element {
   const autoGraphMetadataRef = useRef<GraphMeetingMetadata | null>(null)
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null)
   const [autoRecordingState, setAutoRecordingState] = useState<'idle' | 'recording' | 'processing'>('idle')
+  const [submitting, setSubmitting] = useState(false)
   const { theme, toggle } = useTheme()
   const { items: notifications, unread, markAllRead } = useNotifications(user !== null)
 
@@ -152,6 +153,7 @@ function App(): JSX.Element {
     const session = recording
     const meetingId = session?.meetingId ?? null
     const durationSeconds = session ? Math.round(elapsedMs(session) / 1000) : null
+    setSubmitting(true)
     const blob = await capture.stop(session ? elapsedMs(session) : undefined)
     if (blob) {
       // Local copy first (survives backend outages), then queue the pipeline.
@@ -175,6 +177,7 @@ function App(): JSX.Element {
     setRecording(null)
     setCaptureStatus(null)
     setView('home')
+    setSubmitting(false)
   }
 
   const uploadRecording = async (title: string, file: File): Promise<void> => {
@@ -237,6 +240,7 @@ function App(): JSX.Element {
           onStartCapture={(t, l) => void startCapture(t, l)}
           onUploadRecording={(t, f) => void uploadRecording(t, f)}
           recordingState={autoRecordingState}
+          submitting={submitting}
         />
       )}
       {view === 'people' && <PeopleScreen />}

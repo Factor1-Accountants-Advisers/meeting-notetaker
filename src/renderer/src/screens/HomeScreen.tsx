@@ -7,13 +7,15 @@ interface HomeProps {
   onStartCapture: (title: string, link: string | null) => void
   onUploadRecording: (title: string, file: File) => void
   recordingState?: 'idle' | 'recording' | 'processing'
+  submitting?: boolean
 }
 
 export function HomeScreen({
   userName,
   onStartCapture,
   onUploadRecording,
-  recordingState
+  recordingState,
+  submitting
 }: HomeProps): JSX.Element {
   return (
     <div className="flex flex-col gap-4">
@@ -22,6 +24,12 @@ export function HomeScreen({
         <div className="flex items-center gap-2 rounded-md border-[0.5px] border-edge-info bg-bg-info px-3 py-2 text-[13px] text-content-info">
           <span className={`h-2 w-2 rounded-full ${recordingState === 'recording' ? 'animate-pulse bg-edge-danger' : 'bg-edge-info'}`} />
           {recordingState === 'recording' ? 'Auto-recording in progress' : 'Processing recording…'}
+        </div>
+      )}
+      {submitting && (
+        <div className="flex items-center gap-2 rounded-md border-[0.5px] border-edge-success bg-bg-success px-3 py-2 text-[13px] text-content-success">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-edge-success" />
+          Uploading and processing your recording — you'll receive an email when it's ready
         </div>
       )}
       <CaptureCard onStart={onStartCapture} onUpload={onUploadRecording} />
