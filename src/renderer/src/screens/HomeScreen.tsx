@@ -4,7 +4,7 @@ import { Card, SectionHeader } from '@renderer/components/ui/Card'
 
 interface HomeProps {
   userName: string
-  onStartCapture: (title: string, link: string | null, source: 'online' | 'in_person') => void
+  onStartCapture: (title: string, link: string | null) => void
   onUploadRecording: (title: string, file: File) => void
   recordingState?: 'idle' | 'recording' | 'processing'
   postCaptureNotice?: {
@@ -126,12 +126,11 @@ function CaptureCard({
   onStart,
   onUpload
 }: {
-  onStart: (title: string, link: string | null, source: 'online' | 'in_person') => void
+  onStart: (title: string, link: string | null) => void
   onUpload: (title: string, file: File) => void
 }): JSX.Element {
   const [title, setTitle] = useState('')
   const [link, setLink] = useState('')
-  const [source, setSource] = useState<'online' | 'in_person'>('online')
 
   return (
     <Card>
@@ -167,39 +166,10 @@ function CaptureCard({
         placeholder="https://"
         className="mb-3 h-9 w-full rounded-md border-[0.5px] border-edge-tertiary bg-bg-primary px-3 text-[14px] text-content-primary placeholder:text-content-tertiary focus:border-brand-blue focus:outline-none"
       />
-      <div className="mb-3 flex items-center gap-2">
-        <span className="text-[12px] text-content-secondary">Audio</span>
-        <div className="flex gap-0.5 rounded-md border-[0.5px] border-edge-tertiary bg-bg-secondary p-0.5">
-          <button
-            type="button"
-            onClick={() => setSource('in_person')}
-            className={
-              'rounded px-2 py-1 text-[12px] transition-colors ' +
-              (source === 'in_person'
-                ? 'bg-bg-primary text-content-primary'
-                : 'text-content-tertiary hover:text-content-secondary')
-            }
-          >
-            Mic only
-          </button>
-          <button
-            type="button"
-            onClick={() => setSource('online')}
-            className={
-              'rounded px-2 py-1 text-[12px] transition-colors ' +
-              (source === 'online'
-                ? 'bg-bg-primary text-content-primary'
-                : 'text-content-tertiary hover:text-content-secondary')
-            }
-          >
-            Mic + System
-          </button>
-        </div>
-      </div>
       <button
         type="button"
         disabled={title.trim().length === 0}
-        onClick={() => onStart(title.trim(), link.trim() || null, source)}
+        onClick={() => onStart(title.trim(), link.trim() || null)}
         className="flex w-full items-center justify-center gap-1.5 rounded-md border-[0.5px] border-edge-info bg-bg-info py-2.5 text-[14px] text-content-info transition-colors hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-45"
       >
         <Mic size={16} strokeWidth={1.75} />

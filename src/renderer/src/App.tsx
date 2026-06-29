@@ -238,8 +238,9 @@ function App(): JSX.Element {
     })
   }
 
-  const startCapture = async (title: string, link: string | null, sourceOverride?: 'online' | 'in_person'): Promise<void> => {
-    const source = sourceOverride ?? (link ? 'online' as const : 'in_person' as const)
+  const startCapture = async (title: string, link: string | null): Promise<void> => {
+    // Always capture both mic and system audio — every meeting has system audio.
+    const source = 'online' as const
     window.api.debugLog('manual start requested', { title, source })
     const created = await createMeeting(title, link)
     window.api.debugLog('manual meeting create finished', { meetingId: created?.id ?? null })
@@ -375,7 +376,7 @@ function App(): JSX.Element {
       {view === 'home' && (
         <HomeScreen
           userName={user.name}
-          onStartCapture={(t, l, s) => void startCapture(t, l, s)}
+          onStartCapture={(t, l) => void startCapture(t, l)}
           onUploadRecording={(t, f) => void uploadRecording(t, f)}
           recordingState={autoRecordingState}
           postCaptureNotice={postCaptureNotice}
