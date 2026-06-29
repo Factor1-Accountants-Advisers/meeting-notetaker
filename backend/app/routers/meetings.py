@@ -213,10 +213,17 @@ async def email_notes(
         )
 
     summary = store.SUMMARIES.get(meeting_id, "")
+    action_items = [
+        a for a in store.ACTION_ITEMS.values() if a.meeting_id == meeting_id
+    ]
     note = f"{body.note}\n\n" if body.note else ""
     email_body = f"{note}{summary}"
 
-    transcript_text = _format_transcript(segments, meeting.title, participants)
+    transcript_text = _format_transcript(
+        segments, meeting.title, participants,
+        summary_text=summary,
+        action_items=action_items,
+    )
     attachments = [
         build_transcript_attachment(
             filename=f"transcript-{meeting.title[:40]}.txt",
@@ -403,15 +410,30 @@ async def name_speaker(
 
 
 def _format_transcript(
-    segments, title: str, participants
+    segments, title: str, participants, summary_text: str | None = None, action_items: list | None = None
 ) -> str:
-    """Format transcript segments as a readable text file."""
+    """Format transcript segments as a readable text file with summary and action items."""
     lines = [f"Meeting: {title}", f"Date: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}", ""]
+
+    if summary_text:
+        lines.append("--- SUMMARY ---")
+        lines.append(summary_text)
+        lines.append("")
+
+    if action_items:
+        lines.append("--- ACTION ITEMS ---")
+        for item in action_items:
+            owner = item.owner or "Unassigned"
+            deadline = item.deadline.strftime("%d %b %Y") if item.deadline else "No deadline"
+            lines.append(f"  [{item.priority.value.upper()}] {item.description} — {owner} (due {deadline})")
+        lines.append("")
+
+    lines.append("--- TRANSCRIPT ---")
     current_speaker = None
     for seg in segments:
         if seg.speaker != current_speaker:
             current_speaker = seg.speaker
-            known = "✓" if seg.speaker_known else "?"
+            known = "\u2713" if seg.speaker_known else "?"
             lines.append(f"\n[{known}] {seg.speaker}:")
         lines.append(f"  {seg.text}")
     return "\n".join(lines)
