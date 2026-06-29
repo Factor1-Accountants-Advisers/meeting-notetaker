@@ -20,7 +20,7 @@ export function getCurrentUserEmail(): string | undefined {
   return currentUserEmail ?? getCurrentMsalAccountEmail()
 }
 
-export async function getGraphAccessToken(): Promise<string | null> {
+export async function getGraphAccessToken(scopes?: readonly string[]): Promise<string | null> {
   const status = getMsalConfigStatus()
   if (!status.configured) {
     logger().info('[auth] Graph token unavailable: MSAL public-client config missing', {
@@ -29,7 +29,7 @@ export async function getGraphAccessToken(): Promise<string | null> {
     return null
   }
 
-  const result = await acquireGraphTokenSilent()
+  const result = await acquireGraphTokenSilent(scopes)
   if (result.accountEmail) currentUserEmail = result.accountEmail
   if (!result.accessToken) {
     logger().info('[auth] Graph token unavailable', { reason: result.reason })

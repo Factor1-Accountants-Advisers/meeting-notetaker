@@ -11,7 +11,8 @@ import {
 } from '@azure/msal-node'
 
 export const GRAPH_DETECTION_SCOPES = ['User.Read', 'Calendars.Read'] as const
-const SIGN_IN_SCOPES = ['User.Read'] as const
+export const GRAPH_EMAIL_SCOPES = ['User.Read', 'Mail.Send'] as const
+const SIGN_IN_SCOPES = ['User.Read', 'Calendars.Read', 'Mail.Send'] as const
 
 export interface MsalPublicClientConfig {
   clientId: string

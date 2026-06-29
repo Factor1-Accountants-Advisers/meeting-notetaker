@@ -195,13 +195,39 @@ function App(): JSX.Element {
   }
 
   const retryTranscriptEmail = async (meetingId: string, title: string): Promise<void> => {
+    let recorderEmail = user.email
+    setPostCaptureNotice({
+      state: 'emailing',
+      meetingId,
+      title,
+      message: 'Connecting to Outlook…'
+    })
+
+    if (typeof window.api?.signIn === 'function') {
+      const signedIn = await window.api.signIn()
+      if (signedIn.ok && signedIn.name && signedIn.email) {
+        const nextUser = { name: signedIn.name, email: signedIn.email }
+        recorderEmail = signedIn.email
+        localStorage.setItem(USER_KEY, JSON.stringify(nextUser))
+        setUser(nextUser)
+      } else {
+        setPostCaptureNotice({
+          state: 'failed',
+          meetingId,
+          title,
+          message: signedIn.error || 'Outlook sign-in did not complete. Transcript email was not sent.'
+        })
+        return
+      }
+    }
+
     setPostCaptureNotice({
       state: 'emailing',
       meetingId,
       title,
       message: 'Retrying transcript email…'
     })
-    const result = await emailNotes(meetingId, null, user.email)
+    const result = await emailNotes(meetingId, null, recorderEmail)
     setPostCaptureNotice({
       state: result ? 'ready' : 'failed',
       meetingId,
