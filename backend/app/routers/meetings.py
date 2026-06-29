@@ -184,45 +184,40 @@ async def email_notes(
     actor: str = Actor,
     graph_token: str = Header("", alias="X-MN-Graph-Token"),
 ) -> EmailResult:
-    """Email finalised notes to participants (requirements §4.7, IN-93).
+    """Email transcript after processing completes (Jira IN-93/IN-94).
 
-    Distribution is hard-gated on finalisation — nothing is sent unreviewed.
-    Uses delegated Microsoft Graph Mail.Send via the user's own Outlook.
-    Transcript is attached as a text file.
+    Slice 1 delivery is transcript-by-email using the signed-in user's Outlook:
+    calendar recordings go to Graph attendees; manual/ad-hoc recordings go to
+    the recorder. SharePoint and Teams delivery are later slices.
     """
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
     require(meeting_id, actor, AccessRole.owner)
-    if meeting.status is not MeetingStatus.finalized:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "Notes can only be emailed after finalisation"
-        )
 
-    def placeholder_address(name: str) -> str:
-        slug = "".join(c for c in name.lower() if c.isalnum() or c == " ")
-        return ".".join(slug.split()) + "@factor1.ph"
+    if meeting.pipeline_status is not PipelineStatus.ready:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Transcript is not ready yet")
 
     participants = store.PARTICIPANTS.get(meeting_id, [])
-    recipients = list(
-        dict.fromkeys(placeholder_address(p.name) for p in participants if p.known)
-    )
+    segments = store.TRANSCRIPTS.get(meeting_id, [])
+    if not segments:
+        raise HTTPException(status.HTTP_409_CONFLICT, "No transcript is available to email")
+
+    recipients = _email_recipients(meeting, body.recorder_email)
     if not recipients:
-        raise HTTPException(status.HTTP_409_CONFLICT, "No named participants to email")
+        raise HTTPException(status.HTTP_409_CONFLICT, "No email recipients resolved")
 
     summary = store.SUMMARIES.get(meeting_id, "")
     note = f"{body.note}\n\n" if body.note else ""
     email_body = f"{note}{summary}"
 
-    # Build transcript attachment (IN-93)
-    segments = store.TRANSCRIPTS.get(meeting_id, [])
     transcript_text = _format_transcript(segments, meeting.title, participants)
     attachments = [
         build_transcript_attachment(
             filename=f"transcript-{meeting.title[:40]}.txt",
             content=transcript_text,
         )
-    ] if segments else None
+    ]
 
     try:
         await get_email_provider(graph_token or None).send_meeting_notes(
@@ -248,6 +243,38 @@ async def email_notes(
         meeting_id=meeting_id,
     )
     return EmailResult(recipients=recipients, sent_at=sent_at)
+
+
+def _normalise_email(email: str | None) -> str | None:
+    if not email:
+        return None
+    cleaned = email.strip().lower()
+    if not cleaned or "@" not in cleaned:
+        return None
+    return cleaned
+
+
+def _email_recipients(meeting: Meeting, recorder_email: str | None) -> list[str]:
+    """Resolve Jira IN-93/IN-94 recipients.
+
+    Calendar-linked recordings use Graph attendee emails. Manual/ad-hoc/upload
+    recordings fall back to the signed-in recorder email supplied by the app.
+    Preserve first-seen order while deduping case-insensitively.
+    """
+    recipients: list[str] = []
+
+    if meeting.graph_metadata and meeting.graph_metadata.attendees:
+        for attendee in meeting.graph_metadata.attendees:
+            email = _normalise_email(attendee.email)
+            if email and email not in recipients:
+                recipients.append(email)
+
+    if not recipients:
+        email = _normalise_email(recorder_email)
+        if email:
+            recipients.append(email)
+
+    return recipients
 
 
 def _build_review(meeting: Meeting) -> MeetingReview:

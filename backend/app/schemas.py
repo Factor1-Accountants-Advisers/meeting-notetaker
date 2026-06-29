@@ -167,6 +167,7 @@ class EditSegmentRequest(BaseModel):
 
 class EmailRequest(BaseModel):
     note: str | None = None  # optional message above the notes
+    recorder_email: str | None = None  # fallback recipient for manual/ad-hoc recordings
 
 
 class EmailResult(BaseModel):

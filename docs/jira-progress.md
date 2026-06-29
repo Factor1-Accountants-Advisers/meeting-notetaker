@@ -83,11 +83,12 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - `GraphEmailProvider` sends via delegated Microsoft Graph `POST /me/sendMail`.
   - Transcript attached as `.txt` file via `build_transcript_attachment()`.
   - Token injection: `api-proxy.ts` attaches `X-MN-Graph-Token` header on email endpoints.
-  - Hard-gated on finalisation (409 if not finalised).
-  - Error handling: 502 with logged detail on Graph delivery failure.
+  - Jira-aligned trigger: email is allowed once `pipeline_status == ready`; no finalise/review gate required.
+  - Recipient rules: Graph attendee emails for calendar-linked recordings; recorder email fallback for manual/ad-hoc recordings.
+  - Error handling: 502 with logged detail on Graph delivery failure; UI shows retryable email failure without losing recording.
   - Stub fallback when no Graph token available (logs instead of sending).
   - All email actions audit-logged with recipients.
-  - Verification: email flow tested — stub without token, Graph with token, transcript attachment built.
+  - Verification: `scripts/verify-email-jira-flow.py`; live smoke create → upload → ready → email returned `recipients:["joseph@example.com"]`.
   - Commit: `(pending)`
 
 - [x] `IN-72` — UI cleanup: remove per-calendar-meeting Record button
@@ -155,7 +156,8 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Verified: `npm run typecheck` + `npm run build` + `git diff --check` all pass.
 
 - [x] `IN-94` — When a transcript is saved it is sent via email attachment to the correct persons
-  - Email endpoint: attachment built, recipients resolved, stub sends logged.
-  - Dedupe fix applied: same person appearing twice in participants → single recipient.
-  - Finalise-gated (409 if not finalised).
-  - Verified: email endpoint returns `{recipients: [...], sent_at: ...}` with deduped addresses.
+  - Backend accepts email once transcript is saved and pipeline is `ready`.
+  - Calendar-linked recipient resolution uses Graph attendee emails, deduped case-insensitively.
+  - Manual/ad-hoc recipient resolution falls back to the signed-in recorder email.
+  - Renderer automatically emails after the ready poll succeeds and shows transcript emailed / retry states.
+  - Verified: email endpoint returns `{recipients: [...], sent_at: ...}`; live smoke returned `joseph@example.com` for a manual recording.

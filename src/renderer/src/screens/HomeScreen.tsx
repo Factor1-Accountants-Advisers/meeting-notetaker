@@ -8,11 +8,13 @@ interface HomeProps {
   onUploadRecording: (title: string, file: File) => void
   recordingState?: 'idle' | 'recording' | 'processing'
   postCaptureNotice?: {
-    state: 'processing' | 'ready' | 'failed'
+    state: 'processing' | 'emailing' | 'ready' | 'failed'
+    meetingId: string
     title: string
     message: string
   } | null
   onDismissPostCaptureNotice?: () => void
+  onRetryPostCaptureEmail?: (meetingId: string, title: string) => void
 }
 
 export function HomeScreen({
@@ -21,7 +23,8 @@ export function HomeScreen({
   onUploadRecording,
   recordingState,
   postCaptureNotice,
-  onDismissPostCaptureNotice
+  onDismissPostCaptureNotice,
+  onRetryPostCaptureEmail
 }: HomeProps): JSX.Element {
   return (
     <div className="flex flex-col gap-4">
@@ -33,7 +36,11 @@ export function HomeScreen({
         </div>
       )}
       {postCaptureNotice && (
-        <PostCaptureNotice notice={postCaptureNotice} onDismiss={onDismissPostCaptureNotice} />
+        <PostCaptureNotice
+          notice={postCaptureNotice}
+          onDismiss={onDismissPostCaptureNotice}
+          onRetryEmail={onRetryPostCaptureEmail}
+        />
       )}
       <CaptureCard onStart={onStartCapture} onUpload={onUploadRecording} />
     </div>
@@ -42,10 +49,12 @@ export function HomeScreen({
 
 function PostCaptureNotice({
   notice,
-  onDismiss
+  onDismiss,
+  onRetryEmail
 }: {
   notice: NonNullable<HomeProps['postCaptureNotice']>
   onDismiss?: () => void
+  onRetryEmail?: (meetingId: string, title: string) => void
 }): JSX.Element {
   const icon =
     notice.state === 'ready' ? (
@@ -70,11 +79,22 @@ function PostCaptureNotice({
           <div className="truncate text-[13px] font-medium">{notice.title}</div>
           <div className="mt-0.5 text-[12px] opacity-90">{notice.message}</div>
         </div>
-        {notice.state !== 'processing' && onDismiss && (
-          <button type="button" className="text-[12px] opacity-80 hover:opacity-100" onClick={onDismiss}>
-            Dismiss
-          </button>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          {notice.state === 'failed' && onRetryEmail && (
+            <button
+              type="button"
+              className="rounded-sm border-[0.5px] border-current px-2 py-1 text-[12px] opacity-85 hover:opacity-100"
+              onClick={() => onRetryEmail(notice.meetingId, notice.title)}
+            >
+              Retry email
+            </button>
+          )}
+          {notice.state !== 'processing' && notice.state !== 'emailing' && onDismiss && (
+            <button type="button" className="text-[12px] opacity-80 hover:opacity-100" onClick={onDismiss}>
+              Dismiss
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )

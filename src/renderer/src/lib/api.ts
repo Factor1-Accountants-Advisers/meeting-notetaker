@@ -271,9 +271,13 @@ export interface EmailResultDto {
 
 export async function emailNotes(
   meetingId: string,
-  note: string | null
+  note: string | null,
+  recorderEmail?: string | null
 ): Promise<EmailResultDto | null> {
-  return call<EmailResultDto>('POST', `/meetings/${meetingId}/email`, { note })
+  return call<EmailResultDto>('POST', `/meetings/${meetingId}/email`, {
+    note,
+    recorder_email: recorderEmail ?? null
+  })
 }
 
 export interface AuditEntryDto {

@@ -5,7 +5,7 @@ import { PeopleScreen } from './screens/PeopleScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
 import { LoginScreen, type User } from './screens/LoginScreen'
 import { RecordingScreen, type RecordingSession } from './screens/RecordingScreen'
-import { createMeeting, fetchMeetingReview, uploadAudio, type GraphMeetingMetadata } from './lib/api'
+import { createMeeting, emailNotes, fetchMeetingReview, uploadAudio, type GraphMeetingMetadata } from './lib/api'
 import { capture, type CaptureStatus } from './lib/capture'
 import { loadPrefs } from './lib/prefs'
 import { useNotifications } from './lib/useNotifications'
@@ -28,7 +28,7 @@ function loadUser(): User | null {
 type View = ScreenId | 'recording'
 
 type PostCaptureNotice = {
-  state: 'processing' | 'ready' | 'failed'
+  state: 'processing' | 'emailing' | 'ready' | 'failed'
   meetingId: string
   title: string
   message: string
@@ -156,11 +156,27 @@ function App(): JSX.Element {
       const status = review?.meeting.pipeline_status
       if (status === 'ready' && review) {
         setPostCaptureNotice({
-          state: 'ready',
+          state: 'emailing',
           meetingId,
           title,
-          message: `Notes are ready: ${review.segments.length} transcript segments and ${review.action_items.length} action items.`
+          message: `Notes are ready: ${review.segments.length} transcript segments and ${review.action_items.length} action items. Emailing transcript…`
         })
+        const result = await emailNotes(meetingId, null, user.email)
+        if (result) {
+          setPostCaptureNotice({
+            state: 'ready',
+            meetingId,
+            title,
+            message: `Transcript emailed to ${result.recipients.join(', ')}.`
+          })
+        } else {
+          setPostCaptureNotice({
+            state: 'failed',
+            meetingId,
+            title,
+            message: 'Notes are ready, but the transcript email failed. You can retry without re-recording.'
+          })
+        }
         return
       }
       if (status === 'failed') {
@@ -176,6 +192,24 @@ function App(): JSX.Element {
     }
 
     void poll()
+  }
+
+  const retryTranscriptEmail = async (meetingId: string, title: string): Promise<void> => {
+    setPostCaptureNotice({
+      state: 'emailing',
+      meetingId,
+      title,
+      message: 'Retrying transcript email…'
+    })
+    const result = await emailNotes(meetingId, null, user.email)
+    setPostCaptureNotice({
+      state: result ? 'ready' : 'failed',
+      meetingId,
+      title,
+      message: result
+        ? `Transcript emailed to ${result.recipients.join(', ')}.`
+        : 'Email still failed. The notes are ready and the recording is safe.'
+    })
   }
 
   const startCapture = async (title: string, link: string | null): Promise<void> => {
@@ -319,6 +353,7 @@ function App(): JSX.Element {
           recordingState={autoRecordingState}
           postCaptureNotice={postCaptureNotice}
           onDismissPostCaptureNotice={() => setPostCaptureNotice(null)}
+          onRetryPostCaptureEmail={(meetingId, title) => void retryTranscriptEmail(meetingId, title)}
         />
       )}
       {view === 'people' && <PeopleScreen />}
