@@ -20,6 +20,7 @@ function loggablePath(path: string): string {
 export function registerApiProxyIpc(): void {
   ipcMain.handle('api:request', async (_event, req: ApiRequest) => {
     const path = loggablePath(req.path)
+    logger().info('[api-proxy] request', { method: req.method, path })
     try {
       const headers: Record<string, string> = { 'X-MN-User': getCurrentUser() }
       if (req.body !== undefined) headers['content-type'] = 'application/json'
