@@ -115,11 +115,25 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - AGENTS.md updated with Slice 1 delivered features and remaining blockers.
   - Commit: `(pending)`
 
-- [ ] `IN-68` — Implement MS Graph meeting detection
-## Not started
-  - All code implemented and fixture-verified. Blocked on live tenant credentials for final smoke.
-  - Graph client, filter, normaliser, time/poller, runtime with polling + resume, MSAL public-client auth, interactive sign-in.
-  - Remaining: live tenant config, interactive sign-in smoke, live calendar sync, redacted payload smoke.
+- [x] `IN-68` — Implement MS Graph meeting detection
+  - All code implemented and fixture-verified: Graph client, filter, normaliser, time/poller, runtime with polling + resume, MSAL public-client auth, interactive sign-in.
+  - Live smoke validated 2026-06-29:
+    - Interactive MSAL sign-in succeeded with old Entra app registration IDs mapped to v2 env vars (`MN_ENTRA_CLIENT_ID`, `MN_ENTRA_TENANT_ID`).
+    - Delegated Graph `/me/calendarView` returned real Teams meeting events.
+    - Detection identified `isOnlineMeeting: true`, `onlineMeetingProvider: 'teamsForBusiness'`, `isOrganizer: true`.
+    - Host gate passed (organiser verified).
+    - Auto-record triggered, renderer confirmed recording started.
+    - Auto-stop timer scheduled to meeting end time.
+    - Post-sign-in immediate sync verified (no 5-minute startup delay).
+    - Start-window gating added (`START_WINDOW_MS = 180000` / 3 min) — events >3 min away receive `not_due_yet`; only eligible within the window.
+    - Duplicate/spam protection: idempotency keys prevent re-recording the same event; completed keys tracked in state machine.
+    - Delta query support documented for future optimisation; webhooks remain unnecessary for Slice 1.
+    - `npm run verify:graph`, `npm run typecheck`, `npm run build`, `git diff --check` all pass.
+  - Remaining items reserved for packaging verification with signed installer:
+    - Verify auto-recording triggers from a cold Windows startup (tray + background).
+    - Verify auto-stop timer fires correctly on meeting end.
+    - Verify `.webm` saved, uploaded, and backend pipeline processes it.
+  - Commits: `cf2a475`, `a59bd92`, `bb33e2c`
 
 ## Test items to satisfy later
 
