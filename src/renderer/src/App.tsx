@@ -182,14 +182,17 @@ function App(): JSX.Element {
     setUser(null)
   }
 
+  const shellRecordingState = recording ? 'recording' : autoRecordingState
+
   return (
     <AppShell
       active={view === 'recording' ? null : view}
       onSelect={navigate}
       theme={theme}
       onToggleTheme={toggle}
+      recordingState={shellRecordingState}
       onOpenRecording={
-        recording && view !== 'recording' ? () => setView('recording') : null
+        recording ? () => setView('recording') : null
       }
       notifications={notifications}
       unreadCount={unread}

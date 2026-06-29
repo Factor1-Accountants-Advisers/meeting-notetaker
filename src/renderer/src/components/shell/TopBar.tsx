@@ -7,7 +7,8 @@ import type { Theme } from '@renderer/lib/theme'
 interface TopBarProps {
   theme: Theme
   onToggleTheme: () => void
-  /** Set while a recording session is active and the user is on another screen. */
+  recordingState?: 'idle' | 'recording' | 'processing'
+  /** Opens the active recording screen when one exists. */
   onOpenRecording?: (() => void) | null
   onOpenMeeting?: (id: string) => void
   notifications?: AppNotification[]
@@ -25,6 +26,7 @@ const kindIcon = {
 export function TopBar({
   theme,
   onToggleTheme,
+  recordingState = 'idle',
   onOpenRecording,
   onOpenMeeting,
   notifications = [],
@@ -53,6 +55,7 @@ export function TopBar({
     setResults(null)
     onOpenMeeting?.(id)
   }
+  const recordingActive = recordingState === 'recording' || recordingState === 'processing'
   return (
     <header
       className="flex h-10 items-center gap-3 border-b border-edge-tertiary bg-bg-secondary px-3"
@@ -110,15 +113,15 @@ export function TopBar({
         className="ml-auto flex items-center gap-1"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
-        {onOpenRecording && (
+        {recordingActive && (
           <button
             type="button"
-            onClick={onOpenRecording}
-            title="Return to recording"
+            onClick={onOpenRecording ?? undefined}
+            title={recordingState === 'recording' ? 'Recording is active' : 'Recording is processing'}
             className="mr-1 flex items-center gap-1.5 rounded-md bg-bg-danger px-2.5 py-1 text-[11px] font-medium text-content-danger"
           >
-            <span className="h-2 w-2 animate-pulse rounded-full bg-edge-danger" />
-            Recording
+            <span className={`h-2 w-2 rounded-full bg-edge-danger ${recordingState === 'recording' ? 'animate-pulse' : ''}`} />
+            {recordingState === 'recording' ? 'Recording now' : 'Processing recording'}
           </button>
         )}
         <button

@@ -10,6 +10,7 @@ interface AppShellProps {
   onSelect: (id: ScreenId) => void
   theme: Theme
   onToggleTheme: () => void
+  recordingState?: 'idle' | 'recording' | 'processing'
   onOpenRecording?: (() => void) | null
   onOpenMeeting?: (id: string) => void
   notifications?: AppNotification[]
@@ -23,6 +24,7 @@ export function AppShell({
   onSelect,
   theme,
   onToggleTheme,
+  recordingState = 'idle',
   onOpenRecording,
   onOpenMeeting,
   notifications,
@@ -35,6 +37,7 @@ export function AppShell({
       <TopBar
         theme={theme}
         onToggleTheme={onToggleTheme}
+        recordingState={recordingState}
         onOpenRecording={onOpenRecording}
         onOpenMeeting={onOpenMeeting}
         notifications={notifications}
