@@ -23,6 +23,12 @@ import { createWindow } from './window'
 import type { GraphEventDecision } from './graph/types'
 
 initLogger()
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+
+if (!gotSingleInstanceLock) {
+  app.quit()
+}
+
 registerAuthSessionIpc()
 registerApiProxyIpc()
 registerRecordingStorageIpc()
@@ -45,6 +51,24 @@ function registerRecordingIpcHandlers(): void {
 }
 
 registerRecordingIpcHandlers()
+
+function showMainWindow(): void {
+  const windows = BrowserWindow.getAllWindows()
+  if (windows.length > 0) {
+    windows[0].show()
+    windows[0].focus()
+  } else {
+    createWindow()
+  }
+}
+
+app.on('second-instance', (_event, argv) => {
+  if (argv.includes('--background') || argv.includes('--hidden')) {
+    logger().info('[app] background second instance ignored')
+    return
+  }
+  showMainWindow()
+})
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.factor1.notetaker')
@@ -129,15 +153,7 @@ app.whenReady().then(() => {
   }
 
   createWindow({ showOnReady: !isBackgroundLaunch() })
-  createTray(() => {
-    const windows = BrowserWindow.getAllWindows()
-    if (windows.length > 0) {
-      windows[0].show()
-      windows[0].focus()
-    } else {
-      createWindow()
-    }
-  })
+  createTray(showMainWindow)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

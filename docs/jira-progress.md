@@ -32,6 +32,7 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - App persists in tray when all windows are closed.
   - Packaged Windows builds default auto-launch on via `app.setLoginItemSettings({ openAtLogin: true, path: process.execPath, args: ['--background'] })`.
   - Login launch uses `--background` so the renderer is available for auto-recording but the main window stays hidden until tray/open action.
+  - Single-instance handling prevents a background login launch from creating a duplicate app; explicit user launches focus the existing window.
   - Settings includes an opt-out toggle; user choice is persisted and prevents the default from re-enabling automatically.
   - Tray menu updates live when recording state changes.
   - Verification: `npm run typecheck`, `npm run build`, `git diff --check`.
