@@ -57,10 +57,10 @@ class CaptureController {
       try {
         const sys = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
         if (sys.getAudioTracks().length === 0) throw new Error('no loopback track')
-        // Disable video track — stopping it tears down WASAPI on Windows.
-        sys.getVideoTracks().forEach((t) => {
-          t.enabled = false
-        })
+        // Keep video track enabled. Disabling it can re-trigger the Chromium
+        // bug where disabling a display-capture video track also silences its
+        // associated audio track (Electron #49607). MediaRecorder ignores
+        // video tracks — they are stopped with everything else on release.
         this.streams.push(sys)
         audioTracks.push(...sys.getAudioTracks())
         status.loopback = 'active'
