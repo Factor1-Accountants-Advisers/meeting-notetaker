@@ -36,7 +36,7 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Settings includes an opt-out toggle; user choice is persisted and prevents the default from re-enabling automatically.
   - Tray menu updates live when recording state changes.
   - Verification: `npm run typecheck`, `npm run build`, `git diff --check`.
-  - Commit: `a7db862`
+  - Commit: `a7db862`, `0630750`
 
 - [x] `IN-77` — Recording status UI
   - `HomeScreen` shows auto-recording status banner (recording / processing).
