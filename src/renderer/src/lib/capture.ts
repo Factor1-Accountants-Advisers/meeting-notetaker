@@ -64,6 +64,13 @@ class CaptureController {
         this.streams.push(sys)
         audioTracks.push(...sys.getAudioTracks())
         status.loopback = 'active'
+        // WSL: loopback audio may exist but be silent — WASAPI can't bridge
+        // host audio into WSL's virtualised sound stack. The packaged Windows
+        // build captures real system audio natively.
+        window.api.debugLog('loopback audio track acquired', {
+          trackCount: sys.getAudioTracks().length,
+          trackLabel: sys.getAudioTracks()[0]?.label ?? 'unknown'
+        })
       } catch {
         status.loopback = 'error'
       }

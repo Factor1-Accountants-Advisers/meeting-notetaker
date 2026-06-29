@@ -79,6 +79,11 @@ class OpenAIProvider:
         speaker_lines = "\n".join(
             f"[{s.speaker}]: {s.text}" for s in segments
         )
+        if len(speaker_lines) < 80:
+            return (
+                "The recording was too short to produce a meaningful summary. "
+                "Ensure system audio is being captured and try a longer recording."
+            )
         payload = {
             "model": self._model,
             "messages": [
@@ -118,6 +123,8 @@ class OpenAIProvider:
         speaker_lines = "\n".join(
             f"[{s.speaker}]: {s.text}" for s in segments
         )
+        if len(speaker_lines) < 80:
+            return []
         today_str = date_type.today().isoformat()
         payload = {
             "model": self._model,
