@@ -4,7 +4,12 @@ import { is } from '@electron-toolkit/utils'
 import { logger } from './logger'
 import { setMainWindow } from './recording-ipc'
 
-export function createWindow(): void {
+interface CreateWindowOptions {
+  showOnReady?: boolean
+}
+
+export function createWindow(options: CreateWindowOptions = {}): void {
+  const showOnReady = options.showOnReady ?? true
   logger().info('[window] creating main window')
   const mainWindow = new BrowserWindow({
     width: 1100,
@@ -27,7 +32,7 @@ export function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     logger().info('[window] ready to show')
-    mainWindow.show()
+    if (showOnReady) mainWindow.show()
   })
 
   mainWindow.on('closed', () => {

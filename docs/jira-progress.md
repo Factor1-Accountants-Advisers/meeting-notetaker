@@ -30,9 +30,12 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
 - [x] `IN-71` — Configure app to run at Windows startup and persist in system tray
   - System tray with status tooltip and context menu (Show / Quit).
   - App persists in tray when all windows are closed.
-  - `setAutoLaunch()` / `isAutoLaunchEnabled()` via `app.setLoginItemSettings`.
+  - Packaged Windows builds default auto-launch on via `app.setLoginItemSettings({ openAtLogin: true, path: process.execPath, args: ['--background'] })`.
+  - Login launch uses `--background` so the renderer is available for auto-recording but the main window stays hidden until tray/open action.
+  - Settings includes an opt-out toggle; user choice is persisted and prevents the default from re-enabling automatically.
   - Tray menu updates live when recording state changes.
-  - Commit: `(pending)`
+  - Verification: `npm run typecheck`, `npm run build`, `git diff --check`.
+  - Commit: `ad1f763`
 
 - [x] `IN-77` — Recording status UI
   - `HomeScreen` shows auto-recording status banner (recording / processing).

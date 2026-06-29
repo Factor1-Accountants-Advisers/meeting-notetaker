@@ -14,6 +14,13 @@ interface Props {
   onSignOut: () => void
 }
 
+interface AutoLaunchStatus {
+  supported: boolean
+  enabled: boolean
+  managedByDefault: boolean
+  reason?: string
+}
+
 export function SettingsScreen({
   theme,
   onToggleTheme,
@@ -23,6 +30,19 @@ export function SettingsScreen({
 }: Props): JSX.Element {
   const [prefs, setPrefs] = useState(loadPrefs)
   const [devices, setDevices] = useState<{ id: string; label: string }[]>([])
+  const [autoLaunch, setAutoLaunch] = useState<AutoLaunchStatus | null>(null)
+  const [autoLaunchBusy, setAutoLaunchBusy] = useState(false)
+
+  useEffect(() => {
+    void window.api?.getAutoLaunch?.().then(setAutoLaunch).catch(() =>
+      setAutoLaunch({
+        supported: false,
+        enabled: false,
+        managedByDefault: false,
+        reason: 'Startup settings are only available in the desktop app.'
+      })
+    )
+  }, [])
 
   useEffect(() => {
     navigator.mediaDevices
@@ -41,6 +61,16 @@ export function SettingsScreen({
     const next = { ...prefs, ...changes }
     setPrefs(next)
     savePrefs(next)
+  }
+
+  const updateAutoLaunch = async (enabled: boolean): Promise<void> => {
+    if (typeof window.api?.setAutoLaunch !== 'function') return
+    setAutoLaunchBusy(true)
+    try {
+      setAutoLaunch(await window.api.setAutoLaunch(enabled))
+    } finally {
+      setAutoLaunchBusy(false)
+    }
   }
 
   return (
@@ -137,6 +167,24 @@ export function SettingsScreen({
               <Moon size={13} strokeWidth={1.75} />
             )}
             {theme === 'dark' ? 'Switch to light' : 'Switch to dark'}
+          </button>
+        </SettingRow>
+        <SettingRow
+          label="Start at Windows sign-in"
+          hint="On by default in the packaged app so eligible Teams meetings can auto-record from the tray."
+        >
+          <button
+            type="button"
+            disabled={!autoLaunch?.supported || autoLaunchBusy}
+            onClick={() => void updateAutoLaunch(!(autoLaunch?.enabled ?? false))}
+            className={`flex min-w-[84px] items-center justify-center rounded-full px-2.5 py-1 text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+              autoLaunch?.enabled
+                ? 'bg-bg-info text-content-info'
+                : 'border-[0.5px] border-edge-secondary text-content-secondary hover:bg-bg-secondary'
+            }`}
+            title={autoLaunch?.reason}
+          >
+            {autoLaunchBusy ? 'Saving…' : autoLaunch?.enabled ? 'On' : 'Off'}
           </button>
         </SettingRow>
         <SettingRow label="Version" hint="Updates download in the background and install on restart">

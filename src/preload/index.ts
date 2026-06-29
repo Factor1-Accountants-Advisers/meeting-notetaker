@@ -43,6 +43,21 @@ const api = {
     message?: string
   }> => ipcRenderer.invoke('updates:check'),
 
+  /** Windows startup registration. Packaged Windows app defaults this on. */
+  getAutoLaunch: (): Promise<{
+    supported: boolean
+    enabled: boolean
+    managedByDefault: boolean
+    reason?: string
+  }> => ipcRenderer.invoke('startup:get-auto-launch'),
+
+  setAutoLaunch: (enabled: boolean): Promise<{
+    supported: boolean
+    enabled: boolean
+    managedByDefault: boolean
+    reason?: string
+  }> => ipcRenderer.invoke('startup:set-auto-launch', enabled),
+
   /** Interactive Microsoft sign-in via MSAL. Returns user info or null if failed/not configured. */
   signIn: (): Promise<{ ok: boolean; name?: string; email?: string; error?: string }> =>
     ipcRenderer.invoke('auth:sign-in'),

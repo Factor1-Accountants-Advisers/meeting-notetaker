@@ -16,6 +16,7 @@ import {
   sendAutoStartRequest
 } from './recording-ipc'
 import { registerRecordingStorageIpc } from './recording-storage'
+import { ensureDefaultAutoLaunchEnabled, isBackgroundLaunch, registerStartupIpc } from './startup'
 import { createTray, destroyTray, updateTrayMenu } from './tray'
 import { checkForUpdatesOnLaunch, registerUpdaterIpc } from './updater'
 import { createWindow } from './window'
@@ -26,6 +27,7 @@ registerAuthSessionIpc()
 registerApiProxyIpc()
 registerRecordingStorageIpc()
 registerUpdaterIpc()
+registerStartupIpc()
 
 function registerRecordingIpcHandlers(): void {
   ipcMain.on('recording:started', () => {
@@ -47,6 +49,7 @@ registerRecordingIpcHandlers()
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.factor1.notetaker')
   logger().info('[app] ready')
+  ensureDefaultAutoLaunchEnabled()
 
   checkForUpdatesOnLaunch()
   registerMediaPermissions()
@@ -125,7 +128,7 @@ app.whenReady().then(() => {
     })
   }
 
-  createWindow()
+  createWindow({ showOnReady: !isBackgroundLaunch() })
   createTray(() => {
     const windows = BrowserWindow.getAllWindows()
     if (windows.length > 0) {
