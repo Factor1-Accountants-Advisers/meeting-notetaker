@@ -25,7 +25,10 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Renderer→main IPC: `recording:started` / `recording:stopped` / `recording:error`.
   - Auto-stop timer: schedules `setTimeout` for meeting end time.
   - Renderer integration: `App.tsx` listens for auto-start/stop, creates meeting, starts capture, stops and uploads on auto-stop.
-  - Commit: `1df29d8`, `0000990`
+  - Graph metadata now flows through detection → auto-start IPC → meeting create/audio upload → backend meeting record (`title`, attendees, Graph event id, online meeting id, join URL, organiser email).
+  - Fixed auto-stop renderer callback to read the latest recording session via refs, so upload is not lost to a stale React closure.
+  - Verification: `npm run verify:graph`, `npm run typecheck`, `npm run build`, `git diff --check`, backend `compileall`, and a real FastAPI smoke for create/upload with Graph metadata.
+  - Commit: `1df29d8`, `0000990`, `9b74905`
 
 - [x] `IN-71` — Configure app to run at Windows startup and persist in system tray
   - System tray with status tooltip and context menu (Show / Quit).
