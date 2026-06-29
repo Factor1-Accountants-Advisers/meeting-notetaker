@@ -56,7 +56,7 @@ class StubSpeakerMatcher:
 
         owner = next(
             (p.display_name for p in store.PEOPLE if p.employee_id == meeting.owner_id),
-            "Joseph Guerrero",
+            meeting.owner_id or "Meeting owner",
         )
 
         label_map: dict[str, tuple[str, bool, float, str, str]] = {}
@@ -141,7 +141,7 @@ class CosineSpeakerMatcher:
 
         owner = next(
             (p.display_name for p in store.PEOPLE if p.employee_id == meeting.owner_id),
-            "Joseph Guerrero",
+            meeting.owner_id or "Meeting owner",
         )
 
         for label in speaker_labels:

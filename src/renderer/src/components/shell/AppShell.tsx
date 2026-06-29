@@ -16,6 +16,7 @@ interface AppShellProps {
   notifications?: AppNotification[]
   unreadCount?: number
   onNotificationsOpened?: () => void
+  userName?: string
   children: ReactNode
 }
 
@@ -30,6 +31,7 @@ export function AppShell({
   notifications,
   unreadCount,
   onNotificationsOpened,
+  userName,
   children
 }: AppShellProps): JSX.Element {
   return (
@@ -43,6 +45,7 @@ export function AppShell({
         notifications={notifications}
         unreadCount={unreadCount}
         onNotificationsOpened={onNotificationsOpened}
+        userName={userName}
       />
       <div className="flex min-h-0 flex-1">
         <NavRail active={active} onSelect={onSelect} />

@@ -43,9 +43,9 @@ export function LoginScreen({ onSignedIn }: Props): JSX.Element {
     }
 
     // Stub fallback only when MSAL is not configured (local/dev mode).
-    setTimeout(() => {
-      onSignedIn({ name: 'Joseph Guerrero', email: 'joseph.guerrero@factor1.ph' })
-    }, 700)
+    // No real sign-in path available — prompt user to configure an account.
+    setError('No Microsoft sign-in path available. Configure Entra ID credentials to sign in.')
+    setChecking(false)
   }
 
   return (

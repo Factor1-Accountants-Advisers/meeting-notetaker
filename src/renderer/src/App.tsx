@@ -350,6 +350,7 @@ function App(): JSX.Element {
       notifications={notifications}
       unreadCount={unread}
       onNotificationsOpened={markAllRead}
+      userName={user?.name}
     >
       {view === 'recording' && recording && (
         <RecordingScreen

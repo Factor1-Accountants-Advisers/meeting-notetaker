@@ -14,6 +14,7 @@ interface TopBarProps {
   notifications?: AppNotification[]
   unreadCount?: number
   onNotificationsOpened?: () => void
+  userName?: string
 }
 
 const kindIcon = {
@@ -31,7 +32,8 @@ export function TopBar({
   onOpenMeeting,
   notifications = [],
   unreadCount = 0,
-  onNotificationsOpened
+  onNotificationsOpened,
+  userName
 }: TopBarProps): JSX.Element {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResultDto[] | null>(null)
@@ -56,6 +58,17 @@ export function TopBar({
     onOpenMeeting?.(id)
   }
   const recordingActive = recordingState === 'recording' || recordingState === 'processing'
+  const initials = userName
+    ? userName
+        .split(' ')
+        .map(function (w) {
+          return w[0]
+        })
+        .filter(Boolean)
+        .slice(0, 2)
+        .join('')
+        .toUpperCase()
+    : '?'
   return (
     <header
       className="flex h-10 items-center gap-3 border-b border-edge-tertiary bg-bg-secondary px-3"
@@ -183,9 +196,9 @@ export function TopBar({
         </div>
         <div
           className="ml-1 flex h-7 w-7 items-center justify-center rounded-full bg-brand-navy text-[11px] font-medium text-white"
-          title="Joseph Guerrero"
+          title={userName ?? 'Signed-in user'}
         >
-          JG
+          {initials}
         </div>
       </div>
     </header>
