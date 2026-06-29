@@ -13,6 +13,16 @@ export interface AutoStartRequest {
   startTimeUtc: string
   endTimeUtc: string
   source: 'auto' | 'manual'
+  metadata?: GraphMeetingMetadata
+}
+
+export interface GraphMeetingMetadata {
+  title?: string
+  attendees: { name?: string; email?: string; response?: string }[]
+  meetingId: string
+  onlineMeetingId?: string
+  joinWebUrl?: string
+  organizerEmail?: string
 }
 
 export interface AutoStopRequest {

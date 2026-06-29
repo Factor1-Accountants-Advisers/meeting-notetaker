@@ -47,6 +47,18 @@ export function normaliseGraphEvent(
     onlineMeetingProvider: raw.onlineMeetingProvider,
     hasJoinUrl: Boolean(raw.onlineMeeting?.joinUrl),
     idempotencyKey: buildIdempotencyKey(id, start.utc),
+    metadata: {
+      title: raw.subject,
+      attendees: attendees.map((attendee) => ({
+        name: attendee.emailAddress?.name,
+        email: attendee.emailAddress?.address,
+        response: attendee.status?.response
+      })),
+      meetingId: id,
+      onlineMeetingId: raw.iCalUId,
+      joinWebUrl: raw.onlineMeeting?.joinUrl,
+      organizerEmail: raw.organizer?.emailAddress?.address
+    },
     invalidReasons
   }
 }

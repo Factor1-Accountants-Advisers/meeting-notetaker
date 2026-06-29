@@ -102,6 +102,13 @@ async function main(): Promise<void> {
   assert.equal(organiser.reason, 'eligible')
   assert.equal(organiser.autoRecordEligible, true)
   assert.equal(organiser.idempotencyKey, 'organiser:2026-06-26T01:00:00.000Z')
+  assert.equal(organiser.metadata.title, 'Client meeting')
+  assert.equal(organiser.metadata.meetingId, 'organiser')
+  assert.equal(organiser.metadata.onlineMeetingId, undefined)
+  assert.equal(organiser.metadata.joinWebUrl, 'https://teams.microsoft.com/l/meetup-join/redacted')
+  assert.equal(organiser.metadata.organizerEmail, signedInEmail)
+  assert.equal(organiser.metadata.attendees.length, 2)
+  assert.equal(organiser.metadata.attendees[1].email, 'client@example.com')
   assert.equal(organiser.logContext.eventIdHash.length, 12)
 
   const nonOrganiser = decisionFor(baseEvent({ id: 'non-organiser-auto', isOrganizer: false }))

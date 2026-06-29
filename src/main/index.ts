@@ -112,7 +112,8 @@ app.whenReady().then(() => {
         idempotencyKey: key,
         startTimeUtc: decision.logContext.startUtc ?? '',
         endTimeUtc: decision.logContext.endUtc ?? '',
-        source: 'auto'
+        source: 'auto',
+        metadata: decision.metadata
       })
     }
   }

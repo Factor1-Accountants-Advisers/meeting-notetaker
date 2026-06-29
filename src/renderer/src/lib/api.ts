@@ -33,6 +33,25 @@ export interface MeetingDto {
   unknown_speaker_count: number
   action_item_count: number
   pipeline_status: 'pending_audio' | 'queued' | 'processing' | 'ready' | 'failed'
+  graph_metadata?: GraphMeetingMetadataDto | null
+}
+
+export interface GraphMeetingMetadata {
+  title?: string
+  attendees: { name?: string; email?: string; response?: string }[]
+  meetingId: string
+  onlineMeetingId?: string
+  joinWebUrl?: string
+  organizerEmail?: string
+}
+
+export interface GraphMeetingMetadataDto {
+  title?: string
+  attendees: { name?: string; email?: string; response?: string }[]
+  meeting_id: string
+  online_meeting_id?: string | null
+  join_web_url?: string | null
+  organizer_email?: string | null
 }
 
 export interface ActionItemDto {
@@ -187,14 +206,16 @@ export async function finalizeMeeting(meetingId: string): Promise<MeetingDto | n
 export async function createMeeting(
   title: string,
   meetingLink: string | null,
-  source?: 'online' | 'in_person' | 'upload'
+  source?: 'online' | 'in_person' | 'upload',
+  graphMetadata?: GraphMeetingMetadata | null
 ): Promise<MeetingDto | null> {
   // Link present implies an online meeting (loopback + mic); otherwise in-person.
   // The link itself is only used for Graph title/attendee auto-fill later.
   return call<MeetingDto>('POST', '/meetings', {
     title,
     source: source ?? (meetingLink ? 'online' : 'in_person'),
-    meeting_link: meetingLink
+    meeting_link: meetingLink,
+    graph_metadata: graphMetadata ? toGraphMetadataDto(graphMetadata) : null
   })
 }
 
@@ -202,13 +223,26 @@ export async function uploadAudio(
   meetingId: string,
   audioB64: string,
   mimeType: string,
-  durationSeconds: number | null
+  durationSeconds: number | null,
+  graphMetadata?: GraphMeetingMetadata | null
 ): Promise<MeetingDto | null> {
   return call<MeetingDto>('POST', `/meetings/${meetingId}/audio`, {
     audio_b64: audioB64,
     mime_type: mimeType,
-    duration_seconds: durationSeconds
+    duration_seconds: durationSeconds,
+    graph_metadata: graphMetadata ? toGraphMetadataDto(graphMetadata) : null
   })
+}
+
+function toGraphMetadataDto(metadata: GraphMeetingMetadata): GraphMeetingMetadataDto {
+  return {
+    title: metadata.title,
+    attendees: metadata.attendees,
+    meeting_id: metadata.meetingId,
+    online_meeting_id: metadata.onlineMeetingId ?? null,
+    join_web_url: metadata.joinWebUrl ?? null,
+    organizer_email: metadata.organizerEmail ?? null
+  }
 }
 
 export async function retryPipeline(meetingId: string): Promise<MeetingDto | null> {

@@ -30,6 +30,23 @@ class PipelineStatus(str, Enum):
     failed = "failed"  # flagged for retry (requirements §4.4)
 
 
+class GraphMeetingAttendeeMetadata(BaseModel):
+    name: str | None = None
+    email: str | None = None
+    response: str | None = None
+
+
+class GraphMeetingMetadata(BaseModel):
+    """Calendar/Teams metadata carried from Graph detection to the backend."""
+
+    title: str | None = None
+    attendees: list[GraphMeetingAttendeeMetadata] = Field(default_factory=list)
+    meeting_id: str
+    online_meeting_id: str | None = None
+    join_web_url: str | None = None
+    organizer_email: str | None = None
+
+
 class Priority(str, Enum):
     high = "high"
     medium = "medium"
@@ -68,6 +85,7 @@ class Meeting(BaseModel):
     unknown_speaker_count: int = 0
     action_item_count: int = 0
     pipeline_status: PipelineStatus = PipelineStatus.pending_audio
+    graph_metadata: GraphMeetingMetadata | None = None
 
 
 class MeetingCreate(BaseModel):
@@ -75,6 +93,7 @@ class MeetingCreate(BaseModel):
     context: str = "Internal"
     source: MeetingSource
     meeting_link: str | None = None  # optional; only used for Graph auto-fill
+    graph_metadata: GraphMeetingMetadata | None = None
 
 
 class ActionItem(BaseModel):
@@ -165,6 +184,7 @@ class UploadAudioRequest(BaseModel):
     audio_b64: str = Field(min_length=1)
     mime_type: str = "audio/webm"
     duration_seconds: int | None = None  # client-measured; refined later
+    graph_metadata: GraphMeetingMetadata | None = None
 
 
 class PersonEnrollment(BaseModel):

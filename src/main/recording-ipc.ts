@@ -44,7 +44,8 @@ export function sendAutoStartRequest(recording: ActiveRecording): void {
     idempotencyKey: recording.idempotencyKey,
     startTimeUtc: recording.startTimeUtc,
     endTimeUtc: recording.endTimeUtc,
-    source: recording.source
+    source: recording.source,
+    metadata: recording.metadata
   })
 
   scheduleAutoStop(recording)

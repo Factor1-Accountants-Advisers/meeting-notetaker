@@ -64,6 +64,7 @@ async def create_meeting(body: MeetingCreate, actor: str = Actor) -> Meeting:
         source=body.source,
         owner_id="joseph",  # from auth once Entra ID lands
         created_at=datetime.now(timezone.utc),
+        graph_metadata=body.graph_metadata,
     )
     store.MEETINGS[meeting.id] = meeting
     # Creator owns the meeting (decision #7).
@@ -151,6 +152,8 @@ async def upload_audio(
     updates: dict[str, object] = {}
     if body.duration_seconds:
         updates["duration_seconds"] = body.duration_seconds
+    if body.graph_metadata:
+        updates["graph_metadata"] = body.graph_metadata
     if updates:
         store.MEETINGS[meeting_id] = meeting.model_copy(update=updates)
 

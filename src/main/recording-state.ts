@@ -14,6 +14,7 @@ export interface ActiveRecording {
   startTimeUtc: string
   endTimeUtc: string
   source: 'auto' | 'manual'
+  metadata?: unknown
 }
 
 export interface RecordingStateMachine {

@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AppShell } from './components/shell/AppShell'
 import { HomeScreen } from './screens/HomeScreen'
 import { PeopleScreen } from './screens/PeopleScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
 import { LoginScreen, type User } from './screens/LoginScreen'
 import { RecordingScreen, type RecordingSession } from './screens/RecordingScreen'
-import { createMeeting, uploadAudio } from './lib/api'
+import { createMeeting, uploadAudio, type GraphMeetingMetadata } from './lib/api'
 import { capture, type CaptureStatus } from './lib/capture'
 import { loadPrefs } from './lib/prefs'
 import { useNotifications } from './lib/useNotifications'
@@ -31,10 +31,17 @@ function App(): JSX.Element {
   const [user, setUser] = useState<User | null>(loadUser)
   const [view, setView] = useState<View>('home')
   const [recording, setRecording] = useState<RecordingSession | null>(null)
+  const recordingRef = useRef<RecordingSession | null>(null)
+  const autoGraphMetadataRef = useRef<GraphMeetingMetadata | null>(null)
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null)
   const [autoRecordingState, setAutoRecordingState] = useState<'idle' | 'recording' | 'processing'>('idle')
   const { theme, toggle } = useTheme()
   const { items: notifications, unread, markAllRead } = useNotifications(user !== null)
+
+  // Keep the latest recording session available to auto-stop callbacks.
+  useEffect(() => {
+    recordingRef.current = recording
+  }, [recording])
 
   // Keep the main process informed so backend calls carry the audit actor.
   useEffect(() => {
@@ -45,14 +52,17 @@ function App(): JSX.Element {
   useEffect(() => {
     if (!user || typeof window.api?.onAutoStartRequest !== 'function') return
 
-    const unsubStart = window.api.onAutoStartRequest(async (_data) => {
+    const unsubStart = window.api.onAutoStartRequest(async (data) => {
       try {
-        const created = await createMeeting('Auto-recorded meeting', null)
+        const graphMetadata = data.metadata ?? null
+        autoGraphMetadataRef.current = graphMetadata
+        const title = graphMetadata?.title?.trim() || 'Auto-recorded Teams meeting'
+        const created = await createMeeting(title, graphMetadata?.joinWebUrl ?? null, 'online', graphMetadata)
         const status = await capture.start('online', loadPrefs().micDeviceId)
         setCaptureStatus(status)
         setRecording({
           meetingId: created?.id ?? null,
-          title: 'Auto-recorded meeting',
+          title,
           source: 'online',
           startedAt: Date.now(),
           pausedAccum: 0,
@@ -69,8 +79,9 @@ function App(): JSX.Element {
     const unsubStop = window.api.onAutoStopRequest(async () => {
       try {
         setAutoRecordingState('processing')
-        const session = recording
+        const session = recordingRef.current
         const meetingId = session?.meetingId ?? null
+        const graphMetadata = autoGraphMetadataRef.current
         const durationSeconds = session ? Math.round(elapsedMs(session) / 1000) : null
         const blob = await capture.stop(session ? elapsedMs(session) : undefined)
         if (blob) {
@@ -85,12 +96,15 @@ function App(): JSX.Element {
               meetingId,
               await blobToBase64(blob),
               blob.type || 'audio/webm',
-              durationSeconds
+              durationSeconds,
+              graphMetadata
             )
           }
         }
         setRecording(null)
+        autoGraphMetadataRef.current = null
         setCaptureStatus(null)
+        setAutoRecordingState('idle')
         window.api.notifyRecordingStopped()
       } catch (err) {
         window.api.notifyRecordingError(err instanceof Error ? err.message : String(err))

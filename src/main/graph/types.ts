@@ -64,7 +64,23 @@ export interface NormalizedGraphEvent {
   onlineMeetingProvider?: string
   hasJoinUrl: boolean
   idempotencyKey?: string
+  metadata: GraphMeetingMetadata
   invalidReasons: GraphEventInvalidReason[]
+}
+
+export interface GraphMeetingAttendeeMetadata {
+  name?: string
+  email?: string
+  response?: string
+}
+
+export interface GraphMeetingMetadata {
+  title?: string
+  attendees: GraphMeetingAttendeeMetadata[]
+  meetingId: string
+  onlineMeetingId?: string
+  joinWebUrl?: string
+  organizerEmail?: string
 }
 
 export type GraphEventInvalidReason = 'missing_id' | 'invalid_start' | 'invalid_end' | 'invalid_time_range'
@@ -86,6 +102,7 @@ export type GraphDecisionReason =
 export interface GraphEventDecision {
   eventId: string
   idempotencyKey?: string
+  metadata: GraphMeetingMetadata
   status: 'candidate' | 'excluded'
   reason: GraphDecisionReason
   autoRecordEligible: boolean

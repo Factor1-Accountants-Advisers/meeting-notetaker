@@ -14,6 +14,7 @@ export function decideGraphEvent(
   return {
     eventId: event.id,
     idempotencyKey: event.idempotencyKey,
+    metadata: event.metadata,
     status: exclusion ? 'excluded' : 'candidate',
     reason,
     autoRecordEligible,
