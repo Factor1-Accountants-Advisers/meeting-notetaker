@@ -79,6 +79,7 @@ export type GraphDecisionReason =
   | 'invalid_time_range'
   | 'already_ended'
   | 'outside_lookahead'
+  | 'not_due_yet'
   | 'not_online_meeting'
   | 'not_organizer'
 
@@ -107,6 +108,7 @@ export interface GraphEventDecision {
 export interface GraphFilterOptions {
   now: Date
   lookaheadMs: number
+  autoStartLeadMs: number
   graceMs: number
   requireOnlineMeeting: boolean
   requireOrganizerForAutoRecord: boolean

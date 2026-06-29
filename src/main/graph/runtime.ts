@@ -12,6 +12,7 @@ import type { GraphEventDecision, GraphFilterOptions, RawGraphEvent } from './ty
 
 const DEFAULT_LOOKAHEAD_MS = 24 * 60 * 60 * 1000
 const DEFAULT_GRACE_MS = 10 * 60 * 1000
+const DEFAULT_AUTO_START_LEAD_MS = 3 * 60 * 1000
 const DEFAULT_POLL_INTERVAL_MS = 5 * 60 * 1000
 const RESUME_DEBOUNCE_MS = 15_000
 
@@ -236,6 +237,7 @@ function buildFilterOptions(now: Date): GraphFilterOptions {
   return {
     now,
     lookaheadMs: DEFAULT_LOOKAHEAD_MS,
+    autoStartLeadMs: DEFAULT_AUTO_START_LEAD_MS,
     graceMs: DEFAULT_GRACE_MS,
     requireOnlineMeeting: true,
     requireOrganizerForAutoRecord: true,

@@ -6,8 +6,10 @@ export function decideGraphEvent(
   options: GraphFilterOptions
 ): GraphEventDecision {
   const exclusion = getExclusionReason(event, options)
-  const autoRecordEligible = exclusion === undefined && (!options.requireOrganizerForAutoRecord || event.isOrganizer)
-  const reason: GraphDecisionReason = exclusion ?? (autoRecordEligible ? 'eligible' : 'not_organizer')
+  const organizerAllowed = !options.requireOrganizerForAutoRecord || event.isOrganizer
+  const dueForAutoStart = isDueForAutoStart(event, options)
+  const autoRecordEligible = exclusion === undefined && organizerAllowed && dueForAutoStart
+  const reason: GraphDecisionReason = exclusion ?? getCandidateReason(organizerAllowed, dueForAutoStart)
 
   return {
     eventId: event.id,
@@ -57,6 +59,18 @@ function getExclusionReason(
   }
 
   return undefined
+}
+
+function getCandidateReason(organizerAllowed: boolean, dueForAutoStart: boolean): GraphDecisionReason {
+  if (!organizerAllowed) return 'not_organizer'
+  if (!dueForAutoStart) return 'not_due_yet'
+  return 'eligible'
+}
+
+function isDueForAutoStart(event: NormalizedGraphEvent, options: GraphFilterOptions): boolean {
+  if (!event.startUtc) return false
+  const startMs = new Date(event.startUtc).getTime()
+  return startMs <= options.now.getTime() + options.autoStartLeadMs
 }
 
 function hashForLog(value: string): string {

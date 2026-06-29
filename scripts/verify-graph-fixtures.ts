@@ -13,10 +13,11 @@ import { createRecordingStateMachine } from '../src/main/recording-state.ts'
 import { parseGraphDateTime } from '../src/main/graph/time.ts'
 import type { GraphDecisionReason, GraphFilterOptions, RawGraphEvent } from '../src/main/graph/types.ts'
 
-const now = new Date('2026-06-26T00:00:00.000Z')
+const now = new Date('2026-06-26T00:58:00.000Z')
 const options: GraphFilterOptions = {
   now,
   lookaheadMs: 24 * 60 * 60 * 1000,
+  autoStartLeadMs: 3 * 60 * 1000,
   graceMs: 10 * 60 * 1000,
   requireOnlineMeeting: true,
   requireOrganizerForAutoRecord: true,
@@ -86,6 +87,15 @@ async function main(): Promise<void> {
     baseEvent({ id: 'future', start: { dateTime: '2026-06-27T02:00:01Z' }, end: { dateTime: '2026-06-27T03:00:00Z' } }),
     'outside_lookahead'
   )
+  expectReason(
+    'future meeting before auto-start window',
+    baseEvent({ id: 'not-due-yet', start: { dateTime: '2026-06-26T03:00:00Z' }, end: { dateTime: '2026-06-26T03:30:00Z' } }),
+    'not_due_yet'
+  )
+
+  const notDueYet = decisionFor(baseEvent({ id: 'not-due-auto', start: { dateTime: '2026-06-26T03:00:00Z' }, end: { dateTime: '2026-06-26T03:30:00Z' } }))
+  assert.equal(notDueYet.status, 'candidate')
+  assert.equal(notDueYet.autoRecordEligible, false)
 
   const organiser = decisionFor(baseEvent({ id: 'organiser' }))
   assert.equal(organiser.status, 'candidate')
