@@ -47,15 +47,17 @@ export function RecordingScreen({
   saving
 }: Props): JSX.Element {
   const [now, setNow] = useState(Date.now())
+  const [stopClicked, setStopClicked] = useState(false)
   const paused = session.pausedAt !== null
+  const isSaving = saving || stopClicked
 
   useEffect(() => {
-    if (paused || saving) return
+    if (paused || isSaving) return
     const id = window.setInterval(() => setNow(Date.now()), 500)
     return () => window.clearInterval(id)
-  }, [paused, saving])
+  }, [paused, isSaving])
 
-  if (saving) {
+  if (isSaving) {
     return (
       <div className="flex flex-col gap-4">
         <div>
@@ -123,7 +125,14 @@ export function RecordingScreen({
           )}
           <button
             type="button"
-            onClick={onStop}
+            onClick={() => {
+              setStopClicked(true)
+              window.api.debugLog('recording stop button clicked', {
+                meetingId: session.meetingId,
+                title: session.title
+              })
+              onStop()
+            }}
             className="flex items-center gap-1.5 rounded-md border-[0.5px] border-edge-danger bg-bg-danger px-4 py-2.5 text-[14px] text-content-danger"
           >
             <Square size={15} strokeWidth={1.75} />

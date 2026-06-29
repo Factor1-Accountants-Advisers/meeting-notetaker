@@ -43,6 +43,10 @@ const api = {
   saveRecording: (name: string, data: ArrayBuffer): Promise<{ path: string }> =>
     ipcRenderer.invoke('recording:save', name, data),
 
+  /** Renderer diagnostics mirrored into the main log for live desktop debugging. */
+  debugLog: (message: string, details?: unknown): void =>
+    ipcRenderer.send('renderer:debug-log', message, details),
+
   /** Audit actor for backend calls; cleared on sign-out. */
   setUser: (name: string): void => ipcRenderer.send('auth:set-user', name),
 

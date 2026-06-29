@@ -5,7 +5,7 @@ import { PeopleScreen } from './screens/PeopleScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
 import { LoginScreen, type User } from './screens/LoginScreen'
 import { RecordingScreen, type RecordingSession } from './screens/RecordingScreen'
-import { createMeeting, uploadAudio, type GraphMeetingMetadata } from './lib/api'
+import { createMeeting, fetchMeetingReview, uploadAudio, type GraphMeetingMetadata } from './lib/api'
 import { capture, type CaptureStatus } from './lib/capture'
 import { loadPrefs } from './lib/prefs'
 import { useNotifications } from './lib/useNotifications'
@@ -27,6 +27,13 @@ function loadUser(): User | null {
 
 type View = ScreenId | 'recording'
 
+type PostCaptureNotice = {
+  state: 'processing' | 'ready' | 'failed'
+  meetingId: string
+  title: string
+  message: string
+} | null
+
 function App(): JSX.Element {
   const [user, setUser] = useState<User | null>(loadUser)
   const [view, setView] = useState<View>('home')
@@ -36,6 +43,7 @@ function App(): JSX.Element {
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null)
   const [autoRecordingState, setAutoRecordingState] = useState<'idle' | 'recording' | 'processing'>('idle')
   const [submitting, setSubmitting] = useState(false)
+  const [postCaptureNotice, setPostCaptureNotice] = useState<PostCaptureNotice>(null)
   const { theme, toggle } = useTheme()
   const { items: notifications, unread, markAllRead } = useNotifications(user !== null)
 
@@ -133,10 +141,50 @@ function App(): JSX.Element {
     setView(id)
   }
 
+  const watchProcessing = (meetingId: string, title: string): void => {
+    setPostCaptureNotice({
+      state: 'processing',
+      meetingId,
+      title,
+      message: 'Recording uploaded. Processing transcript, summary, and action items…'
+    })
+
+    let attempts = 0
+    const poll = async (): Promise<void> => {
+      attempts += 1
+      const review = await fetchMeetingReview(meetingId)
+      const status = review?.meeting.pipeline_status
+      if (status === 'ready' && review) {
+        setPostCaptureNotice({
+          state: 'ready',
+          meetingId,
+          title,
+          message: `Notes are ready: ${review.segments.length} transcript segments and ${review.action_items.length} action items.`
+        })
+        return
+      }
+      if (status === 'failed') {
+        setPostCaptureNotice({
+          state: 'failed',
+          meetingId,
+          title,
+          message: 'Processing failed. The recording was saved and can be retried.'
+        })
+        return
+      }
+      if (attempts < 30) window.setTimeout(() => void poll(), 2000)
+    }
+
+    void poll()
+  }
+
   const startCapture = async (title: string, link: string | null): Promise<void> => {
     const source = link ? ('online' as const) : ('in_person' as const)
+    window.api.debugLog('manual start requested', { title, source })
     const created = await createMeeting(title, link)
+    window.api.debugLog('manual meeting create finished', { meetingId: created?.id ?? null })
     const status = await capture.start(source, loadPrefs().micDeviceId)
+    window.api.debugLog('manual capture start finished', { status })
     setCaptureStatus(status)
     setRecording({
       meetingId: created?.id ?? null,
@@ -153,8 +201,23 @@ function App(): JSX.Element {
     const session = recording
     const meetingId = session?.meetingId ?? null
     const durationSeconds = session ? Math.round(elapsedMs(session) / 1000) : null
+    window.api.debugLog('manual stop requested', { meetingId, durationSeconds })
     setSubmitting(true)
-    const blob = await capture.stop(session ? elapsedMs(session) : undefined)
+    let blob: Blob | null = null
+    try {
+      blob = await capture.stop(session ? elapsedMs(session) : undefined)
+      window.api.debugLog('capture stop resolved', {
+        hasBlob: Boolean(blob),
+        size: blob?.size ?? 0,
+        type: blob?.type ?? null
+      })
+    } catch (err) {
+      window.api.debugLog('capture stop failed', {
+        message: err instanceof Error ? err.message : String(err)
+      })
+      setSubmitting(false)
+      return
+    }
     if (blob) {
       // Local copy first (survives backend outages), then queue the pipeline.
       const name = `${meetingId ?? `local-${Date.now()}`}.webm`
@@ -165,14 +228,27 @@ function App(): JSX.Element {
         console.error('Failed to save recording', err)
       }
       if (meetingId) {
+        window.api.debugLog('audio upload starting', { meetingId, size: blob.size })
         const uploaded = await uploadAudio(
           meetingId,
           await blobToBase64(blob),
           blob.type || 'audio/webm',
           durationSeconds
         )
+        window.api.debugLog('audio upload finished', { meetingId, ok: Boolean(uploaded) })
         if (!uploaded) console.warn('Audio upload failed — backend unreachable')
+        if (uploaded) watchProcessing(meetingId, session?.title ?? 'Recording')
+        else {
+          setPostCaptureNotice({
+            state: 'failed',
+            meetingId,
+            title: session?.title ?? 'Recording',
+            message: 'Recording saved locally, but upload failed. Keep the app open and retry once backend is reachable.'
+          })
+        }
       }
+    } else {
+      window.api.debugLog('capture stop returned no blob', { meetingId })
     }
     setRecording(null)
     setCaptureStatus(null)
@@ -241,6 +317,8 @@ function App(): JSX.Element {
           onStartCapture={(t, l) => void startCapture(t, l)}
           onUploadRecording={(t, f) => void uploadRecording(t, f)}
           recordingState={autoRecordingState}
+          postCaptureNotice={postCaptureNotice}
+          onDismissPostCaptureNotice={() => setPostCaptureNotice(null)}
         />
       )}
       {view === 'people' && <PeopleScreen />}

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Mic, Plus, UserPlus } from 'lucide-react'
+import { CheckCircle2, Loader2, Mic, Plus, UserPlus, XCircle } from 'lucide-react'
 import { Card, SectionHeader } from '@renderer/components/ui/Card'
 
 interface HomeProps {
@@ -7,13 +7,21 @@ interface HomeProps {
   onStartCapture: (title: string, link: string | null) => void
   onUploadRecording: (title: string, file: File) => void
   recordingState?: 'idle' | 'recording' | 'processing'
+  postCaptureNotice?: {
+    state: 'processing' | 'ready' | 'failed'
+    title: string
+    message: string
+  } | null
+  onDismissPostCaptureNotice?: () => void
 }
 
 export function HomeScreen({
   userName,
   onStartCapture,
   onUploadRecording,
-  recordingState
+  recordingState,
+  postCaptureNotice,
+  onDismissPostCaptureNotice
 }: HomeProps): JSX.Element {
   return (
     <div className="flex flex-col gap-4">
@@ -24,7 +32,50 @@ export function HomeScreen({
           {recordingState === 'recording' ? 'Auto-recording in progress' : 'Processing recording…'}
         </div>
       )}
+      {postCaptureNotice && (
+        <PostCaptureNotice notice={postCaptureNotice} onDismiss={onDismissPostCaptureNotice} />
+      )}
       <CaptureCard onStart={onStartCapture} onUpload={onUploadRecording} />
+    </div>
+  )
+}
+
+function PostCaptureNotice({
+  notice,
+  onDismiss
+}: {
+  notice: NonNullable<HomeProps['postCaptureNotice']>
+  onDismiss?: () => void
+}): JSX.Element {
+  const icon =
+    notice.state === 'ready' ? (
+      <CheckCircle2 size={16} strokeWidth={1.75} />
+    ) : notice.state === 'failed' ? (
+      <XCircle size={16} strokeWidth={1.75} />
+    ) : (
+      <Loader2 className="animate-spin" size={16} strokeWidth={1.75} />
+    )
+  const toneClass =
+    notice.state === 'ready'
+      ? 'border-edge-success bg-bg-success text-content-success'
+      : notice.state === 'failed'
+        ? 'border-edge-danger bg-bg-danger text-content-danger'
+        : 'border-edge-info bg-bg-info text-content-info'
+
+  return (
+    <div className={`rounded-md border-[0.5px] px-3 py-2.5 ${toneClass}`}>
+      <div className="flex items-start gap-2">
+        <div className="mt-0.5 shrink-0">{icon}</div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[13px] font-medium">{notice.title}</div>
+          <div className="mt-0.5 text-[12px] opacity-90">{notice.message}</div>
+        </div>
+        {notice.state !== 'processing' && onDismiss && (
+          <button type="button" className="text-[12px] opacity-80 hover:opacity-100" onClick={onDismiss}>
+            Dismiss
+          </button>
+        )}
+      </div>
     </div>
   )
 }

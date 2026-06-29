@@ -36,6 +36,10 @@ registerUpdaterIpc()
 registerStartupIpc()
 
 function registerRecordingIpcHandlers(): void {
+  ipcMain.on('renderer:debug-log', (_event, message: string, details?: unknown) => {
+    logger().info('[renderer]', { message, details })
+  })
+
   ipcMain.on('recording:started', () => {
     handleRendererRecordingStarted()
     updateTrayMenu()
