@@ -63,6 +63,6 @@ class PyannoteAITranscriptionProvider:
 
 def get_speech_provider() -> SpeechProvider:
     settings = get_settings()
-    if settings.pyannote_api_endpoint:
+    if settings.pyannote_api_endpoint or settings.pyannote_hf_token:
         return PyannoteAITranscriptionProvider()
     return StubSpeechProvider()
