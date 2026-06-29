@@ -85,10 +85,10 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Token injection: `api-proxy.ts` attaches `X-MN-Graph-Token` header on email endpoints.
   - Jira-aligned trigger: email is allowed once `pipeline_status == ready`; no finalise/review gate required.
   - Recipient rules: Graph attendee emails for calendar-linked recordings; recorder email fallback for manual/ad-hoc recordings.
-  - Error handling: 502 with logged detail on Graph delivery failure; UI shows retryable email failure without losing recording.
-  - Stub fallback when no Graph token available (logs instead of sending).
+  - Error handling: 502 with logged detail on Graph delivery failure; missing Graph token returns 401 instead of fake stub success; UI shows retryable email failure without losing recording.
+  - Stub provider remains available for direct unit tests, but the API endpoint requires a Graph token for user-visible email delivery.
   - All email actions audit-logged with recipients.
-  - Verification: `scripts/verify-email-jira-flow.py`; live smoke create → upload → ready → email returned `recipients:["joseph@example.com"]`.
+  - Verification: `scripts/verify-email-jira-flow.py`; live no-token smoke now returns `401 Outlook sign-in is required` instead of fake success.
   - Commit: `(pending)`
 
 - [x] `IN-72` — UI cleanup: remove per-calendar-meeting Record button

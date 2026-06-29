@@ -123,9 +123,29 @@ async def test_calendar_recording_emails_graph_attendees_without_finalise():
     assert "Meeting notes: Jira email smoke" == sent[0]["subject"]
 
 
+async def test_missing_graph_token_does_not_fake_send_success():
+    sent = []
+    meetings_router.get_email_provider = lambda token=None: CaptureEmailProvider(sent)
+    meeting_id = reset_meeting()
+
+    try:
+        await meetings_router.email_notes(
+            meeting_id,
+            EmailRequest(note=None, recorder_email="joseph@example.com"),
+            actor="Joseph Guerrero",
+            graph_token="",
+        )
+    except HTTPException as exc:
+        assert exc.status_code == 401, exc.status_code
+        assert not sent, "email provider should not be called without Graph token"
+        return
+    raise AssertionError("missing Graph token should not report email success")
+
+
 async def main():
     await run_case("manual ad-hoc email", test_manual_ad_hoc_emails_recorder_without_finalise)
     await run_case("calendar attendee email", test_calendar_recording_emails_graph_attendees_without_finalise)
+    await test_missing_graph_token_does_not_fake_send_success()
     print("email Jira flow passed")
 
 

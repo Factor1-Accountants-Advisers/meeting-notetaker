@@ -206,6 +206,11 @@ async def email_notes(
     recipients = _email_recipients(meeting, body.recorder_email)
     if not recipients:
         raise HTTPException(status.HTTP_409_CONFLICT, "No email recipients resolved")
+    if not graph_token:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "Outlook sign-in is required before transcript email can be sent",
+        )
 
     summary = store.SUMMARIES.get(meeting_id, "")
     note = f"{body.note}\n\n" if body.note else ""

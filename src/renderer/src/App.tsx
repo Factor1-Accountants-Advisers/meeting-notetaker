@@ -174,7 +174,7 @@ function App(): JSX.Element {
             state: 'failed',
             meetingId,
             title,
-            message: 'Notes are ready, but the transcript email failed. You can retry without re-recording.'
+            message: 'Notes are ready, but the transcript email was not sent. Sign in to Outlook, then retry email.'
           })
         }
         return
