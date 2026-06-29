@@ -8,25 +8,33 @@ distribution.
 
 ## Status
 
-All product flows work end to end against **local stubs** — Azure credentials
+All product flows work end to end against **local stubs** — cloud credentials
 are the only missing piece. See [`docs/azure-setup.md`](docs/azure-setup.md)
 for the provisioning runbook; each credential flips a stub via `MN_*` env vars.
 
-Working today: capture (WASAPI loopback + mic), processing pipeline with
-queued/processing/ready states, review with transcript editing and speaker
-naming, finalize gating, email distribution (stub send), voiceprint
-enrollment, per-meeting access control, audit log, global search,
-notifications, auto-update wiring, CI release workflow.
+Working today: MS Graph calendar detection with polling runtime, auto-start/stop
+recording with idempotency, MSAL interactive sign-in, WASAPI loopback + mic
+capture, processing pipeline with queued/processing/ready states, Pyannote
+voiceprint enrollment and speaker matching (stub until HF token provisioned),
+OpenAI summaries/action items (stub until `MN_OPENAI_API_KEY` set), Graph
+delegated email with transcript attachment, Windows startup + tray persistence,
+recording status UI, per-meeting access control, audit log, auto-update wiring,
+CI release workflow.
+
+Slice 1 Jira items are code-complete and fixture-verified. See
+[`docs/jira-progress.md`](docs/jira-progress.md) for commit evidence.
 
 ## Documentation
 
 | File | Audience |
 |---|---|
+| `C:\Users\JosephMiguelGuerrero\Downloads\IN-64_Export_*.csv` | **Source of truth** — Jira export of Slice 1 child issues |
+| [`notetaker-scoping-document.md`](C:\Users\JosephMiguelGuerrero\Downloads\notetaker-scoping-document.md) | Project scope, slices 1–5, interdependencies |
 | [`AGENTS.md`](AGENTS.md) | AI coding agents (Codex, Cursor, …) — canonical rules |
-| [`CLAUDE.md`](CLAUDE.md) | Claude Code — machine-specific notes on top of AGENTS.md |
-| [`docs/requirements.md`](docs/requirements.md) | Product requirements, locked decisions |
+| [`docs/jira-progress.md`](docs/jira-progress.md) | Implementation evidence ledger with commit hashes |
 | [`docs/design-handoff.md`](docs/design-handoff.md) | Design system + mockups guide |
-| [`docs/azure-setup.md`](docs/azure-setup.md) | Azure provisioning, stub→real map |
+| [`docs/azure-setup.md`](docs/azure-setup.md) | Cloud provisioning, stub→real map |
+| [`docs/requirements.md`](docs/requirements.md) | Historical/background — do not override Jira with it |
 
 ## Develop
 

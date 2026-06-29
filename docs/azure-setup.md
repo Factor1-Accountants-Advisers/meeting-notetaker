@@ -56,11 +56,18 @@ transcription and voiceprint identification.
   transcript provider in `backend/app/services/speech.py` and enables real
   voiceprint embeddings in `backend/app/services/speaker_embeddings.py`
 
-## 6. Azure OpenAI
+## 6. OpenAI (summaries + action items)
 
-- Azure OpenAI resource + a chat deployment (e.g. `gpt-4o`)
-- Set `MN_OPENAI_ENDPOINT` and `MN_OPENAI_DEPLOYMENT` → replaces the stub
-  LLM provider in `backend/app/services/llm.py`
+The LLM provider supports both Azure OpenAI and direct OpenAI API keys.
+Set one or the other; the factory picks the first available.
+
+- **Option A — Direct OpenAI key:** Set `MN_OPENAI_API_KEY` → activates
+  `OpenAIProvider` against `api.openai.com`. No Azure provisioning needed.
+- **Option B — Azure OpenAI:** Provision an Azure OpenAI resource + chat
+  deployment (e.g. `gpt-4o`). Set `MN_OPENAI_ENDPOINT` and
+  `MN_OPENAI_DEPLOYMENT` → activates `AzureOpenAIProvider`.
+
+If neither is set, `StubLLMProvider` returns deterministic placeholder output.
 
 ## 7. Code signing + releases
 
@@ -77,7 +84,7 @@ transcription and voiceprint identification.
 | `backend/var/audio` files | Blob Storage `audio` container | `MN_BLOB_ACCOUNT_URL` |
 | `backend/var/store.json` | PostgreSQL | `MN_POSTGRES_DSN` |
 | `StubSpeechProvider` | PyannoteAI transcription/speaker ID | `MN_PYANNOTE_API_ENDPOINT` / `MN_PYANNOTE_HF_TOKEN` |
-| `StubLLMProvider` | Azure OpenAI | `MN_OPENAI_ENDPOINT` + `MN_OPENAI_DEPLOYMENT` |
+| `StubLLMProvider` | OpenAI (direct or Azure) | `MN_OPENAI_API_KEY` or `MN_OPENAI_ENDPOINT` + `MN_OPENAI_DEPLOYMENT` |
 | `StubEmailProvider` (logs) | Graph sendMail | `MN_KEY_VAULT_URL` |
 | Dev sign-in stub | Entra ID via MSAL | tenant + client ID (main process) |
 | Display-name actor header | Entra token subject | with MSAL wiring |
