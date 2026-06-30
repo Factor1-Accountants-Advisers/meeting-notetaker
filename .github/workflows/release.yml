@@ -1,491 +1,55 @@
-name: Build and Release NSIS
+# Release build (decision #12): tag vX.Y.Z -> build, sign, publish.
+#
+# Until the code-signing certificate and the Azure Blob update feed exist,
+# this produces an UNSIGNED installer as a workflow artifact. To go live:
+#   1. Add secrets CSC_LINK (base64 PFX) + CSC_KEY_PASSWORD, or switch to
+#      Azure Trusted Signing, and remove the signAndEditExecutable override.
+#   2. Add AZURE_STORAGE_CONNECTION_STRING and uncomment the publish step
+#      so the installer + latest.yml land in the Blob update feed.
+
+name: Release
 
 on:
   push:
     tags:
       - 'v*'
-  # Allow manual triggering for debugging without needing a tag
-  workflow_dispatch:
 
 jobs:
-  release:
+  build-windows:
     runs-on: windows-latest
-    permissions:
-      contents: write  # Required to create GitHub Releases and upload assets
-
-    env:
-      # Match the developer's local python-runtime version exactly so the
-      # bundled binary is ABI-compatible with what was tested locally.
-      PYTHON_VERSION: '3.12.9'
-      # Verbose output from electron-builder so we can see what's bundled
-      DEBUG: 'electron-builder'
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # ── Node.js ────────────────────────────────────────────────────────────
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: desktop/package-lock.json
+          node-version: 22
+          cache: npm
 
-      - name: Install web dependencies
+      - name: Install dependencies
         run: npm ci
-        working-directory: web
 
-      - name: Install desktop dependencies
-        run: npm ci
-        working-directory: desktop
+      - name: Type check
+        run: npm run typecheck
 
-      # ── Python runtime cache (speeds up retries) ───────────────────────────
-      # Cache key is bound to requirements-base.txt — bumps automatically when
-      # backend dependencies change.
-      #
-      # IMPORTANT: bump the trailing -vN suffix any time you change the setup
-      # logic. Earlier runs (pre-v3) silently cached partial/broken runtimes
-      # because $ErrorActionPreference was 'Continue' and pip failures didn't
-      # halt the build. Those poisoned caches kept producing incomplete installers.
-      - name: Cache python-runtime
-        id: python-cache
-        uses: actions/cache@v4
-        with:
-          path: desktop/python-runtime
-          key: python-runtime-${{ env.PYTHON_VERSION }}-${{ hashFiles('backend/requirements-base.txt') }}-v3
+      - name: Build installer (unsigned until cert lands)
+        # CI runners have symlink rights, so exe metadata editing is re-enabled
+        # here (it is disabled in electron-builder.yml for dev machines).
+        run: npx electron-vite build && npx electron-builder --publish never --config.win.signAndEditExecutable=true
 
-      # ── Python runtime setup ───────────────────────────────────────────────
-      - name: Set up embedded Python runtime
-        if: steps.python-cache.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $VerbosePreference = 'Continue'
-
-          # Wrap everything in a try/catch so any error — even ones that don't
-          # set $LASTEXITCODE — gets logged and aborts the build cleanly.
-          try {
-            $repoRoot   = $env:GITHUB_WORKSPACE
-            $runtimeDir = Join-Path $repoRoot "desktop" "python-runtime"
-            $pythonExe  = Join-Path $runtimeDir "python.exe"
-            $reqFile    = Join-Path $repoRoot "backend" "requirements-base.txt"
-
-            Write-Host "═══════════════════════════════════════════════════════════"
-            Write-Host "Python runtime setup"
-            Write-Host "═══════════════════════════════════════════════════════════"
-            Write-Host "  Repo root  : $repoRoot"
-            Write-Host "  Runtime dir: $runtimeDir"
-            Write-Host "  python.exe : $pythonExe"
-            Write-Host "  Requirements: $reqFile"
-            Write-Host "  Python ver : $env:PYTHON_VERSION"
-            Write-Host ""
-
-            # ── 1. Verify requirements file exists ──────────────────────────
-            if (-not (Test-Path $reqFile)) {
-              throw "Requirements file not found: $reqFile"
-            }
-            Write-Host "✓ Requirements file found ($((Get-Item $reqFile).Length) bytes)"
-
-            # ── 2. Clean any stale runtime directory ────────────────────────
-            if (Test-Path $runtimeDir) {
-              Write-Host "Removing stale runtime dir..."
-              Remove-Item -Recurse -Force $runtimeDir
-            }
-            New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
-
-            # ── 3. Download embeddable Python ───────────────────────────────
-            $zipUrl  = "https://www.python.org/ftp/python/$env:PYTHON_VERSION/python-$env:PYTHON_VERSION-embed-amd64.zip"
-            $zipPath = Join-Path $repoRoot "python-embed.zip"
-
-            Write-Host ""
-            Write-Host "── Downloading $zipUrl ──"
-            $ProgressPreference = 'SilentlyContinue'  # speeds up Invoke-WebRequest
-            Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
-            $zipSize = (Get-Item $zipPath).Length
-            Write-Host "✓ Downloaded ($([Math]::Round($zipSize / 1MB, 2)) MB)"
-
-            # ── 4. Extract ──────────────────────────────────────────────────
-            Write-Host ""
-            Write-Host "── Extracting to $runtimeDir ──"
-            Expand-Archive -Path $zipPath -DestinationPath $runtimeDir -Force
-            Remove-Item $zipPath
-
-            if (-not (Test-Path $pythonExe)) {
-              Write-Host "❌ Contents of $runtimeDir after extraction:"
-              Get-ChildItem $runtimeDir | Format-Table Name, Length
-              throw "python.exe missing at $pythonExe after extraction"
-            }
-            Write-Host "✓ python.exe present"
-
-            # Show what we have so far
-            Write-Host ""
-            Write-Host "── Embeddable Python contents ──"
-            Get-ChildItem $runtimeDir | Format-Table Name, Length, LastWriteTime
-
-            # Quick sanity check: can python.exe even start?
-            Write-Host ""
-            Write-Host "── Verifying python.exe runs ──"
-            $pythonVersionOutput = & $pythonExe --version 2>&1
-            Write-Host "  $pythonVersionOutput"
-            if ($LASTEXITCODE -ne 0) { throw "python.exe failed to run (exit $LASTEXITCODE)" }
-
-            # ── 5. Configure _pth file to enable site-packages ──────────────
-            Write-Host ""
-            Write-Host "── Configuring _pth file ──"
-            $pthFile = Get-ChildItem -Path $runtimeDir -File |
-                       Where-Object { $_.Name -match '\._pth$' } |
-                       Select-Object -First 1
-
-            if (-not $pthFile) {
-              Write-Host "❌ Files in runtime dir:"
-              Get-ChildItem $runtimeDir -File | Format-Table Name
-              throw "No _pth file found in Python runtime"
-            }
-            Write-Host "  Found: $($pthFile.Name)"
-            Write-Host "  Original contents:"
-            Get-Content $pthFile.FullName | ForEach-Object { Write-Host "    > $_" }
-
-            $pthLines = Get-Content $pthFile.FullName |
-                        ForEach-Object { $_ -replace '^#import site', 'import site' }
-            $pthLines | Set-Content $pthFile.FullName -Encoding ASCII
-
-            Write-Host "  Updated contents:"
-            Get-Content $pthFile.FullName | ForEach-Object { Write-Host "    > $_" }
-
-            # ── 6. Bootstrap pip ────────────────────────────────────────────
-            Write-Host ""
-            Write-Host "── Bootstrapping pip ──"
-            $getPipPath = Join-Path $repoRoot "get-pip.py"
-            Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile $getPipPath -UseBasicParsing
-
-            # Capture pip bootstrap output to surface any silent failures
-            & $pythonExe $getPipPath --no-warn-script-location 2>&1 | ForEach-Object { Write-Host "  pip-bootstrap> $_" }
-            if ($LASTEXITCODE -ne 0) { throw "pip bootstrap failed (exit $LASTEXITCODE)" }
-
-            $pipExe = Join-Path $runtimeDir "Scripts" "pip.exe"
-            if (Test-Path $pipExe) { Write-Host "✓ pip installed at $pipExe" }
-            Remove-Item $getPipPath
-
-            # ── 7. Install backend requirements ─────────────────────────────
-            Write-Host ""
-            Write-Host "── Installing backend requirements ──"
-            Write-Host "  Source: $reqFile"
-            Get-Content $reqFile | ForEach-Object { Write-Host "    | $_" }
-            Write-Host ""
-
-            & $pythonExe -m pip install `
-              --no-warn-script-location `
-              --no-compile `
-              --disable-pip-version-check `
-              -r $reqFile 2>&1 | ForEach-Object { Write-Host "  pip> $_" }
-
-            if ($LASTEXITCODE -ne 0) { throw "pip install requirements failed (exit $LASTEXITCODE)" }
-
-            # ── 8. Final verification ───────────────────────────────────────
-            $sitePackages = Join-Path $runtimeDir "Lib" "site-packages"
-            if (-not (Test-Path $sitePackages)) {
-              throw "Lib/site-packages missing — packages did not install correctly"
-            }
-
-            $pkgCount = (Get-ChildItem $sitePackages -Directory -ErrorAction SilentlyContinue).Count
-            $totalSize = (Get-ChildItem $runtimeDir -Recurse -File | Measure-Object -Property Length -Sum).Sum
-            $sizeMB = [Math]::Round($totalSize / 1MB, 2)
-
-            Write-Host ""
-            Write-Host "═══════════════════════════════════════════════════════════"
-            Write-Host "Python runtime setup COMPLETE"
-            Write-Host "═══════════════════════════════════════════════════════════"
-            Write-Host "  Total size       : $sizeMB MB"
-            Write-Host "  Packages installed: $pkgCount"
-            Write-Host "  python.exe       : $(Test-Path $pythonExe)"
-            Write-Host "  site-packages    : $(Test-Path $sitePackages)"
-            Write-Host ""
-
-            # Sanity check: can we actually import a key package?
-            Write-Host "── Smoke test: import key packages ──"
-            $importTest = & $pythonExe -c "import fastapi, assemblyai, openai, sqlalchemy, alembic, aiosqlite; print('OK')" 2>&1
-            Write-Host "  Result: $importTest"
-            if ($LASTEXITCODE -ne 0) {
-              throw "Package import smoke test failed — runtime is incomplete"
-            }
-
-          } catch {
-            Write-Host ""
-            Write-Host "❌ PYTHON RUNTIME SETUP FAILED"
-            Write-Host "Error: $_"
-            Write-Host "Stack: $($_.ScriptStackTrace)"
-            exit 1
-          }
-
-      # ── Verify cached or freshly-built runtime is usable ──────────────────
-      # This runs UNCONDITIONALLY (no cache-hit guard) and includes the same
-      # smoke test as the setup step, so a poisoned cache cannot sneak through.
-      - name: Verify python-runtime
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $runtimeDir   = Join-Path $env:GITHUB_WORKSPACE "desktop" "python-runtime"
-          $pythonExe    = Join-Path $runtimeDir "python.exe"
-          $sitePackages = Join-Path $runtimeDir "Lib" "site-packages"
-
-          Write-Host "── Verifying python-runtime ──"
-          Write-Host "  Cache hit: ${{ steps.python-cache.outputs.cache-hit }}"
-
-          if (-not (Test-Path $pythonExe)) {
-            throw "python.exe missing at $pythonExe — runtime invalid"
-          }
-
-          # site-packages must exist — this is the bit that's most likely to be
-          # incomplete in a poisoned cache.
-          if (-not (Test-Path $sitePackages)) {
-            throw "Lib/site-packages missing — runtime is incomplete (broken cache?)"
-          }
-
-          $totalSize  = (Get-ChildItem $runtimeDir -Recurse -File | Measure-Object Length -Sum).Sum
-          $sizeMB     = [Math]::Round($totalSize / 1MB, 2)
-          $fileCount  = (Get-ChildItem $runtimeDir -Recurse -File).Count
-          $pkgCount   = (Get-ChildItem $sitePackages -Directory -ErrorAction SilentlyContinue).Count
-
-          Write-Host "  Total size       : $sizeMB MB"
-          Write-Host "  File count       : $fileCount"
-          Write-Host "  Site-packages dirs: $pkgCount"
-
-          # A healthy runtime is ~110 MB after installing requirements-base.txt.
-          # 80 MB is a generous floor; anything below means packages are missing.
-          if ($sizeMB -lt 80) {
-            throw "python-runtime is only $sizeMB MB — packages didn't install fully (expected ~110 MB)"
-          }
-
-          # The real test: can we actually import every backend package?
-          # This catches partial installs that pass the size check.
-          Write-Host ""
-          Write-Host "── Smoke test: import key packages ──"
-          $importTest = & $pythonExe -c "import fastapi, assemblyai, openai, sqlalchemy, alembic, aiosqlite; print('OK')" 2>&1
-          Write-Host "  Result: $importTest"
-          if ($LASTEXITCODE -ne 0) {
-            throw "Smoke test failed — runtime cannot import required packages (likely a poisoned cache; bump the cache key suffix in this workflow)"
-          }
-          Write-Host "✓ python-runtime is healthy"
-
-      - name: Package python-runtime archive
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $runtimeDir = Join-Path $env:GITHUB_WORKSPACE "desktop" "python-runtime"
-          $archive = Join-Path $env:GITHUB_WORKSPACE "desktop" "python-runtime.zip"
-          if (Test-Path $archive) { Remove-Item $archive -Force }
-          Compress-Archive -Path (Join-Path $runtimeDir '*') -DestinationPath $archive -CompressionLevel Optimal
-          $sizeMB = [Math]::Round((Get-Item $archive).Length / 1MB, 2)
-          Write-Host "✓ python-runtime.zip written ($sizeMB MB)"
-
-      # ── Production environment ─────────────────────────────────────────────
-      - name: Create .env.production
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          # Only public desktop config belongs in the installer. Long-lived
-          # provider/update credentials are installed per-user at runtime via
-          # desktop/scripts/install-runtime-config.ps1 or a future backend.
-          $lines = @(
-            "ENVIRONMENT=production",
-            "AZURE_AD_TENANT_ID=${{ secrets.AZURE_AD_TENANT_ID }}",
-            "AZURE_AD_CLIENT_ID=${{ secrets.AZURE_AD_CLIENT_ID }}"
-          )
-          $envFile = Join-Path $env:GITHUB_WORKSPACE "desktop" ".env.production"
-          $lines | Set-Content $envFile -Encoding UTF8
-          Write-Host "✓ .env.production written ($((Get-Item $envFile).Length) bytes)"
-
-      # ── Build app (web + electron) ─────────────────────────────────────────
-      - name: Build app (web + electron)
-        run: npm run build
-        working-directory: desktop
-
-      # ── Pre-package inspection ─────────────────────────────────────────────
-      # Last chance to verify python-runtime is in place before electron-builder
-      # tries to bundle it.
-      - name: Pre-package inspection
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $runtimeDir = Join-Path $env:GITHUB_WORKSPACE "desktop" "python-runtime"
-          $webOut     = Join-Path $env:GITHUB_WORKSPACE "desktop" "web-out"
-          $distDir    = Join-Path $env:GITHUB_WORKSPACE "desktop" "dist"
-
-          Write-Host "── Pre-package inspection ──"
-          Write-Host ""
-          Write-Host "python-runtime/:"
-          if (Test-Path $runtimeDir) {
-            $size = [Math]::Round((Get-ChildItem $runtimeDir -Recurse -File | Measure-Object Length -Sum).Sum / 1MB, 2)
-            $count = (Get-ChildItem $runtimeDir -Recurse -File).Count
-            Write-Host "  ✓ exists, $size MB, $count files"
-          } else {
-            throw "❌ python-runtime/ missing!"
-          }
-
-          Write-Host ""
-          Write-Host "web-out/ (Next.js export):"
-          if (Test-Path $webOut) {
-            $size = [Math]::Round((Get-ChildItem $webOut -Recurse -File | Measure-Object Length -Sum).Sum / 1MB, 2)
-            Write-Host "  ✓ exists, $size MB"
-          } else {
-            throw "❌ web-out/ missing — Next.js build did not run"
-          }
-
-          Write-Host ""
-          Write-Host "dist/ (compiled TS):"
-          if (Test-Path $distDir) {
-            Write-Host "  ✓ exists"
-          } else {
-            throw "❌ dist/ missing — TypeScript compilation did not run"
-          }
-
-      # ── Build NSIS installer ────────────────────────────────────────────────
-      # We split the build from the publish step so we can inspect the
-      # unpacked output BEFORE uploading anything to GitHub Releases.
-      - name: Build NSIS installer (no publish yet)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --win --publish never
-        working-directory: desktop
-
-      # ── Post-build inspection ──────────────────────────────────────────────
-      # Hard-fail if python-runtime didn't end up in the unpacked output.
-      - name: Verify NSIS contents
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $unpackedDir   = Join-Path $env:GITHUB_WORKSPACE "desktop" "release" "win-unpacked"
-          $resourcesDir  = Join-Path $unpackedDir "resources"
-          $pythonArchiveInInstaller = Join-Path $resourcesDir "python-runtime.zip"
-          $backendInInstaller = Join-Path $resourcesDir "backend" "app" "main.py"
-          $envInInstaller = Join-Path $resourcesDir ".env.production"
-
-          Write-Host "── Post-build inspection ──"
-          Write-Host "  Unpacked dir : $unpackedDir"
-          Write-Host ""
-
-          if (-not (Test-Path $unpackedDir)) {
-            throw "win-unpacked/ missing — electron-builder did not produce output"
-          }
-
-          $unpackedSize = [Math]::Round((Get-ChildItem $unpackedDir -Recurse -File | Measure-Object Length -Sum).Sum / 1MB, 2)
-          Write-Host "  Total size   : $unpackedSize MB"
-
-          Write-Host ""
-          Write-Host "  Resources contents:"
-          Get-ChildItem $resourcesDir | ForEach-Object {
-            $itemSize = if ($_.PSIsContainer) {
-              $sub = (Get-ChildItem $_.FullName -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
-              "$([Math]::Round($sub / 1MB, 2)) MB"
-            } else {
-              "$([Math]::Round($_.Length / 1KB, 2)) KB"
-            }
-            Write-Host "    $($_.Name) — $itemSize"
-          }
-
-          Write-Host ""
-          $allOk = $true
-          if (Test-Path $pythonArchiveInInstaller) { Write-Host "  ✓ resources/python-runtime.zip present" }
-                                  else { Write-Host "  ❌ resources/python-runtime.zip MISSING" ; $allOk = $false }
-          if (Test-Path $backendInInstaller) { Write-Host "  ✓ resources/backend/app/main.py present" }
-                                  else { Write-Host "  ❌ resources/backend/app/main.py MISSING" ; $allOk = $false }
-          if (Test-Path $envInInstaller) { Write-Host "  ✓ resources/.env.production present" }
-                                  else { Write-Host "  ❌ resources/.env.production MISSING" ; $allOk = $false }
-
-          if (-not $allOk) {
-            throw "Installer is missing required components — aborting before publish"
-          }
-
-          $envContent = Get-Content $envInInstaller -Raw
-          $forbiddenEnvNames = @(
-            'AZURE_AD_CLIENT_SECRET',
-            'ASSEMBLYAI_API_KEY',
-            'OPENAI_API_KEY',
-            'GH_TOKEN',
-            'GITHUB_TOKEN'
-          )
-          foreach ($name in $forbiddenEnvNames) {
-            if ($envContent -match "(?m)^$name=") {
-              throw "resources/.env.production contains forbidden secret variable $name"
-            }
-          }
-          Write-Host "  ✓ resources/.env.production contains public config only"
-
-          # Verify the packaged Python runtime archive in win-unpacked. We ship
-          # the runtime as one archive to avoid NSIS hanging while moving/deleting
-          # thousands of Python files during updater installs.
-          $resourcesSizeMB = [Math]::Round(
-            (Get-ChildItem $resourcesDir -Recurse -File | Measure-Object Length -Sum).Sum / 1MB,
-            2
-          )
-          $pythonArchiveSizeMB = if (Test-Path $pythonArchiveInInstaller) {
-            [Math]::Round((Get-Item $pythonArchiveInInstaller).Length / 1MB, 2)
-          } else { 0 }
-          Write-Host "  resources/ total           : $resourcesSizeMB MB"
-          Write-Host "  resources/python-runtime.zip: $pythonArchiveSizeMB MB"
-
-          if ($pythonArchiveSizeMB -lt 40) {
-            throw "resources/python-runtime.zip is only $pythonArchiveSizeMB MB in win-unpacked — Python runtime archive is incomplete"
-          }
-
-          # Verify NSIS updater assets exist. latest.yml and blockmap are what
-          # electron-updater reads from public GitHub Releases.
-          $releaseDir = Join-Path $env:GITHUB_WORKSPACE "desktop" "release"
-          $installer = Get-ChildItem $releaseDir -Filter "*.exe" | Where-Object { $_.Name -notmatch "blockmap$" } | Select-Object -First 1
-          $latestYml = Join-Path $releaseDir "latest.yml"
-          $blockmap = Get-ChildItem $releaseDir -Filter "*.blockmap" | Select-Object -First 1
-
-          if (-not $installer) { throw "No NSIS .exe installer found in release/" }
-          if (-not (Test-Path $latestYml)) { throw "latest.yml missing — electron-updater will not find this release" }
-          if (-not $blockmap) { throw "No .blockmap found — differential updates will not work" }
-
-          $installerSize = [Math]::Round($installer.Length / 1MB, 2)
-          Write-Host ""
-          Write-Host "  Installer: $($installer.Name) — $installerSize MB (informational)"
-          Write-Host "  Metadata : latest.yml"
-          Write-Host "  Blockmap : $($blockmap.Name)"
-          Write-Host "✓ All required NSIS resources and updater assets are present"
-
-      # ── Publish to GitHub Releases ─────────────────────────────────────────
-      # Only runs if the inspection above passed.
-      - name: Publish NSIS installer to GitHub Releases
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --win --publish always --prepackaged release/win-unpacked
-        working-directory: desktop
-
-      # ── Post-publish sanity check ──────────────────────────────────────────
-      # Confirm NSIS update assets were produced and report their size. We do not gate on size
-      # here — the unpacked-content checks above already guarantee Python is in.
-      - name: Report published NSIS installer
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $releaseDir = Join-Path $env:GITHUB_WORKSPACE "desktop" "release"
-          $installer = Get-ChildItem $releaseDir -Filter "*.exe" | Where-Object { $_.Name -notmatch "blockmap$" } | Select-Object -First 1
-          $latestYml = Join-Path $releaseDir "latest.yml"
-          $blockmap = Get-ChildItem $releaseDir -Filter "*.blockmap" | Select-Object -First 1
-          if (-not $installer) { throw "No NSIS installer found after publish step" }
-          if (-not (Test-Path $latestYml)) { throw "latest.yml missing after publish step" }
-          if (-not $blockmap) { throw "blockmap missing after publish step" }
-          $installerSize = [Math]::Round($installer.Length / 1MB, 2)
-          Write-Host "Final NSIS installer: $($installer.Name) — $installerSize MB"
-          Write-Host "Updater metadata: latest.yml"
-          Write-Host "Blockmap: $($blockmap.Name)"
-          Write-Host "✓ Published successfully"
-
-      # ── Upload diagnostic artifacts ────────────────────────────────────────
-      # Always run (even on failure) so we can debug bundling issues without
-      # needing another CI round trip.
-      - name: Upload build diagnostics
-        if: always()
+      - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: build-diagnostics
+          name: meeting-notetaker-installer
           path: |
-            desktop/release/*.exe
-            desktop/release/*.yml
-            desktop/release/*.blockmap
-          if-no-files-found: warn
-          retention-days: 7
+            dist/*.exe
+            dist/latest.yml
+          if-no-files-found: error
+
+      # - name: Publish to Azure Blob update feed
+      #   run: |
+      #     az storage blob upload-batch \
+      #       --destination updates \
+      #       --source dist \
+      #       --pattern "*.exe" --pattern "latest.yml" \
+      #       --connection-string "$env:AZURE_STORAGE_CONNECTION_STRING" \
+      #       --overwrite

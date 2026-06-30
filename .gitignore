@@ -1,58 +1,12 @@
-# Environment files - NEVER commit secrets
+node_modules
+dist
+out
+recordings
+*.log
+*.tsbuildinfo
+.DS_Store
 .env
-.env.local
-.env.*.local
-**/.env
-
-# Keep schema and example (no secrets)
-!.env.schema
+.env.*
 !.env.example
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-
-# Node
-node_modules/
-.next/
-out/
-
-# Testing
-.pytest_cache/
-.coverage
-coverage/
-
-# Claude Code
-.claude/
-.superpowers/
-
-# Packaged installer artifacts (MSI + unpacked Electron bundle — hundreds of MB)
-desktop/release/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-
-# Temporary
-tmp/
-temp/
-*.tmp
-
-# Local dev data (SQLite DB + audio files)
-data/
-
-# Audio test files
-*.wav
-*.mp3
-.worktrees/
+.claude/settings.local.json

@@ -1,938 +1,542 @@
-"""Meeting endpoints.
-
-Handles meeting upload, listing, and detail retrieval.
-"""
+import base64
+import binascii
 import logging
-import os
-import tempfile
-from typing import Any, Optional, cast
+import shutil
+import subprocess
 from datetime import datetime, timezone
+from pathlib import Path
+from uuid import UUID, uuid4
 
-from pydantic import ValidationError
+from fastapi import APIRouter, Header, HTTPException, status
+from fastapi.responses import FileResponse
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File, Form
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
-from sqlalchemy.orm.attributes import flag_modified
-import json
-
-from app.core.database import get_db
-from app.api.dependencies import get_current_user
-from app.models import (
-    User, Meeting, Participant, Transcript, Summary, ActionItem,
-    MeetingStatus, SpeakerMapping, SpeakerMappingSource, ActionOwnerSource,
-)
-from app.schemas import (
-    MeetingUploadResponse, MeetingUploadMetadata,
-    MeetingListItem, MeetingListResponse, MeetingDetailResponse,
-    ParticipantResponse, TranscriptResponse, SummaryResponse,
-    ActionItemResponse,
-    RenameSpeakerRequest, RenameSpeakerResponse,
-    SpeakerMappingListResponse, SpeakerMappingResponse, SpeakerMappingUpdate,
-)
-from app.services.storage import get_storage
-from app.services.pipeline import enqueue_meeting
-from app.services.audio import extract_audio_from_video
-from app.services.identity_candidates import build_candidate_pool
-from app.services.speaker_mapping import (
-    build_diarization_diagnostics,
-    calculate_mapping_quality,
-    extract_speaker_labels,
-    should_require_review,
-    _mapping_counts_as_reviewed,
-    _mapping_requires_confidence_review,
-)
-from app.services.action_owner_resolution import resolve_action_owner
+from app import store
+from app.access import can_see, require
 
 logger = logging.getLogger(__name__)
+from app.schemas import (
+    AccessRole,
+    AuditEntry,
+    EditSegmentRequest,
+    EmailRequest,
+    EmailResult,
+    GrantAccessRequest,
+    Meeting,
+    MeetingAccessEntry,
+    MeetingCreate,
+    MeetingReview,
+    MeetingStatus,
+    NameSpeakerRequest,
+    PipelineStatus,
+    UploadAudioRequest,
+)
+from app.services.email import build_transcript_attachment, get_email_provider
+from app.services.pipeline import AUDIO_DIR, audio_path_for, kick_pipeline
 
-router = APIRouter(prefix="/api/meetings", tags=["meetings"])
+Actor = Header("Unknown user", alias="X-MN-User")
 
-# File validation constants
-MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB
-ALLOWED_CONTENT_TYPES = [
-    "audio/wav", "audio/wave", "audio/x-wav", "audio/mpeg", "audio/mp3",
-    "video/mp4", "video/x-m4v", "video/quicktime",
-]
-ALLOWED_EXTENSIONS = [".wav", ".mp3", ".mp4", ".m4v", ".mov"]
-VIDEO_EXTENSIONS = {".mp4", ".m4v", ".mov"}
-
-
-def validate_audio_file(file: UploadFile) -> None:
-    """Validate uploaded audio file.
-
-    OWASP Security:
-    - Validates file extension (allowlist)
-    - Validates content type (allowlist)
-    - Size validation happens via FastAPI config
-
-    Args:
-        file: Uploaded file to validate
-
-    Raises:
-        HTTPException: If validation fails
-    """
-    # Check filename exists
-    if not file.filename:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Filename is required"
-        )
-
-    # Check extension (allowlist)
-    filename_lower = file.filename.lower()
-    if not any(filename_lower.endswith(ext) for ext in ALLOWED_EXTENSIONS):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid file type. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"
-        )
-
-    # Check content type (allowlist)
-    if file.content_type not in ALLOWED_CONTENT_TYPES:
-        logger.warning(f"Unexpected content type: {file.content_type}")
-        # Be lenient on content type as browsers may vary
+router = APIRouter(prefix="/meetings", tags=["meetings"])
 
 
-def normalize_scheduled_time(value: Optional[datetime]) -> Optional[datetime]:
-    """Convert aware datetimes to naive UTC for the current DB schema."""
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value
-    return value.astimezone(timezone.utc).replace(tzinfo=None)
+@router.get("", response_model=list[Meeting])
+async def list_meetings(
+    status_filter: MeetingStatus | None = None, actor: str = Actor
+) -> list[Meeting]:
+    items = sorted(store.MEETINGS.values(), key=lambda m: m.created_at, reverse=True)
+    items = [m for m in items if can_see(m.id, actor)]
+    if status_filter is not None:
+        items = [m for m in items if m.status == status_filter]
+    return items
 
 
-async def get_owned_meeting_or_404(
-    db: AsyncSession, meeting_id: int, current_user: User
-) -> Meeting:
-    result = await db.execute(
-        select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == current_user.id)
-    )
-    meeting = result.scalar_one_or_none()
+@router.get("/{meeting_id}", response_model=Meeting)
+async def get_meeting(meeting_id: UUID, actor: str = Actor) -> Meeting:
+    meeting = store.MEETINGS.get(meeting_id)
     if meeting is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting not found")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.viewer)
     return meeting
 
 
-def _speaker_mapping_response(mapping: SpeakerMapping) -> SpeakerMappingResponse:
-    return SpeakerMappingResponse(
-        id=mapping.id,
-        meeting_id=mapping.meeting_id,
-        speaker_label=mapping.speaker_label,
-        display_name=mapping.display_name,
-        email=mapping.email,
-        confidence=mapping.confidence,
-        source=mapping.source.value if hasattr(mapping.source, "value") else mapping.source,
-        reason=mapping.reason,
-        created_at=mapping.created_at,
-        updated_at=mapping.updated_at,
+@router.post("", response_model=Meeting, status_code=status.HTTP_201_CREATED)
+async def create_meeting(body: MeetingCreate, actor: str = Actor) -> Meeting:
+    meeting = Meeting(
+        id=uuid4(),
+        title=body.title,
+        context=body.context,
+        source=body.source,
+        owner_id="joseph",  # from auth once Entra ID lands
+        created_at=datetime.now(timezone.utc),
+        graph_metadata=body.graph_metadata,
     )
+    store.MEETINGS[meeting.id] = meeting
+    # Creator owns the meeting (decision #7).
+    store.ACCESS[meeting.id] = [MeetingAccessEntry(user=actor, role=AccessRole.owner)]
+    return meeting
 
 
-def resolve_segments_for_display(
-    segments: list[dict], mappings: list[SpeakerMapping]
-) -> list[dict]:
-    by_label = {mapping.speaker_label: mapping for mapping in mappings}
-    resolved: list[dict] = []
-    for segment in segments or []:
-        raw = segment.get("speaker")
-        mapping = by_label.get(raw)
-        item = dict(segment)
-        item["raw_speaker"] = raw
-        if mapping and mapping.display_name:
-            item["speaker"] = mapping.display_name
-            item["matched_email"] = mapping.email
-            item["match_confidence"] = mapping.confidence
-        else:
-            item["matched_email"] = None
-            item["match_confidence"] = None
-        resolved.append(item)
-    return resolved
+@router.get("/{meeting_id}/access", response_model=list[MeetingAccessEntry])
+async def list_access(meeting_id: UUID, actor: str = Actor) -> list[MeetingAccessEntry]:
+    if meeting_id not in store.MEETINGS:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.viewer)
+    return store.ACCESS.get(meeting_id, [])
 
 
-def _action_item_response(action_item: ActionItem) -> ActionItemResponse:
-    return ActionItemResponse(
-        id=action_item.id,
-        meeting_id=action_item.meeting_id,
-        description=action_item.description,
-        owner_name=action_item.owner_name,
-        owner_email=action_item.owner_email,
-        owner_confidence=action_item.owner_confidence,
-        owner_source=(
-            action_item.owner_source.value
-            if action_item.owner_source is not None and hasattr(action_item.owner_source, "value")
-            else action_item.owner_source
-        ),
-        owner_reason=action_item.owner_reason,
-        due_date=action_item.due_date,
-        status=action_item.status.value,
-        created_at=action_item.created_at,
-        updated_at=action_item.updated_at,
-    )
-
-
-def _source_speaker_label_from_reason(owner_reason: str | None) -> str | None:
-    prefix = "speaker_label="
-    if not owner_reason or not owner_reason.startswith(prefix):
-        return None
-    label = owner_reason[len(prefix):].split(";", 1)[0].strip()
-    return label or None
-
-
-async def _list_speaker_mappings(
-    db: AsyncSession, meeting: Meeting
-) -> SpeakerMappingListResponse:
-    result = await db.execute(
-        select(SpeakerMapping)
-        .where(SpeakerMapping.meeting_id == meeting.id)
-        .order_by(SpeakerMapping.speaker_label)
-    )
-    mappings = list(result.scalars().all())
-    return SpeakerMappingListResponse(
-        items=[_speaker_mapping_response(mapping) for mapping in mappings],
-        needs_speaker_review=meeting.needs_speaker_review,
-        speaker_mapping_quality=meeting.speaker_mapping_quality,
-    )
-
-
-async def _refresh_speaker_mapping_diagnostics(
-    db: AsyncSession, meeting: Meeting, transcript: Transcript | None = None
-) -> None:
-    if transcript is None:
-        t_result = await db.execute(
-            select(Transcript).where(Transcript.meeting_id == meeting.id)
+@router.post("/{meeting_id}/access", response_model=list[MeetingAccessEntry])
+async def grant_access(
+    meeting_id: UUID, body: GrantAccessRequest, actor: str = Actor
+) -> list[MeetingAccessEntry]:
+    if meeting_id not in store.MEETINGS:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.owner)
+    entries = store.ACCESS.setdefault(meeting_id, [])
+    existing = next((e for e in entries if e.user == body.user), None)
+    if existing is None:
+        entries.append(MeetingAccessEntry(user=body.user, role=body.role))
+        store.add_audit(
+            actor, "access.grant", body.user, after=body.role.value, meeting_id=meeting_id
         )
-        transcript = t_result.scalar_one_or_none()
-
-    labels = extract_speaker_labels(transcript.segments if transcript else [])
-    result = await db.execute(
-        select(SpeakerMapping)
-        .where(SpeakerMapping.meeting_id == meeting.id)
-        .order_by(SpeakerMapping.speaker_label)
-    )
-    mappings = list(result.scalars().all())
-    if transcript is not None:
-        label_set = set(labels)
-        current_mappings = [m for m in mappings if m.speaker_label in label_set]
-    else:
-        current_mappings = mappings
-    mappings_by_label = {cast(str, m.speaker_label): m for m in current_mappings}
-
-    mapped_labels = [
-        label
-        for label in labels
-        if label in mappings_by_label
-        and _mapping_counts_as_reviewed(mappings_by_label[label])
-    ]
-    unmapped_labels = [
-        label
-        for label in labels
-        if label not in mappings_by_label
-        or not _mapping_counts_as_reviewed(mappings_by_label[label])
-    ]
-    low_confidence_labels = [
-        label
-        for label in labels
-        if label in mappings_by_label
-        and _mapping_requires_confidence_review(mappings_by_label[label])
-    ]
-
-    average_mapping_confidence = calculate_mapping_quality(current_mappings)
-    cast(Any, meeting).speaker_mapping_quality = average_mapping_confidence
-    cast(Any, meeting).needs_speaker_review = should_require_review(labels, mappings_by_label)
-    cast(Any, meeting).diarization_diagnostics = build_diarization_diagnostics(
-        labels=labels,
-        mapped_labels=mapped_labels,
-        unmapped_labels=unmapped_labels,
-        low_confidence_labels=low_confidence_labels,
-        average_mapping_confidence=average_mapping_confidence,
-    )
-
-
-async def _resolve_action_item_owners_for_meeting(
-    db: AsyncSession, meeting: Meeting
-) -> list[ActionItem]:
-    p_result = await db.execute(
-        select(Participant).where(Participant.meeting_id == meeting.id)
-    )
-    participants = list(p_result.scalars().all())
-    candidates = build_candidate_pool(participants, meeting.identity_hints)
-
-    m_result = await db.execute(
-        select(SpeakerMapping)
-        .where(SpeakerMapping.meeting_id == meeting.id)
-        .order_by(SpeakerMapping.speaker_label)
-    )
-    mappings = list(m_result.scalars().all())
-    mappings_by_label = {mapping.speaker_label: mapping for mapping in mappings}
-
-    ai_result = await db.execute(
-        select(ActionItem)
-        .where(ActionItem.meeting_id == meeting.id)
-        .order_by(ActionItem.id)
-    )
-    action_items = list(ai_result.scalars().all())
-
-    for action_item in action_items:
-        if action_item.owner_source == ActionOwnerSource.USER_CORRECTED:
-            continue
-        speaker_label = None
-        if action_item.owner_source == ActionOwnerSource.SPEAKER_MAPPING:
-            speaker_label = _source_speaker_label_from_reason(action_item.owner_reason)
-        resolved = resolve_action_owner(
-            extracted_owner=action_item.owner_name,
-            speaker_label=speaker_label,
-            candidates=candidates,
-            mappings_by_label=mappings_by_label,
+    elif existing.role != body.role:
+        before = existing.role.value
+        existing.role = body.role
+        store.add_audit(
+            actor, "access.change", body.user,
+            before=before, after=body.role.value, meeting_id=meeting_id,
         )
-        action_item.owner_name = resolved["owner_name"]
-        action_item.owner_email = resolved["owner_email"]
-        action_item.owner_confidence = resolved["owner_confidence"]
-        action_item.owner_source = resolved["owner_source"]
-        action_item.owner_reason = resolved["owner_reason"]
-
-    await db.flush()
-    return action_items
+    return entries
 
 
-@router.post("/upload", response_model=MeetingUploadResponse)
-async def upload_meeting(
-    audio_file: UploadFile = File(..., description="Audio file (.wav or .mp3)"),
-    metadata: str = Form(..., description="JSON metadata with meeting_title, attendees, scheduled_time"),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-) -> MeetingUploadResponse:
-    """Upload a meeting recording for processing.
+@router.delete("/{meeting_id}/access/{user}", response_model=list[MeetingAccessEntry])
+async def revoke_access(
+    meeting_id: UUID, user: str, actor: str = Actor
+) -> list[MeetingAccessEntry]:
+    if meeting_id not in store.MEETINGS:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.owner)
+    entries = store.ACCESS.get(meeting_id, [])
+    target = next((e for e in entries if e.user == user), None)
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No access entry for that user")
+    if target.role is AccessRole.owner:
+        raise HTTPException(status.HTTP_409_CONFLICT, "The owner cannot be removed")
+    entries.remove(target)
+    store.add_audit(
+        actor, "access.revoke", user, before=target.role.value, meeting_id=meeting_id
+    )
+    return entries
 
-    Accepts audio file and meeting metadata, stores in blob storage,
-    creates database records, and enqueues processing pipeline.
 
-    Security:
-    - Requires authentication (Azure AD JWT)
-    - Validates file type (allowlist)
-    - Sanitizes filename
-    - No direct path exposure (uses blob storage)
-
-    Args:
-        audio_file: Audio recording (.wav or .mp3)
-        metadata: JSON string with meeting details
-        current_user: Authenticated user
-        db: Database session
-
-    Returns:
-        MeetingUploadResponse with meeting_id and status
-
-    Raises:
-        HTTPException: 400 for validation errors, 500 for processing errors
-    """
-    # Validate audio file
-    validate_audio_file(audio_file)
-
-    # Parse metadata
+def _decode_audio_b64(value: str, label: str) -> bytes:
     try:
-        metadata_dict = json.loads(metadata)
-        meeting_metadata = MeetingUploadMetadata(**metadata_dict)
-    except json.JSONDecodeError:
+        audio = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{label} is not valid base64")
+    if len(audio) < 1_000:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{label} is too short")
+    return audio
+
+
+def _merge_mic_and_system_audio(meeting_id: UUID, mic_audio: bytes, system_audio: bytes) -> Path:
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid JSON in metadata"
-        )
-    except ValidationError as e:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=e.errors()
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid metadata: {str(e)}"
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "System audio was captured separately, but ffmpeg is not available to merge mic + system audio",
         )
 
-    opened_file = None
-    temp_files: list[str] = []
-    try:
-        # If video file, extract audio first
-        file_ext = os.path.splitext(audio_file.filename or "")[1].lower()
-        upload_file = audio_file.file
-        upload_filename = audio_file.filename or "recording.wav"
-        upload_content_type = "audio/wav"
+    mic_path = AUDIO_DIR / f"{meeting_id}.mic.webm"
+    system_path = AUDIO_DIR / f"{meeting_id}.system.webm"
+    merged_path = AUDIO_DIR / f"{meeting_id}.webm"
+    mic_path.write_bytes(mic_audio)
+    system_path.write_bytes(system_audio)
 
-        if file_ext in VIDEO_EXTENSIONS:
-            # Save uploaded video to temp file, then extract audio
-            temp_video = tempfile.NamedTemporaryFile(
-                suffix=file_ext, delete=False
-            )
-            temp_files.append(temp_video.name)
-            try:
-                temp_video.write(await audio_file.read())
-                temp_video.close()
-                extracted_path = extract_audio_from_video(temp_video.name)
-                temp_files.append(extracted_path)
-                opened_file = open(extracted_path, "rb")
-                upload_file = opened_file
-                upload_filename = os.path.splitext(upload_filename)[0] + ".wav"
-                logger.info(f"Extracted audio from video: {audio_file.filename}")
-            except RuntimeError as e:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=str(e),
-                )
-        else:
-            upload_content_type = audio_file.content_type or "audio/wav"
-
-        # Upload file to blob storage
-        storage = get_storage()
-        blob_path = await storage.upload_file(
-            file=upload_file,
-            filename=upload_filename,
-            content_type=upload_content_type,
-        )
-
-        logger.info(f"Audio uploaded to: {blob_path}")
-
-        # Build identity hints — always include current_user (the recorder)
-        identity_hints = {
-            "source_event_id": meeting_metadata.source_event_id,
-            "current_user": {
-                "name": current_user.name,
-                "email": current_user.email,
-                "azure_ad_id": current_user.azure_ad_id,
-                "is_current_user": True,
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(mic_path),
+        "-i",
+        str(system_path),
+        "-filter_complex",
+        "[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[a]",
+        "-map",
+        "[a]",
+        "-c:a",
+        "libopus",
+        str(merged_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if result.returncode != 0 or not merged_path.exists() or merged_path.stat().st_size < 1_000:
+        logger.error(
+            "Failed to merge mic + system audio",
+            extra={
+                "meeting_id": str(meeting_id),
+                "returncode": result.returncode,
+                "stderr": result.stderr[-2000:],
             },
-            "organizer": (
-                {
-                    "name": meeting_metadata.organizer.name,
-                    "email": meeting_metadata.organizer.email,
-                    "is_organizer": True,
-                }
-                if meeting_metadata.organizer else None
-            ),
-        }
-
-        # Create meeting record
-        meeting = Meeting(
-            title=meeting_metadata.meeting_title,
-            scheduled_time=normalize_scheduled_time(meeting_metadata.scheduled_time),
-            status=MeetingStatus.PROCESSING,
-            processing_error=None,
-            audio_blob_url=blob_path,
-            user_id=current_user.id,
-            identity_hints=identity_hints,
         )
-        db.add(meeting)
-        await db.flush()
-
-        # Create participant records
-        for attendee in meeting_metadata.attendees:
-            is_org = (
-                meeting_metadata.organizer is not None
-                and attendee.email is not None
-                and meeting_metadata.organizer.email is not None
-                and attendee.email.lower() == meeting_metadata.organizer.email.lower()
-            )
-            participant = Participant(
-                meeting_id=meeting.id,
-                name=attendee.name,
-                email=attendee.email,
-                is_organizer=is_org,
-            )
-            db.add(participant)
-
-        await db.commit()
-        await db.refresh(meeting)
-
-        logger.info(f"Meeting record created: {meeting.id}")
-
-        # Launch processing pipeline in background thread
-        enqueue_meeting(meeting.id)
-
-        return MeetingUploadResponse(
-            meeting_id=meeting.id,
-            status="processing"
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Upload failed: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to process upload"
-        )
-    finally:
-        if opened_file:
-            opened_file.close()
-        for tf in temp_files:
-            try:
-                os.unlink(tf)
-            except OSError:
-                pass
-
-
-@router.get("", response_model=MeetingListResponse)
-async def list_meetings(
-    page: int = 1,
-    per_page: int = 20,
-    status_filter: Optional[str] = Query(None, alias="status"),
-    date_from: Optional[datetime] = None,
-    date_to: Optional[datetime] = None,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> MeetingListResponse:
-    """List meetings for the authenticated user.
-
-    Returns a paginated list ordered newest-first, with participant count
-    and has_summary flags computed per row.
-    """
-    # Base query scoped to current user
-    base = select(Meeting).where(Meeting.user_id == current_user.id)
-
-    if status_filter:
-        base = base.where(Meeting.status == MeetingStatus(status_filter))
-    if date_from:
-        base = base.where(Meeting.created_at >= date_from)
-    if date_to:
-        base = base.where(Meeting.created_at <= date_to)
-
-    # Count total before pagination
-    count_result = await db.execute(
-        select(func.count()).select_from(base.subquery())
-    )
-    total = count_result.scalar() or 0
-
-    # Correlated subqueries to avoid N+1
-    participant_count_sq = (
-        select(func.count())
-        .where(Participant.meeting_id == Meeting.id)
-        .correlate(Meeting)
-        .scalar_subquery()
-        .label("participant_count")
-    )
-    has_summary_sq = (
-        select(func.count())
-        .where(Summary.meeting_id == Meeting.id)
-        .correlate(Meeting)
-        .scalar_subquery()
-        .label("summary_count")
-    )
-
-    # Fetch page with counts in a single query
-    offset = (page - 1) * per_page
-    result = await db.execute(
-        select(Meeting, participant_count_sq, has_summary_sq)
-        .where(Meeting.user_id == current_user.id)
-        .where(
-            Meeting.status == MeetingStatus(status_filter) if status_filter else True
-        )
-        .where(Meeting.created_at >= date_from if date_from else True)
-        .where(Meeting.created_at <= date_to if date_to else True)
-        .order_by(Meeting.created_at.desc())
-        .offset(offset)
-        .limit(per_page)
-    )
-    rows = result.all()
-
-    items = []
-    for m, participant_count, summary_count in rows:
-        items.append(MeetingListItem(
-            id=m.id,
-            title=m.title,
-            scheduled_time=m.scheduled_time,
-            duration_seconds=m.duration_seconds,
-            status=m.status.value,
-            processing_error=cast(Any, m).processing_error,
-            participant_count=participant_count or 0,
-            has_summary=(summary_count or 0) > 0,
-            created_at=m.created_at,
-        ))
-
-    return MeetingListResponse(
-        items=items,
-        total=total,
-        page=page,
-        per_page=per_page,
-        has_next=(offset + per_page) < total,
-    )
-
-
-@router.get("/{meeting_id}/speaker-mappings", response_model=SpeakerMappingListResponse)
-async def get_speaker_mappings(
-    meeting_id: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> SpeakerMappingListResponse:
-    """Get speaker identity mappings for a meeting owned by the current user."""
-    meeting = await get_owned_meeting_or_404(db, meeting_id, current_user)
-    return await _list_speaker_mappings(db, meeting)
-
-
-@router.put("/{meeting_id}/speaker-mappings", response_model=SpeakerMappingListResponse)
-async def put_speaker_mappings(
-    meeting_id: int,
-    body: list[SpeakerMappingUpdate],
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> SpeakerMappingListResponse:
-    """Create/update user-corrected speaker mappings and re-resolve actions."""
-    meeting = await get_owned_meeting_or_404(db, meeting_id, current_user)
-
-    t_result = await db.execute(
-        select(Transcript).where(Transcript.meeting_id == meeting.id)
-    )
-    transcript = t_result.scalar_one_or_none()
-    if transcript is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transcript not found")
-
-    valid_labels = set(extract_speaker_labels(transcript.segments or []))
-    requested_labels = {item.speaker_label.strip() for item in body}
-    invalid_labels = sorted(label for label in requested_labels if label not in valid_labels)
-    if invalid_labels:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"speaker_label not present in transcript: {', '.join(invalid_labels)}",
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "Captured mic and system audio, but failed to merge them for transcription",
         )
 
-    existing_result = await db.execute(
-        select(SpeakerMapping).where(SpeakerMapping.meeting_id == meeting.id)
+    logger.info(
+        "Merged mic + system audio",
+        extra={
+            "meeting_id": str(meeting_id),
+            "mic_bytes": len(mic_audio),
+            "system_bytes": len(system_audio),
+            "merged_bytes": merged_path.stat().st_size,
+        },
     )
-    existing = {mapping.speaker_label: mapping for mapping in existing_result.scalars().all()}
-
-    for item in body:
-        label = item.speaker_label.strip()
-        mapping = existing.get(label)
-        if mapping is None:
-            mapping = SpeakerMapping(
-                meeting_id=meeting.id,
-                speaker_label=label,
-                source=SpeakerMappingSource.USER_CORRECTED,
-            )
-            db.add(mapping)
-            existing[label] = mapping
-
-        mapping.display_name = item.display_name.strip() if item.display_name else None
-        mapping.email = str(item.email).strip() if item.email else None
-        mapping.confidence = item.confidence
-        mapping.source = SpeakerMappingSource.USER_CORRECTED
-        mapping.reason = item.reason.strip() if item.reason else None
-
-    await db.flush()
-    await _refresh_speaker_mapping_diagnostics(db, meeting, transcript)
-    meeting.speaker_review_completed_at = (
-        datetime.utcnow() if not meeting.needs_speaker_review else None
-    )
-    await _resolve_action_item_owners_for_meeting(db, meeting)
-    await db.commit()
-    await db.refresh(meeting)
-
-    return await _list_speaker_mappings(db, meeting)
+    return merged_path
 
 
-@router.post("/{meeting_id}/resolve-action-owners", response_model=list[ActionItemResponse])
-async def resolve_action_owners(
-    meeting_id: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> list[ActionItemResponse]:
-    """Re-resolve action item owners for a meeting owned by the current user."""
-    meeting = await get_owned_meeting_or_404(db, meeting_id, current_user)
-    action_items = await _resolve_action_item_owners_for_meeting(db, meeting)
-    await db.commit()
-    return [_action_item_response(action_item) for action_item in action_items]
+@router.post("/{meeting_id}/audio", response_model=Meeting)
+async def upload_audio(
+    meeting_id: UUID, body: UploadAudioRequest, actor: str = Actor
+) -> Meeting:
+    """Store meeting audio (Blob stand-in) and queue the processing pipeline."""
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.editor)
+    if meeting.status is MeetingStatus.finalized:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Finalized meetings cannot be modified")
+    if meeting.pipeline_status in (PipelineStatus.queued, PipelineStatus.processing):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Audio is already being processed")
 
-
-@router.get("/{meeting_id}", response_model=MeetingDetailResponse)
-async def get_meeting(
-    meeting_id: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> MeetingDetailResponse:
-    """Get full meeting details including transcript, summary, and action items.
-
-    Security:
-    - Requires authentication
-    - Verifies user owns the meeting (access control)
-    """
-    result = await db.execute(
-        select(Meeting).where(
-            Meeting.id == meeting_id,
-            Meeting.user_id == current_user.id,
-        )
-    )
-    meeting = result.scalars().first()
-
-    if not meeting:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Meeting not found",
-        )
-
-    # Audio URL
-    audio_url = None
-    if meeting.audio_blob_url:
-        try:
-            storage = get_storage()
-            audio_url = await storage.get_signed_url(meeting.audio_blob_url)
-        except Exception as e:
-            logger.warning(f"Could not generate audio URL: {e}")
-
-    # Participants
-    p_result = await db.execute(
-        select(Participant).where(Participant.meeting_id == meeting.id)
-    )
-    participants = p_result.scalars().all()
-
-    # Speaker mappings
-    sm_result = await db.execute(
-        select(SpeakerMapping)
-        .where(SpeakerMapping.meeting_id == meeting.id)
-        .order_by(SpeakerMapping.speaker_label)
-    )
-    speaker_mappings = list(sm_result.scalars().all())
-
-    # Transcript
-    t_result = await db.execute(
-        select(Transcript).where(Transcript.meeting_id == meeting.id)
-    )
-    transcript_row = t_result.scalars().first()
-    transcript = None
-    if transcript_row:
-        transcript = TranscriptResponse(
-            meeting_id=meeting.id,
-            segments=resolve_segments_for_display(
-                transcript_row.segments or [], speaker_mappings
-            ),
-        )
-
-    # Summary
-    s_result = await db.execute(
-        select(Summary).where(Summary.meeting_id == meeting.id)
-    )
-    summary_row = s_result.scalars().first()
-    summary = None
-    if summary_row:
-        summary = SummaryResponse(
-            summary_text=summary_row.summary_text,
-            key_points=summary_row.key_points or [],
-            follow_ups=summary_row.follow_ups or [],
-        )
-
-    # Action items
-    ai_result = await db.execute(
-        select(ActionItem).where(ActionItem.meeting_id == meeting.id)
-    )
-    action_items = ai_result.scalars().all()
-
-    return MeetingDetailResponse(
-        id=meeting.id,
-        title=meeting.title,
-        scheduled_time=meeting.scheduled_time,
-        duration_seconds=meeting.duration_seconds,
-        status=meeting.status.value,
-        processing_error=cast(Any, meeting).processing_error,
-        audio_url=audio_url,
-        created_at=meeting.created_at,
-        participants=[
-            ParticipantResponse(id=p.id, name=p.name, email=p.email)
-            for p in participants
-        ],
-        transcript=transcript,
-        summary=summary,
-        action_items=[_action_item_response(ai) for ai in action_items],
-        needs_speaker_review=meeting.needs_speaker_review,
-        speaker_review_completed_at=meeting.speaker_review_completed_at,
-        speaker_mapping_quality=meeting.speaker_mapping_quality,
-        diarization_diagnostics=meeting.diarization_diagnostics,
-        speaker_mappings=[
-            _speaker_mapping_response(mapping) for mapping in speaker_mappings
-        ],
+    audio = _decode_audio_b64(body.audio_b64, "Audio")
+    system_audio = (
+        _decode_audio_b64(body.system_audio_b64, "System audio")
+        if body.system_audio_b64
+        else None
     )
 
-
-@router.get("/{meeting_id}/transcript", response_model=TranscriptResponse)
-async def get_transcript(
-    meeting_id: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> TranscriptResponse:
-    """Get transcript for a specific meeting."""
-    # Verify meeting belongs to user
-    m_result = await db.execute(
-        select(Meeting).where(
-            Meeting.id == meeting_id,
-            Meeting.user_id == current_user.id,
-        )
-    )
-    if not m_result.scalars().first():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting not found")
-
-    t_result = await db.execute(
-        select(Transcript).where(Transcript.meeting_id == meeting_id)
-    )
-    transcript = t_result.scalars().first()
-    if not transcript:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transcript not available")
-
-    return TranscriptResponse(
-        meeting_id=meeting_id,
-        segments=transcript.segments or [],
-    )
-
-
-@router.get("/{meeting_id}/action-items", response_model=list[ActionItemResponse])
-async def get_meeting_action_items(
-    meeting_id: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> list[ActionItemResponse]:
-    """Get action items for a specific meeting."""
-    # Verify meeting belongs to user
-    m_result = await db.execute(
-        select(Meeting).where(
-            Meeting.id == meeting_id,
-            Meeting.user_id == current_user.id,
-        )
-    )
-    if not m_result.scalars().first():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting not found")
-
-    result = await db.execute(
-        select(ActionItem).where(ActionItem.meeting_id == meeting_id)
-    )
-    items = result.scalars().all()
-
-    return [_action_item_response(ai) for ai in items]
-
-
-@router.post("/{meeting_id}/retry", response_model=MeetingUploadResponse)
-async def retry_meeting(
-    meeting_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Re-enqueue a failed meeting for processing."""
-    meeting = await db.get(Meeting, meeting_id)
-    if not meeting or meeting.user_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Meeting not found")
-
-    if meeting.status != MeetingStatus.FAILED:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot retry meeting in '{meeting.status.value}' state — only failed meetings can be retried",
-        )
-
-    meeting.status = MeetingStatus.PROCESSING
-    cast(Any, meeting).processing_error = None
-    await db.commit()
-
-    enqueue_meeting(meeting.id)
-    logger.info(f"Retry enqueued for meeting {meeting.id}")
-
-    return MeetingUploadResponse(meeting_id=meeting.id, status="processing")
-
-
-@router.delete("/{meeting_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_meeting(
-    meeting_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Delete a meeting owned by the authenticated user."""
-    result = await db.execute(
-        select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == current_user.id)
-    )
-    meeting = result.scalar_one_or_none()
-    if not meeting:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting not found")
-
-    await db.delete(meeting)
-    await db.commit()
-
-
-@router.patch("/{meeting_id}/rename-speaker", response_model=RenameSpeakerResponse)
-async def rename_speaker(
-    meeting_id: int,
-    body: RenameSpeakerRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> RenameSpeakerResponse:
-    """Rename all occurrences of a speaker label in a meeting transcript.
-
-    Replaces every segment where speaker == old_name with new_name.
-    Scoped to the current user's meetings only.
-
-    Args:
-        meeting_id: Meeting to update.
-        body: old_name (current label) and new_name (replacement).
-        current_user: Authenticated user.
-        db: Database session.
-
-    Returns:
-        RenameSpeakerResponse with count of updated segments.
-
-    Raises:
-        HTTPException 404: If meeting or transcript not found, or not owned by user.
-        HTTPException 422: If new_name is blank after stripping whitespace.
-    """
-    new_name = body.new_name.strip()
-    if not new_name:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="new_name must not be blank",
-        )
-
-    # Verify meeting ownership
-    result = await db.execute(
-        select(Meeting).where(
-            Meeting.id == meeting_id,
-            Meeting.user_id == current_user.id,
-        )
-    )
-    meeting = result.scalar_one_or_none()
-    if not meeting:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting not found")
-
-    # Fetch transcript
-    t_result = await db.execute(
-        select(Transcript).where(Transcript.meeting_id == meeting_id)
-    )
-    transcript = t_result.scalar_one_or_none()
-    if not transcript:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transcript not found")
-
-    # Replace raw speaker labels and/or update display-name mappings.
-    old_name = body.old_name
-    segments = list(transcript.segments or [])
-    updated_count = 0
-
-    mapping_result = await db.execute(
-        select(SpeakerMapping).where(SpeakerMapping.meeting_id == meeting_id)
-    )
-    mappings = list(mapping_result.scalars().all())
-    display_label_mappings = [mapping for mapping in mappings if mapping.display_name == old_name]
-    display_label_raw_labels = {mapping.speaker_label for mapping in display_label_mappings}
-
-    if display_label_mappings:
-        for mapping in display_label_mappings:
-            mapping.display_name = new_name
-            mapping.source = SpeakerMappingSource.USER_CORRECTED
-            mapping.confidence = 1.0
-            mapping.reason = "User corrected speaker display name"
-
-        for seg in segments:
-            raw_speaker = seg.get("raw_speaker") or seg.get("speaker")
-            if raw_speaker in display_label_raw_labels:
-                if seg.get("speaker") == old_name:
-                    seg["speaker"] = new_name
-                updated_count += 1
+    AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    if system_audio is not None:
+        path = _merge_mic_and_system_audio(meeting_id, audio, system_audio)
     else:
-        for seg in segments:
-            if seg.get("speaker") == old_name or seg.get("raw_speaker") == old_name:
-                seg["speaker"] = new_name
-                updated_count += 1
+        path = audio_path_for(meeting_id, body.mime_type)
+        path.write_bytes(audio)
 
-    # Persist — reassign to trigger SQLAlchemy change detection on JSON column
-    transcript.segments = segments
-    flag_modified(transcript, "segments")
-    await db.commit()
+    updates: dict[str, object] = {}
+    if body.duration_seconds:
+        updates["duration_seconds"] = body.duration_seconds
+    if body.graph_metadata:
+        updates["graph_metadata"] = body.graph_metadata
+    if updates:
+        store.MEETINGS[meeting_id] = meeting.model_copy(update=updates)
 
-    return RenameSpeakerResponse(updated_count=updated_count)
+    kick_pipeline(meeting_id, path)
+    return store.MEETINGS[meeting_id]
+
+
+@router.post("/{meeting_id}/retry", response_model=Meeting)
+async def retry_pipeline(meeting_id: UUID, actor: str = Actor) -> Meeting:
+    """Re-queue a failed meeting (requirements §4.4: flag and retry)."""
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.editor)
+    if meeting.pipeline_status is not PipelineStatus.failed:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Meeting is not in a failed state")
+    path = audio_path_for(meeting_id, "audio/webm")
+    if not path.exists():
+        raise HTTPException(status.HTTP_409_CONFLICT, "No stored audio for this meeting")
+    kick_pipeline(meeting_id, path)
+    return store.MEETINGS[meeting_id]
+
+
+@router.post("/{meeting_id}/email", response_model=EmailResult)
+async def email_notes(
+    meeting_id: UUID,
+    body: EmailRequest,
+    actor: str = Actor,
+    graph_token: str = Header("", alias="X-MN-Graph-Token"),
+) -> EmailResult:
+    """Email transcript after processing completes (Jira IN-93/IN-94).
+
+    Slice 1 delivery is transcript-by-email using the signed-in user's Outlook:
+    calendar recordings go to Graph attendees; manual/ad-hoc recordings go to
+    the recorder. SharePoint and Teams delivery are later slices.
+    """
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.owner)
+
+    if meeting.pipeline_status is not PipelineStatus.ready:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Transcript is not ready yet")
+
+    participants = store.PARTICIPANTS.get(meeting_id, [])
+    segments = store.TRANSCRIPTS.get(meeting_id, [])
+    if not segments:
+        raise HTTPException(status.HTTP_409_CONFLICT, "No transcript is available to email")
+
+    recipients = _email_recipients(meeting, body.recorder_email)
+    if not recipients:
+        raise HTTPException(status.HTTP_409_CONFLICT, "No email recipients resolved")
+    if not graph_token:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "Outlook sign-in is required before transcript email can be sent",
+        )
+
+    summary = store.SUMMARIES.get(meeting_id, "")
+    action_items = [
+        a for a in store.ACTION_ITEMS.values() if a.meeting_id == meeting_id
+    ]
+    note = f"{body.note}\n\n" if body.note else ""
+    email_body = f"{note}{summary}"
+
+    transcript_text = _format_transcript(
+        segments, meeting.title, participants,
+        summary_text=summary,
+        action_items=action_items,
+    )
+    attachments = [
+        build_transcript_attachment(
+            filename=f"transcript-{meeting.title[:40]}.txt",
+            content=transcript_text,
+        )
+    ]
+
+    try:
+        await get_email_provider(graph_token or None).send_meeting_notes(
+            recipients,
+            f"Meeting notes: {meeting.title}",
+            email_body,
+            attachments=attachments,
+            access_token=graph_token or None,
+        )
+    except Exception as exc:
+        logger.exception("Email delivery failed for %s", meeting_id)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Email delivery failed: {exc}",
+        )
+
+    sent_at = datetime.now(timezone.utc)
+    store.add_audit(
+        actor,
+        "meeting.email",
+        meeting.title,
+        after=", ".join(recipients),
+        meeting_id=meeting_id,
+    )
+    return EmailResult(recipients=recipients, sent_at=sent_at)
+
+
+def _normalise_email(email: str | None) -> str | None:
+    if not email:
+        return None
+    cleaned = email.strip().lower()
+    if not cleaned or "@" not in cleaned:
+        return None
+    return cleaned
+
+
+def _email_recipients(meeting: Meeting, recorder_email: str | None) -> list[str]:
+    """Resolve Jira IN-93/IN-94 recipients.
+
+    Calendar-linked recordings use Graph attendee emails. Manual/ad-hoc/upload
+    recordings fall back to the signed-in recorder email supplied by the app.
+    Preserve first-seen order while deduping case-insensitively.
+    """
+    recipients: list[str] = []
+
+    if meeting.graph_metadata and meeting.graph_metadata.attendees:
+        for attendee in meeting.graph_metadata.attendees:
+            email = _normalise_email(attendee.email)
+            if email and email not in recipients:
+                recipients.append(email)
+
+    if not recipients:
+        email = _normalise_email(recorder_email)
+        if email:
+            recipients.append(email)
+
+    return recipients
+
+
+def _build_review(meeting: Meeting) -> MeetingReview:
+    items = [
+        a.model_copy(update={"meeting_title": meeting.title})
+        for a in store.ACTION_ITEMS.values()
+        if a.meeting_id == meeting.id
+    ]
+    return MeetingReview(
+        meeting=meeting,
+        summary_text=store.SUMMARIES.get(meeting.id),
+        participants=store.PARTICIPANTS.get(meeting.id, []),
+        segments=store.TRANSCRIPTS.get(meeting.id, []),
+        action_items=items,
+    )
+
+
+@router.get("/{meeting_id}/review", response_model=MeetingReview)
+async def get_review(meeting_id: UUID, actor: str = Actor) -> MeetingReview:
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.viewer)
+    return _build_review(meeting)
+
+
+@router.get("/{meeting_id}/audio")
+async def get_audio(meeting_id: UUID) -> FileResponse:
+    """Stream the stored meeting audio (Blob stand-in; 30-day lifecycle there).
+
+    No role check here: the renderer audio element cannot send the actor
+    header. Real deployment serves audio via short-lived Blob SAS URLs.
+    """
+    if meeting_id not in store.MEETINGS:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    path = audio_path_for(meeting_id, "audio/webm")
+    if not path.exists():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No stored audio for this meeting")
+    return FileResponse(path, media_type="audio/webm")
+
+
+@router.get("/{meeting_id}/audit", response_model=list[AuditEntry])
+async def get_audit(meeting_id: UUID, actor: str = Actor) -> list[AuditEntry]:
+    if meeting_id not in store.MEETINGS:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.viewer)
+    return [e for e in store.AUDIT_LOG if e.meeting_id == meeting_id][::-1]
+
+
+@router.patch("/{meeting_id}/segments/{index}", response_model=MeetingReview)
+async def edit_segment(
+    meeting_id: UUID, index: int, body: EditSegmentRequest, actor: str = Actor
+) -> MeetingReview:
+    """Edit transcript text; the change is audit-logged (requirements §4.6)."""
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.editor)
+    if meeting.status is MeetingStatus.finalized:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Finalized meetings cannot be modified")
+    segments = store.TRANSCRIPTS.get(meeting_id, [])
+    if not 0 <= index < len(segments):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Segment not found")
+
+    before = segments[index].text
+    segments[index].text = body.text
+    store.add_audit(
+        actor,
+        "transcript.edit",
+        f"segment {index + 1} ({segments[index].speaker})",
+        before=before,
+        after=body.text,
+        meeting_id=meeting_id,
+    )
+    return _build_review(meeting)
+
+
+@router.post("/{meeting_id}/name-speaker", response_model=MeetingReview)
+async def name_speaker(
+    meeting_id: UUID, body: NameSpeakerRequest, actor: str = Actor
+) -> MeetingReview:
+    """Manually name an unknown diarized speaker (requirements §4.4).
+
+    Renames the speaker across transcript and participants and decrements the
+    meeting's unknown count, and logs the change.
+    """
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.editor)
+    if meeting.status is MeetingStatus.finalized:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Finalized meetings cannot be modified")
+
+    participants = store.PARTICIPANTS.get(meeting_id, [])
+    target = next((p for p in participants if p.name == body.label and not p.known), None)
+    if target is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, f"No unknown speaker labelled '{body.label}'"
+        )
+
+    target.name = body.name
+    target.known = True
+    for seg in store.TRANSCRIPTS.get(meeting_id, []):
+        if seg.speaker == body.label:
+            seg.speaker = body.name
+            seg.speaker_known = True
+
+    updated = meeting.model_copy(
+        update={"unknown_speaker_count": max(0, meeting.unknown_speaker_count - 1)}
+    )
+    store.MEETINGS[meeting_id] = updated
+    store.add_audit(
+        actor,
+        "speaker.name",
+        f"speaker '{body.label}'",
+        before=body.label,
+        after=body.name,
+        meeting_id=meeting_id,
+    )
+    return _build_review(updated)
+
+
+def _format_transcript(
+    segments, title: str, participants, summary_text: str | None = None, action_items: list | None = None
+) -> str:
+    """Format transcript segments as a readable text file with summary and action items."""
+    lines = [f"Meeting: {title}", f"Date: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}", ""]
+
+    if summary_text:
+        lines.append("--- SUMMARY ---")
+        lines.append(summary_text)
+        lines.append("")
+
+    if action_items:
+        lines.append("--- ACTION ITEMS ---")
+        for item in action_items:
+            owner = item.owner or "Unassigned"
+            deadline = item.deadline.strftime("%d %b %Y") if item.deadline else "No deadline"
+            lines.append(f"  [{item.priority.value.upper()}] {item.description} — {owner} (due {deadline})")
+        lines.append("")
+
+    lines.append("--- TRANSCRIPT ---")
+    current_speaker = None
+    for seg in segments:
+        if seg.speaker != current_speaker:
+            current_speaker = seg.speaker
+            known = "\u2713" if seg.speaker_known else "?"
+            lines.append(f"\n[{known}] {seg.speaker}:")
+        lines.append(f"  {seg.text}")
+    return "\n".join(lines)
+
+
+@router.post("/{meeting_id}/finalize", response_model=Meeting)
+async def finalize_meeting(meeting_id: UUID, actor: str = Actor) -> Meeting:
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.owner)
+    if meeting.status is MeetingStatus.finalized:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Meeting is already finalized")
+    if meeting.pipeline_status is not PipelineStatus.ready:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "The recording must finish processing first"
+        )
+    if meeting.unknown_speaker_count > 0:
+        # Product rule: unknown speakers must be named before finalisation.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{meeting.unknown_speaker_count} unknown speaker(s) must be named first",
+        )
+    updated = meeting.model_copy(update={"status": MeetingStatus.finalized})
+    store.MEETINGS[meeting_id] = updated
+    store.add_audit(
+        actor,
+        "meeting.finalize",
+        meeting.title,
+        before="draft",
+        after="finalized",
+        meeting_id=meeting_id,
+    )
+    return updated

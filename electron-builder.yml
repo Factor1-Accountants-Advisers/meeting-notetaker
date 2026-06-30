@@ -1,0 +1,34 @@
+appId: com.factor1.notetaker
+productName: Meeting Notetaker
+directories:
+  buildResources: build
+files:
+  - '!**/.vscode/*'
+  - '!{electron.vite.config.ts,.gitignore}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!{tailwind.config.js,postcss.config.js}'
+  - '!docs/**'
+  - '!.env*'
+  - '!backend/**'
+  - '!scripts/**'
+  - '!recordings/**'
+  - '!dist/**'
+  - '!*.tsbuildinfo'
+extraMetadata:
+  SliceVersion: 1.0.0
+win:
+  target:
+    - nsis
+    # Intune Win32 packaging (IN-89): DV confirmed approach. See:
+    # https://learn.microsoft.com/en-us/intune/app-management/deployment/create-win32-package
+    # NSIS -> Intune Win32 prep tool flow to be added after signing.
+  signAndEditExecutable: false
+  # Note: code signing requires certificate (IN-81). Release builds run in CI
+  # with signing enabled. Local dev uses signAndEditExecutable: false.
+nsis:
+  oneClick: true
+  perMachine: false
+  artifactName: ${productName}-${version}-setup.${ext}
+publish:
+  provider: generic
+  url: https://REPLACE_ME.blob.core.windows.net/updates/

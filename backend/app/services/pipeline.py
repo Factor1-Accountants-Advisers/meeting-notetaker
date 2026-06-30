@@ -1,189 +1,116 @@
-"""Meeting processing pipeline.
+"""Post-meeting processing pipeline (Jira CSV is source of truth).
 
-Runs the processing steps in a background thread:
-1. Transcription + speaker diarisation (AssemblyAI)
-2. Speaker label renaming
-3. AI summarisation (OpenAI)
+audio stored -> queued -> processing:
+  1. pyannoteAI API: transcription + diarization/speaker labels
+  2. pyannoteAI voiceprints: identify known speakers above threshold
+  3. OpenAI provider: summary + action items
+-> ready (or failed, flagged for retry)
 
-The runtime path is thread-based via ``enqueue_meeting()``. Celery task wrappers
-remain exported as a compatibility layer for legacy tests and integrations.
+Stages run behind provider interfaces. If pyannoteAI is not configured, the
+pipeline returns an explicit unavailable-provider transcript rather than fake
+speaker identities.
 """
+
 import asyncio
 import logging
-import os
-from typing import Optional, Any, cast
+from datetime import datetime, timezone
+from pathlib import Path
+from uuid import UUID
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
-
-from app.core.config import settings
-from app.models import Meeting, MeetingStatus
+from app import store
+from app.schemas import (
+    AccessRole,
+    MeetingAccessEntry,
+    MeetingParticipant,
+    PipelineStatus,
+    TranscriptSegment,
+)
+from app.services.llm import get_llm_provider
+from app.services.speech import get_speech_provider
+from app.services.speaker_matching import get_speaker_matcher
 
 logger = logging.getLogger(__name__)
 
-# Sync database engine for pipeline tasks (service code is synchronous)
-_sync_engine = None
-_SyncSessionLocal = None
+# Local stand-in for Azure Blob Storage (30-day lifecycle handled there).
+AUDIO_DIR = Path(__file__).resolve().parents[2] / "var" / "audio"
+
+# Simulated stage latency so the UI's queued/processing states are visible.
+STAGE_DELAY_S = 1.5
 
 
-def _get_sync_session_factory():
-    global _sync_engine, _SyncSessionLocal
-    if _SyncSessionLocal is None:
-        sync_url = settings.database_url
-        # asyncpg URLs need converting to sync psycopg2/sqlite
-        if "+asyncpg" in sync_url:
-            sync_url = sync_url.replace("+asyncpg", "")
-        elif "+aiosqlite" in sync_url:
-            sync_url = sync_url.replace("+aiosqlite", "")
-        _sync_engine = create_engine(sync_url)
-        _SyncSessionLocal = sessionmaker(bind=_sync_engine)
-    return _SyncSessionLocal
+def audio_path_for(meeting_id: UUID, mime_type: str) -> Path:
+    ext = "webm" if "webm" in mime_type else "bin"
+    return AUDIO_DIR / f"{meeting_id}.{ext}"
 
 
-def SyncSessionLocal():
-    return _get_sync_session_factory()()
+def _set_status(meeting_id: UUID, status: PipelineStatus) -> None:
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is not None:
+        store.MEETINGS[meeting_id] = meeting.model_copy(update={"pipeline_status": status})
 
 
-def update_meeting_status(
-    meeting_id: int,
-    status: MeetingStatus,
-    processing_error: str | None = None,
-) -> None:
-    """Update meeting status in database."""
-    with SyncSessionLocal() as session:
-        meeting = session.query(Meeting).filter(Meeting.id == meeting_id).first()
-        if meeting:
-            meeting.status = status
-            cast(Any, meeting).processing_error = processing_error
-            session.commit()
-            logger.info(f"Meeting {meeting_id} status updated to {status.value}")
-
-
-def _run_pipeline_sync(meeting_id: int) -> dict:
-    """Run the full pipeline synchronously (called in a background thread).
-
-    Chains: transcription -> diarization -> summarization
-    """
-    from app.services.transcription import process_transcription
-    from app.services.diarisation import process_diarisation
-    from app.services.summarisation import process_summarisation
-
-    logger.info(f"Starting processing pipeline for meeting {meeting_id}")
-
+async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        return
     try:
-        update_meeting_status(meeting_id, MeetingStatus.PROCESSING)
+        await asyncio.sleep(STAGE_DELAY_S)  # sitting in the queue
+        _set_status(meeting_id, PipelineStatus.processing)
 
-        # Step 1: Transcribe + diarise with AssemblyAI
-        with SyncSessionLocal() as session:
-            process_transcription(session, meeting_id)
+        speech = get_speech_provider()
+        raw_segments = await speech.transcribe_diarized(audio_path, meeting)
+        await asyncio.sleep(STAGE_DELAY_S)
 
-        # Step 2: Rename speaker labels
-        with SyncSessionLocal() as session:
-            process_diarisation(session, meeting_id)
+        # Speaker matching via pyannoteAI `/v1/identify` using enrolled
+        # voiceprints (IN-69). If identification fails or confidence/overlap is
+        # insufficient, segments remain Unknown rather than guessed.
+        matcher = get_speaker_matcher()
+        segments, participants, unknown_count = await matcher.match_speakers(
+            raw_segments, meeting, audio_path
+        )
 
-        # Step 3: Summarise with OpenAI
-        with SyncSessionLocal() as session:
-            process_summarisation(session, meeting_id)
+        llm = get_llm_provider()
+        summary = await llm.summarize(segments)
+        items = await llm.extract_action_items(meeting_id, segments)
+        await asyncio.sleep(STAGE_DELAY_S)
 
-        logger.info(f"Pipeline completed for meeting {meeting_id}")
-        return {"meeting_id": meeting_id, "status": "completed"}
+        # Unknown-owned items stay unassigned until the speaker is named.
+        for item in items:
+            if item.owner is not None and item.owner.startswith("Unknown"):
+                item.owner = None
 
-    except Exception as e:
-        logger.error(f"Pipeline failed for meeting {meeting_id}: {e}")
-        update_meeting_status(meeting_id, MeetingStatus.FAILED, str(e))
-        return {"meeting_id": meeting_id, "status": "failed", "error": str(e)}
+        store.TRANSCRIPTS[meeting_id] = segments
+        store.PARTICIPANTS[meeting_id] = participants
+        store.SUMMARIES[meeting_id] = summary
+        for item in items:
+            store.ACTION_ITEMS[item.id] = item
 
+        # Private to participants by default (decision #7): matched (known)
+        # participants get viewer access automatically.
+        access = store.ACCESS.setdefault(meeting_id, [])
+        for participant in participants:
+            if participant.known and not any(e.user == participant.name for e in access):
+                access.append(
+                    MeetingAccessEntry(user=participant.name, role=AccessRole.viewer)
+                )
 
-def enqueue_meeting(meeting_id: int) -> None:
-    """Launch the processing pipeline as a background task.
-
-    Runs the sync pipeline in a separate thread so it doesn't block
-    the FastAPI event loop.
-    """
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, _run_pipeline_sync, meeting_id)
-    logger.info(f"Pipeline enqueued (background thread) for meeting {meeting_id}")
-
-
-def _run_transcription_task(meeting_id: int) -> dict:
-    from app.services.transcription import process_transcription
-
-    with SyncSessionLocal() as session:
-        transcript = process_transcription(session, meeting_id)
-        return {
-            "meeting_id": meeting_id,
-            "status": "transcribed",
-            "segment_count": len(transcript.segments or []),
-        }
-
-
-def _run_diarisation_task(meeting_id: int) -> dict:
-    from app.services.diarisation import process_diarisation
-
-    with SyncSessionLocal() as session:
-        transcript = process_diarisation(session, meeting_id)
-        speakers = {
-            seg.get("speaker")
-            for seg in (transcript.segments or [])
-            if seg.get("speaker")
-        }
-        return {
-            "meeting_id": meeting_id,
-            "status": "diarised",
-            "speaker_count": len(speakers),
-        }
+        updated = store.MEETINGS[meeting_id].model_copy(
+            update={
+                "pipeline_status": PipelineStatus.ready,
+                "unknown_speaker_count": unknown_count,
+                "action_item_count": len(items),
+            }
+        )
+        store.MEETINGS[meeting_id] = updated
+        logger.info("pipeline ready for %s at %s", meeting_id, datetime.now(timezone.utc))
+    except Exception:
+        logger.exception("pipeline failed for %s", meeting_id)
+        _set_status(meeting_id, PipelineStatus.failed)
+    finally:
+        # Async task runs outside any request, so persist explicitly.
+        store.save_snapshot()
 
 
-def _run_summarisation_task(meeting_id: int) -> dict:
-    from app.services.summarisation import process_summarisation
-
-    with SyncSessionLocal() as session:
-        summary, action_items = process_summarisation(session, meeting_id)
-        return {
-            "meeting_id": meeting_id,
-            "status": "summarised",
-            "key_points_count": len(summary.key_points or []),
-            "action_items_count": len(action_items),
-        }
-
-
-def _cleanup_temp_files_impl(file_paths: list[str]) -> dict:
-    removed = 0
-    for path in file_paths:
-        if not path:
-            continue
-        try:
-            os.unlink(path)
-            removed += 1
-        except FileNotFoundError:
-            continue
-        except OSError as exc:
-            logger.warning(f"Failed to delete temp file {path}: {exc}")
-    return {"status": "cleaned", "removed_count": removed}
-
-
-# Legacy Celery task wrappers — only loaded when celery is installed
-try:
-    from app.celery_app import celery_app
-
-    @celery_app.task(name="app.services.pipeline.process_meeting")
-    def process_meeting(meeting_id: int) -> dict:
-        return _run_pipeline_sync(meeting_id)
-
-    @celery_app.task(name="app.services.pipeline.transcribe_meeting")
-    def transcribe_meeting(meeting_id: int) -> dict:
-        return _run_transcription_task(meeting_id)
-
-    @celery_app.task(name="app.services.pipeline.diarize_meeting")
-    def diarize_meeting(meeting_id: int) -> dict:
-        return _run_diarisation_task(meeting_id)
-
-    @celery_app.task(name="app.services.pipeline.summarise_meeting")
-    def summarise_meeting(meeting_id: int) -> dict:
-        return _run_summarisation_task(meeting_id)
-
-    @celery_app.task(name="app.services.pipeline.cleanup_temp_files")
-    def cleanup_temp_files(file_paths: Optional[list[str]] = None) -> dict:
-        return _cleanup_temp_files_impl(file_paths or [])
-except ImportError:
-    pass
+def kick_pipeline(meeting_id: UUID, audio_path: Path) -> None:
+    _set_status(meeting_id, PipelineStatus.queued)
+    asyncio.get_running_loop().create_task(run_pipeline(meeting_id, audio_path))

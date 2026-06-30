@@ -1,0 +1,79 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Brand */
+  --brand-navy: #1f3864;
+  --brand-blue: #2e75b6;
+  /* Surfaces */
+  --color-background-primary: #ffffff;
+  --color-background-secondary: #f4f6f9;
+  --color-background-tertiary: #eaeef3;
+  --color-background-info: #e7eef6;
+  --color-background-danger: #fcebeb;
+  --color-background-warning: #faeeda;
+  --color-background-success: #eaf3de;
+  /* Text */
+  --color-text-primary: #1b1d21;
+  --color-text-secondary: #565a61;
+  --color-text-tertiary: #8b9098;
+  --color-text-info: #1f3864;
+  --color-text-danger: #a32d2d;
+  --color-text-warning: #854f0b;
+  --color-text-success: #3b6d11;
+  /* Borders */
+  --color-border-tertiary: rgba(20, 24, 31, 0.12);
+  --color-border-secondary: rgba(20, 24, 31, 0.2);
+  --color-border-info: #2e75b6;
+  --color-border-danger: #e24b4a;
+  /* Radius + type */
+  --border-radius-md: 8px;
+  --border-radius-lg: 12px;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --page-bg: #dfe3e9;
+}
+
+.dark {
+  --color-background-primary: #1f2228;
+  --color-background-secondary: #272b32;
+  --color-background-tertiary: #2c3138;
+  --color-background-info: #284879;
+  --color-background-danger: #3c2627;
+  --color-background-warning: #3a3119;
+  --color-background-success: #26361d;
+  --color-text-primary: #e9ebee;
+  --color-text-secondary: #aab1ba;
+  --color-text-tertiary: #79808a;
+  --color-text-info: #d6e6fb;
+  --color-text-danger: #f0a6a3;
+  --color-text-warning: #e7c587;
+  --color-text-success: #b8db9c;
+  --color-border-tertiary: rgba(255, 255, 255, 0.1);
+  --color-border-secondary: rgba(255, 255, 255, 0.18);
+  --color-border-info: #3a6db0;
+  --color-border-danger: #b8504e;
+  --page-bg: #141619;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-weight: 400;
+  color: var(--color-text-primary);
+  background: var(--page-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Flat surfaces: focus rings only, no shadows. */
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(46, 117, 182, 0.45);
+  border-radius: var(--border-radius-md);
+}

@@ -1,28 +1,49 @@
-# Meeting Note-Taker
+# Meeting Notetaker — Claude Code Guide
 
-Read docs/claude-code-prompt-phase1.md for the full project spec before doing any work.
+**Read `AGENTS.md` first** — it is the canonical agent guide (project rules,
+architecture, commands, layout, current state). This file only adds notes
+specific to working in Claude Code on this machine.
 
-## Tech Stack
-- Backend: Python 3.11+, FastAPI, SQLAlchemy (async), background threads (no Celery/Redis)
-- Frontend: Next.js 14 (App Router), TypeScript, Tailwind CSS
-- Desktop: Electron (bundles web app as static export)
-- Auth: Azure AD SSO (MSAL)
-- Storage: Local filesystem (dev), MinIO (optional), Azure Blob Storage (prod)
-- Database: SQLite + aiosqlite (dev), PostgreSQL + asyncpg (prod)
-- AI: AssemblyAI (transcription + speaker diarisation), OpenAI GPT-4o (summarisation)
+## Claude-specific notes
 
-## Deviations from Original Spec (docs/claude-code-prompt-phase1.md)
+### MSIX path virtualization (important)
 
-The original spec is the design blueprint. These are the implementation decisions made during development:
+Processes launched from Claude's shell run inside the Claude desktop MSIX
+sandbox: **AppData writes are silently redirected** to
+`%LOCALAPPDATA%\Packages\Claude_*\LocalCache\...` and are invisible in the
+user's Explorer — while Claude's own shells read through the redirect and see
+the virtual path as real. Repo paths under `C:\GitHub` are NOT redirected.
 
-- **Transcription:** AssemblyAI cloud API replaced local Whisper + Pyannote. Single API call handles both transcription and speaker diarisation, with speaker identification when attendee names are available.
-- **Summarisation:** OpenAI GPT-4o replaced Anthropic Claude API. Uses JSON mode for structured output.
-- **Task queue:** Background threads via `asyncio.to_thread()` replaced Celery + Redis. Simpler for single-server deployment.
-- **Dev database:** SQLite replaced PostgreSQL for local development. No Docker required for everyday dev.
-- **Desktop consolidation:** Web app is bundled into Electron as a static export (Option B). Single app, single sign-in.
-- **Video upload:** Added support for .mp4/.m4v/.mov uploads with automatic audio extraction via ffmpeg.
+- Dev recordings therefore save to `<repo>/recordings` (gitignored), not
+  userData — keep it that way (`src/main/index.ts`, `is.dev` branch).
+- If the user reports "the file isn't there" while your shell sees it,
+  check the LocalCache redirect before doubting them.
 
-## Rules
-- Always follow the implementation order in the project spec
-- Never hardcode API keys or secrets
-- Write tests before implementation
+### electron-vite dev loop
+
+`npm run dev` hot-reloads the renderer only. After editing `src/main` or
+`src/preload`, kill the dev process and rerun it — otherwise the running app
+keeps the old main/preload and you'll chase ghosts.
+
+### Verifying UI without Electron
+
+`.claude/launch.json` has `renderer-static`: serves the built renderer
+(`out/renderer`) on port 4173 for the preview tools. In that context
+`window.api` is undefined, so every screen falls back to sample data with a
+"sample data" notice — useful for layout/flow checks, useless for IPC paths.
+`preview_screenshot` times out in this environment; use `preview_eval` DOM
+checks instead.
+
+### Backend process management
+
+Start uvicorn detached so it survives tool-call teardown:
+`Start-Process -WindowStyle Hidden -WorkingDirectory <repo>\backend
+<repo>\backend\.venv\Scripts\python.exe -ArgumentList '-m','uvicorn','app.main:app','--port','8787'`
+
+Reset demo state: stop uvicorn, delete `backend/var/store.json`, restart.
+
+### Packaging on this machine
+
+`winCodeSign` extraction needs Windows symlink privilege (Developer Mode not
+enabled here) — `signAndEditExecutable: false` is set in
+`electron-builder.yml` for local builds; CI re-enables it.
