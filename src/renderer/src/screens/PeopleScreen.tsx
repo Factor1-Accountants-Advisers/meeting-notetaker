@@ -18,13 +18,11 @@ const enrollmentLabel: Record<EnrollmentState, { text: string; tone: Tone }> = {
 export function PeopleScreen(): JSX.Element {
   const { data: staff, offline, setData } = useLive(fetchPeople, sampleStaff)
   const [enrolling, setEnrolling] = useState<StaffMember | null>(null)
-  const [pendingSync, setPendingSync] = useState(false)
 
   const enrolledCount = staff.filter((s) => s.enrollment === 'enrolled').length
 
-  const handleEnrolled = (updated: StaffMember, live: boolean): void => {
+  const handleEnrolled = (updated: StaffMember): void => {
     setData((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
-    if (!live) setPendingSync(true)
     setEnrolling(null)
   }
 
@@ -46,12 +44,6 @@ export function PeopleScreen(): JSX.Element {
           <p className="mt-1.5 flex items-center gap-1.5 text-[12px] text-content-warning">
             <CloudOff size={13} strokeWidth={1.75} />
             Backend unavailable — showing sample data.
-          </p>
-        )}
-        {pendingSync && (
-          <p className="mt-1.5 flex items-center gap-1.5 text-[12px] text-content-warning">
-            <CloudOff size={13} strokeWidth={1.75} />
-            Enrollment saved locally — syncs when the backend is reachable.
           </p>
         )}
       </div>

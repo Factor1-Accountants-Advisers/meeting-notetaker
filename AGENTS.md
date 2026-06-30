@@ -140,7 +140,7 @@ Slice 1 is code-complete and fixture-verified. All Jira child stories crossed of
 Remaining operational items:
 1. Code signing certificate for Windows installer (IN-81 — signing disabled locally; enabled in CI release workflow).
 2. Intune Win32 packaging per DV confirmation.
-3. Provision real backend credentials: PyannoteAI HF token, OpenAI API key, Azure Blob, PostgreSQL.
+3. Provision real backend credentials: pyannoteAI API key (`MN_PYANNOTE_API_KEY`), OpenAI API key, Azure Blob, PostgreSQL.
 4. Blob update feed URL for electron-updater.
 5. Live voiceprint enrollment with real PyannoteAI embeddings (stub works today).
 6. SharePoint transcript storage integration (Slice 1 requirement — emailed transcripts implemented; SharePoint folder pending provisioning).

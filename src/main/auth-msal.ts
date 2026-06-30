@@ -44,9 +44,14 @@ let cachedApp: PublicClientApplication | null = null
 let cachedConfigKey: string | null = null
 let currentAccount: AccountInfo | null = null
 
+function usableEnvValue(value: string | undefined): string | undefined {
+  if (!value || value === 'undefined' || value === 'null') return undefined
+  return value
+}
+
 export function getMsalConfigStatus(env: NodeJS.ProcessEnv = process.env): MsalConfigStatus {
-  const clientId = env.MN_ENTRA_CLIENT_ID ?? env.AZURE_AD_CLIENT_ID
-  const tenantId = env.MN_ENTRA_TENANT_ID ?? env.AZURE_AD_TENANT_ID
+  const clientId = usableEnvValue(env.MN_ENTRA_CLIENT_ID) ?? usableEnvValue(env.AZURE_AD_CLIENT_ID)
+  const tenantId = usableEnvValue(env.MN_ENTRA_TENANT_ID) ?? usableEnvValue(env.AZURE_AD_TENANT_ID)
   const missing = [
     ...(clientId ? [] : ['MN_ENTRA_CLIENT_ID']),
     ...(tenantId ? [] : ['MN_ENTRA_TENANT_ID'])

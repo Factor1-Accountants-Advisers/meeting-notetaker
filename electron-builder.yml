@@ -7,10 +7,13 @@ files:
   - '!{electron.vite.config.ts,.gitignore}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
   - '!{tailwind.config.js,postcss.config.js}'
-  - '!docs/*'
+  - '!docs/**'
   - '!.env*'
-  - '!backend/*'
-  - '!scripts/*'
+  - '!backend/**'
+  - '!scripts/**'
+  - '!recordings/**'
+  - '!dist/**'
+  - '!*.tsbuildinfo'
 extraMetadata:
   SliceVersion: 1.0.0
 win:

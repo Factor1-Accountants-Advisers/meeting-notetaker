@@ -184,6 +184,11 @@ class UploadAudioRequest(BaseModel):
 
     audio_b64: str = Field(min_length=1)
     mime_type: str = "audio/webm"
+    # Optional separate WASAPI/system capture. When present, the backend merges
+    # mic + system with ffmpeg before transcription so Chromium cannot drop the
+    # second audio track from a multi-track MediaRecorder stream.
+    system_audio_b64: str | None = None
+    system_mime_type: str | None = None
     duration_seconds: int | None = None  # client-measured; refined later
     graph_metadata: GraphMeetingMetadata | None = None
 
@@ -197,11 +202,16 @@ class PersonEnrollment(BaseModel):
     reenrollment_required: bool = False
 
 
-class EnrollRequest(BaseModel):
-    """Three short clips of natural speech (~10–15 s each), base64-encoded.
+class CurrentUserRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    email: str = Field(min_length=3, max_length=320)
 
-    Audio is held in memory only: converted to one averaged embedding and
-    discarded immediately (requirements §4.2). Never written to disk.
+
+class EnrollRequest(BaseModel):
+    """Three short clips of natural speech (~5–20 s each), base64-encoded.
+
+    Audio is held in memory only while pyannoteAI creates provider voiceprints.
+    Raw clips are not exposed to the renderer, logged, or persisted locally.
     """
 
     clips_b64: list[str] = Field(min_length=3, max_length=3)

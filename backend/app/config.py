@@ -27,9 +27,14 @@ class Settings(BaseSettings):
 
     # PyannoteAI transcription + voiceprint identification per Jira IN-64/IN-69.
     similarity_threshold: float = 0.62
-    pyannote_api_endpoint: str = ""
-    pyannote_model_version: str = "pyannote/embedding-3.1"
-    pyannote_hf_token: str = ""  # HuggingFace/Pyannote token for API/model access
+    pyannote_api_key: str = ""
+    pyannote_api_endpoint: str = "https://api.pyannote.ai"
+    pyannote_model_version: str = "precision-2"
+    pyannote_transcription_model: str = ""
+    pyannote_transcription_language: str = ""
+    pyannote_poll_interval_seconds: int = 10
+    pyannote_poll_timeout_seconds: int = 1800
+    pyannote_hf_token: str = ""  # legacy/dev only; not the Slice 1 pyannoteAI API credential
 
     # Raw-audio retention (requirements §6.2 engineering default).
     audio_retention_days: int = 30

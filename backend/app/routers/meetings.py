@@ -1,7 +1,10 @@
 import base64
 import binascii
 import logging
+import shutil
+import subprocess
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Header, HTTPException, status
@@ -124,6 +127,72 @@ async def revoke_access(
     return entries
 
 
+def _decode_audio_b64(value: str, label: str) -> bytes:
+    try:
+        audio = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{label} is not valid base64")
+    if len(audio) < 1_000:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{label} is too short")
+    return audio
+
+
+def _merge_mic_and_system_audio(meeting_id: UUID, mic_audio: bytes, system_audio: bytes) -> Path:
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "System audio was captured separately, but ffmpeg is not available to merge mic + system audio",
+        )
+
+    mic_path = AUDIO_DIR / f"{meeting_id}.mic.webm"
+    system_path = AUDIO_DIR / f"{meeting_id}.system.webm"
+    merged_path = AUDIO_DIR / f"{meeting_id}.webm"
+    mic_path.write_bytes(mic_audio)
+    system_path.write_bytes(system_audio)
+
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(mic_path),
+        "-i",
+        str(system_path),
+        "-filter_complex",
+        "[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[a]",
+        "-map",
+        "[a]",
+        "-c:a",
+        "libopus",
+        str(merged_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if result.returncode != 0 or not merged_path.exists() or merged_path.stat().st_size < 1_000:
+        logger.error(
+            "Failed to merge mic + system audio",
+            extra={
+                "meeting_id": str(meeting_id),
+                "returncode": result.returncode,
+                "stderr": result.stderr[-2000:],
+            },
+        )
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "Captured mic and system audio, but failed to merge them for transcription",
+        )
+
+    logger.info(
+        "Merged mic + system audio",
+        extra={
+            "meeting_id": str(meeting_id),
+            "mic_bytes": len(mic_audio),
+            "system_bytes": len(system_audio),
+            "merged_bytes": merged_path.stat().st_size,
+        },
+    )
+    return merged_path
+
+
 @router.post("/{meeting_id}/audio", response_model=Meeting)
 async def upload_audio(
     meeting_id: UUID, body: UploadAudioRequest, actor: str = Actor
@@ -138,16 +207,19 @@ async def upload_audio(
     if meeting.pipeline_status in (PipelineStatus.queued, PipelineStatus.processing):
         raise HTTPException(status.HTTP_409_CONFLICT, "Audio is already being processed")
 
-    try:
-        audio = base64.b64decode(body.audio_b64, validate=True)
-    except (binascii.Error, ValueError):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Audio is not valid base64")
-    if len(audio) < 1_000:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Audio is too short")
+    audio = _decode_audio_b64(body.audio_b64, "Audio")
+    system_audio = (
+        _decode_audio_b64(body.system_audio_b64, "System audio")
+        if body.system_audio_b64
+        else None
+    )
 
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-    path = audio_path_for(meeting_id, body.mime_type)
-    path.write_bytes(audio)
+    if system_audio is not None:
+        path = _merge_mic_and_system_audio(meeting_id, audio, system_audio)
+    else:
+        path = audio_path_for(meeting_id, body.mime_type)
+        path.write_bytes(audio)
 
     updates: dict[str, object] = {}
     if body.duration_seconds:

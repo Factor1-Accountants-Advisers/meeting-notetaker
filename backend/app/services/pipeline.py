@@ -1,13 +1,14 @@
 """Post-meeting processing pipeline (Jira CSV is source of truth).
 
 audio stored -> queued -> processing:
-  1. PyannoteAI: transcription + diarization/speaker labels
-  2. pyannote voiceprints: identify known speakers above threshold
-  3. Azure OpenAI: summary + action items
+  1. pyannoteAI API: transcription + diarization/speaker labels
+  2. pyannoteAI voiceprints: identify known speakers above threshold
+  3. OpenAI provider: summary + action items
 -> ready (or failed, flagged for retry)
 
-Stages run behind provider interfaces; with no PyannoteAI/Azure OpenAI configured
-the stubs produce plausible output so the end-to-end flow works in dev.
+Stages run behind provider interfaces. If pyannoteAI is not configured, the
+pipeline returns an explicit unavailable-provider transcript rather than fake
+speaker identities.
 """
 
 import asyncio
@@ -60,14 +61,12 @@ async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
         raw_segments = await speech.transcribe_diarized(audio_path, meeting)
         await asyncio.sleep(STAGE_DELAY_S)
 
-        # Speaker matching via the pluggable matcher (IN-69). The stub
-        # heuristically assigns the owner to the first speaker; the real
-        # cosine matcher uses voiceprint embeddings with attendee-first
-        # candidate selection (IN-78), controlled expansion (IN-79), and
-        # false-positive suppression (IN-80).
+        # Speaker matching via pyannoteAI `/v1/identify` using enrolled
+        # voiceprints (IN-69). If identification fails or confidence/overlap is
+        # insufficient, segments remain Unknown rather than guessed.
         matcher = get_speaker_matcher()
         segments, participants, unknown_count = await matcher.match_speakers(
-            raw_segments, meeting
+            raw_segments, meeting, audio_path
         )
 
         llm = get_llm_provider()

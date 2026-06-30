@@ -4,6 +4,7 @@ import { join } from 'path'
 import { registerApiProxyIpc } from './api-proxy'
 import { getCurrentUserEmail, getGraphAccessToken, onMsalSignedIn, registerAuthSessionIpc } from './auth-session'
 import { startGraphDetectionRuntime } from './graph/runtime'
+import { loadPublicEnv } from './env'
 import { evaluateHostGate, hostGateLogContext } from './graph/host-gate'
 import { initLogger, logger } from './logger'
 import { registerMediaPermissions } from './media-permissions'
@@ -22,6 +23,7 @@ import { checkForUpdatesOnLaunch, registerUpdaterIpc } from './updater'
 import { createWindow } from './window'
 import type { GraphEventDecision } from './graph/types'
 
+loadPublicEnv()
 initLogger()
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 

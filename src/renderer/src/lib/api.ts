@@ -173,6 +173,23 @@ async function call<T>(method: Method, path: string, body?: unknown): Promise<T 
   return res.ok ? res.body : null
 }
 
+function errorMessage(body: unknown): string {
+  if (typeof body === 'string') return body
+  if (body && typeof body === 'object' && 'detail' in body) {
+    const detail = (body as { detail?: unknown }).detail
+    if (typeof detail === 'string') return detail
+  }
+  return 'Request failed'
+}
+
+async function callRequired<T>(method: Method, path: string, body?: unknown): Promise<T> {
+  if (typeof window.api?.request !== 'function') throw new Error('Backend bridge is unavailable')
+  const res = await window.api.request<T>(method, `${PREFIX}${path}`, body)
+  if (res.ok && res.body !== null) return res.body as T
+  if (res.ok) throw new Error('Backend returned an empty response')
+  throw new Error(errorMessage(res.body))
+}
+
 async function get<T>(path: string): Promise<T | null> {
   return call<T>('GET', path)
 }
@@ -224,13 +241,16 @@ export async function uploadAudio(
   audioB64: string,
   mimeType: string,
   durationSeconds: number | null,
-  graphMetadata?: GraphMeetingMetadata | null
+  graphMetadata?: GraphMeetingMetadata | null,
+  systemAudio?: { audioB64: string; mimeType: string } | null
 ): Promise<MeetingDto | null> {
   return call<MeetingDto>('POST', `/meetings/${meetingId}/audio`, {
     audio_b64: audioB64,
     mime_type: mimeType,
     duration_seconds: durationSeconds,
-    graph_metadata: graphMetadata ? toGraphMetadataDto(graphMetadata) : null
+    graph_metadata: graphMetadata ? toGraphMetadataDto(graphMetadata) : null,
+    system_audio_b64: systemAudio?.audioB64 ?? null,
+    system_mime_type: systemAudio?.mimeType ?? null
   })
 }
 
@@ -335,16 +355,28 @@ export async function searchAll(q: string): Promise<SearchResultDto[] | null> {
   return get<SearchResultDto[]>(`/search?q=${encodeURIComponent(q)}`)
 }
 
+export async function ensureCurrentPerson(name: string, email: string): Promise<StaffMember | null> {
+  const dto = await call<PersonEnrollmentDto>('POST', '/people/me', { name, email })
+  if (!dto) return null
+  return {
+    id: dto.employee_id,
+    name: dto.display_name,
+    role: dto.role,
+    tone: toneFor(dto.display_name),
+    enrollment: enrollmentState(dto),
+    modelVersion: dto.model_version
+  }
+}
+
 export async function enrollPerson(
   employeeId: string,
   clipsB64: string[],
   mimeType: string
 ): Promise<StaffMember | null> {
-  const dto = await call<PersonEnrollmentDto>('POST', `/people/${employeeId}/enroll`, {
+  const dto = await callRequired<PersonEnrollmentDto>('POST', `/people/${employeeId}/enroll`, {
     clips_b64: clipsB64,
     mime_type: mimeType
   })
-  if (!dto) return null
   return {
     id: dto.employee_id,
     name: dto.display_name,

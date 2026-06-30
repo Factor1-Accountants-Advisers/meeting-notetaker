@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { AppShell } from './components/shell/AppShell'
+import { EnrollmentModal } from './components/EnrollmentModal'
 import { HomeScreen } from './screens/HomeScreen'
 import { PeopleScreen } from './screens/PeopleScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
 import { LoginScreen, type User } from './screens/LoginScreen'
 import { RecordingScreen, type RecordingSession } from './screens/RecordingScreen'
-import { createMeeting, emailNotes, fetchMeetingReview, uploadAudio, type GraphMeetingMetadata } from './lib/api'
+import { createMeeting, emailNotes, ensureCurrentPerson, fetchMeetingReview, uploadAudio, type GraphMeetingMetadata } from './lib/api'
 import { capture, type CaptureStatus } from './lib/capture'
 import { loadPrefs } from './lib/prefs'
 import { useNotifications } from './lib/useNotifications'
@@ -13,6 +14,7 @@ import { audioDurationSeconds, blobToBase64 } from './lib/recorder'
 import { elapsedMs } from './screens/RecordingScreen'
 import { useTheme } from './lib/theme'
 import type { ScreenId } from './lib/nav'
+import type { StaffMember } from './data/mock'
 
 const USER_KEY = 'mn.user'
 
@@ -36,6 +38,9 @@ type PostCaptureNotice = {
 
 function App(): JSX.Element {
   const [user, setUser] = useState<User | null>(loadUser)
+  const [currentPerson, setCurrentPerson] = useState<StaffMember | null>(null)
+  const [enrollmentLoading, setEnrollmentLoading] = useState(false)
+  const [enrollmentError, setEnrollmentError] = useState<string | null>(null)
   const [view, setView] = useState<View>('home')
   const [recording, setRecording] = useState<RecordingSession | null>(null)
   const recordingRef = useRef<RecordingSession | null>(null)
@@ -57,9 +62,45 @@ function App(): JSX.Element {
     if (typeof window.api?.setUser === 'function') window.api.setUser(user?.name ?? '')
   }, [user])
 
+  // Required staff voiceprint gate after Microsoft sign-in.
+  useEffect(() => {
+    let cancelled = false
+    if (!user) {
+      setCurrentPerson(null)
+      setEnrollmentError(null)
+      setEnrollmentLoading(false)
+      return
+    }
+
+    setEnrollmentLoading(true)
+    setEnrollmentError(null)
+    ensureCurrentPerson(user.name, user.email)
+      .then((person) => {
+        if (cancelled) return
+        if (person) {
+          setCurrentPerson(person)
+        } else {
+          setCurrentPerson(null)
+          setEnrollmentError('Could not load your staff enrollment record. Check that the backend is running, then sign in again.')
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setCurrentPerson(null)
+        setEnrollmentError(err instanceof Error ? err.message : 'Could not load your staff enrollment record.')
+      })
+      .finally(() => {
+        if (!cancelled) setEnrollmentLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [user])
+
   // Listen for auto-recording commands from the main process (IN-66).
   useEffect(() => {
-    if (!user || typeof window.api?.onAutoStartRequest !== 'function') return
+    if (!user || currentPerson?.enrollment !== 'enrolled' || typeof window.api?.onAutoStartRequest !== 'function') return
 
     const unsubStart = window.api.onAutoStartRequest(async (data) => {
       try {
@@ -92,21 +133,33 @@ function App(): JSX.Element {
         const meetingId = session?.meetingId ?? null
         const graphMetadata = autoGraphMetadataRef.current
         const durationSeconds = session ? Math.round(elapsedMs(session) / 1000) : null
-        const blob = await capture.stop(session ? elapsedMs(session) : undefined)
-        if (blob) {
+        const result = await capture.stop(session ? elapsedMs(session) : undefined)
+        if (result) {
           const name = `${meetingId ?? `auto-${Date.now()}`}.webm`
           try {
-            await window.api.saveRecording(name, await blob.arrayBuffer())
+            await window.api.saveRecording(name, await result.blob.arrayBuffer())
+            if (result.systemBlob) {
+              await window.api.saveRecording(
+                name.replace(/\.webm$/i, '.system.webm'),
+                await result.systemBlob.arrayBuffer()
+              )
+            }
           } catch {
             // Local save failed — still try upload
           }
           if (meetingId) {
             await uploadAudio(
               meetingId,
-              await blobToBase64(blob),
-              blob.type || 'audio/webm',
+              await blobToBase64(result.blob),
+              result.blob.type || 'audio/webm',
               durationSeconds,
-              graphMetadata
+              graphMetadata,
+              result.systemBlob
+                ? {
+                    audioB64: await blobToBase64(result.systemBlob),
+                    mimeType: result.systemBlob.type || 'audio/webm'
+                  }
+                : null
             )
           }
         }
@@ -124,7 +177,7 @@ function App(): JSX.Element {
       unsubStart()
       unsubStop()
     }
-  }, [user])
+  }, [user, currentPerson?.enrollment])
 
   if (!user) {
     return (
@@ -264,13 +317,16 @@ function App(): JSX.Element {
     const durationSeconds = session ? Math.round(elapsedMs(session) / 1000) : null
     window.api.debugLog('manual stop requested', { meetingId, durationSeconds })
     setSubmitting(true)
-    let blob: Blob | null = null
+    let result: Awaited<ReturnType<typeof capture.stop>> = null
     try {
-      blob = await capture.stop(session ? elapsedMs(session) : undefined)
+      result = await capture.stop(session ? elapsedMs(session) : undefined)
       window.api.debugLog('capture stop resolved', {
-        hasBlob: Boolean(blob),
-        size: blob?.size ?? 0,
-        type: blob?.type ?? null
+        hasBlob: Boolean(result?.blob),
+        size: result?.blob.size ?? 0,
+        type: result?.blob.type ?? null,
+        hasSystemBlob: Boolean(result?.systemBlob),
+        systemSize: result?.systemBlob?.size ?? 0,
+        systemType: result?.systemBlob?.type ?? null
       })
     } catch (err) {
       window.api.debugLog('capture stop failed', {
@@ -279,22 +335,42 @@ function App(): JSX.Element {
       setSubmitting(false)
       return
     }
-    if (blob) {
+    if (result) {
       // Local copy first (survives backend outages), then queue the pipeline.
       const name = `${meetingId ?? `local-${Date.now()}`}.webm`
       try {
-        const { path } = await window.api.saveRecording(name, await blob.arrayBuffer())
-        console.info(`Recording saved: ${path} (${Math.round(blob.size / 1024)} KB)`)
+        const { path } = await window.api.saveRecording(name, await result.blob.arrayBuffer())
+        console.info(`Recording saved: ${path} (${Math.round(result.blob.size / 1024)} KB)`)
+        if (result.systemBlob) {
+          const systemPath = await window.api.saveRecording(
+            name.replace(/\.webm$/i, '.system.webm'),
+            await result.systemBlob.arrayBuffer()
+          )
+          console.info(
+            `System audio saved: ${systemPath.path} (${Math.round(result.systemBlob.size / 1024)} KB)`
+          )
+        }
       } catch (err) {
         console.error('Failed to save recording', err)
       }
       if (meetingId) {
-        window.api.debugLog('audio upload starting', { meetingId, size: blob.size })
+        window.api.debugLog('audio upload starting', {
+          meetingId,
+          size: result.blob.size,
+          systemSize: result.systemBlob?.size ?? 0
+        })
         const uploaded = await uploadAudio(
           meetingId,
-          await blobToBase64(blob),
-          blob.type || 'audio/webm',
-          durationSeconds
+          await blobToBase64(result.blob),
+          result.blob.type || 'audio/webm',
+          durationSeconds,
+          null,
+          result.systemBlob
+            ? {
+                audioB64: await blobToBase64(result.systemBlob),
+                mimeType: result.systemBlob.type || 'audio/webm'
+              }
+            : null
         )
         window.api.debugLog('audio upload finished', { meetingId, ok: Boolean(uploaded) })
         if (!uploaded) console.warn('Audio upload failed — backend unreachable')
@@ -332,8 +408,55 @@ function App(): JSX.Element {
   const signOut = (): void => {
     localStorage.removeItem(USER_KEY)
     setRecording(null)
+    setCurrentPerson(null)
+    setEnrollmentError(null)
+    setEnrollmentLoading(false)
     setView('home')
     setUser(null)
+  }
+
+  if (enrollmentLoading || enrollmentError || !currentPerson || currentPerson.enrollment !== 'enrolled') {
+    return (
+      <div className="relative flex h-full flex-col items-center justify-center bg-page px-6">
+        <div className="w-full max-w-[520px] rounded-lg border-[0.5px] border-edge-secondary bg-bg-primary p-5 text-center">
+          <h1 className="m-0 text-[18px] font-medium text-content-primary">Voiceprint required</h1>
+          <p className="mx-auto mb-0 mt-2 max-w-[420px] text-[12px] leading-relaxed text-content-tertiary">
+            Factor1 staff must enroll a voiceprint after Microsoft sign-in before using
+            Notetaker. This keeps speaker attribution aligned with the Slice 1 Jira scope.
+          </p>
+          {enrollmentLoading && (
+            <p className="mb-0 mt-4 flex items-center justify-center gap-2 text-[13px] text-content-secondary">
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-edge-tertiary border-t-brand-blue" />
+              Loading your enrollment status…
+            </p>
+          )}
+          {enrollmentError && (
+            <p className="mb-0 mt-4 rounded-md border-[0.5px] border-edge-danger bg-bg-danger px-3 py-2 text-[12px] leading-relaxed text-content-danger">
+              {enrollmentError}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={signOut}
+            className="mt-4 rounded-md border-[0.5px] border-edge-secondary px-3 py-2 text-[13px] text-content-primary hover:bg-bg-secondary"
+          >
+            Sign out
+          </button>
+        </div>
+        {currentPerson && currentPerson.enrollment !== 'enrolled' && (
+          <EnrollmentModal
+            person={currentPerson}
+            required
+            onClose={() => undefined}
+            onEnrolled={(updated) => {
+              setCurrentPerson(updated)
+              setEnrollmentError(null)
+              setView('home')
+            }}
+          />
+        )}
+      </div>
+    )
   }
 
   const shellRecordingState = recording ? 'recording' : autoRecordingState

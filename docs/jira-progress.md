@@ -47,37 +47,30 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Tray tooltip reflects current recording state.
   - Commit: `132cb77`
 
-- [x] `IN-69` — Wire Pyannote transcription and voiceprint identification into production pipeline
-  - Extracted speaker matching from pipeline into `backend/app/services/speaker_matching.py`.
-  - Added `SpeakerEmbeddingProvider` interface with stub + pyannote implementations.
-  - Added `VoiceprintRepository` interface with in-memory stub.
-  - Pipeline now uses `get_speaker_matcher()` factory — stub heuristic when no voiceprints enrolled, cosine matcher when voiceprints exist.
-  - Stub behavior preserved: owner recognised, unknown speakers labelled Unknown N.
+- [ ] `IN-69` — Wire pyannoteAI transcription and voiceprint identification into production pipeline
+  - Corrected provider alignment: Slice 1 must call pyannoteAI API (`api.pyannote.ai`), not HuggingFace Inference or direct OpenAI Whisper transcription.
+  - Added pyannoteAI `/v1/diarize` client path with `transcription: true` for speaker-attributed transcription.
+  - Removed fake owner/first-speaker matching from runtime fallback; unidentified speakers remain Unknown until real pyannoteAI voiceprint identification is wired.
+  - Remaining: wire pyannoteAI `/v1/voiceprint` + `/v1/identify` end-to-end with persisted provider voiceprints and real API key.
 
-- [x] `IN-78` — Attendee-first voiceprint candidate selection
-  - `CosineSpeakerMatcher` checks meeting attendees first before expanded staff.
-  - `StubSpeakerMatcher` assigns owner as first speaker (stand-in for attendee-first).
+- [ ] `IN-78` — Attendee-first voiceprint candidate selection
+  - Remaining: implement against pyannoteAI identify candidate voiceprint set using meeting attendees first.
 
-- [x] `IN-79` — Controlled voiceprint candidate expansion
-  - If no attendee match above threshold, enrolled staff are checked.
-  - Match source tracked as "attendee" or "expanded_staff".
+- [ ] `IN-79` — Controlled voiceprint candidate expansion
+  - Remaining: add controlled non-attendee expansion only after attendee candidates fail threshold.
 
-- [x] `IN-80` — False-positive suppression for non-attendee detections
-  - Cosine similarity threshold (`MN_SIMILARITY_THRESHOLD`, default 0.62).
-  - Matches below threshold rejected — speaker remains Unknown.
-  - Confidence, match_source, and match_reason tracked per match.
-  - Verification: backend import OK, pipeline end-to-end with meeting create → upload → process → ready, stub behavior preserved.
+- [ ] `IN-80` — False-positive suppression for non-attendee detections
+  - Runtime fallback now prefers Unknown over guessed staff names.
+  - Remaining: enforce/tune pyannoteAI identify thresholds and short-false-positive suppression on real output.
 
-- [x] `IN-76` — Voiceprint enrollment/admin utility
-  - Enrollment extracts embeddings from 3 audio clips, averages them into one voiceprint.
-  - Source audio deleted immediately after embedding extraction.
-  - Voiceprint stored via `VoiceprintRepository` with model version and timestamp.
-  - Re-enrollment supported via `flag-reenrollment` endpoint.
-  - Exactly 3 clips enforced (Pydantic `min_length=3, max_length=3` on `EnrollRequest`).
-  - All enrollment actions audit-logged (enroll, flag_reenrollment).
-  - No raw audio persisted; no embeddings logged.
-  - Verification: API tested — enroll with 3 clips, reject 2 clips, flag re-enrollment, all passed.
-  - Commit: `b469eeb`
+- [ ] `IN-76` — Voiceprint enrollment/admin utility
+  - UI records exactly 3 clips and requires explicit consent.
+  - Removed local fake enrollment fallback; backend confirmation is required.
+  - Source clips are decoded in memory and rejected if invalid/too short.
+  - Enrollment audit before/after state fixed.
+  - `MN_PYANNOTE_API_KEY` now configures the org pyannoteAI API and `/v1/test` auth passes.
+  - Backend enrollment now calls pyannoteAI `/v1/voiceprint` for the 3 recorded clips and persists opaque provider voiceprint payloads locally as the Slice 1 storage stand-in.
+  - Remaining: live enroll an actual staff voice sample, then use `/v1/identify` during meeting processing.
 
 - [x] `IN-93` — Implement MS Outlook emailing of Transcript
   - `GraphEmailProvider` sends via delegated Microsoft Graph `POST /me/sendMail`.

@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import binascii
 from datetime import datetime, timezone
@@ -6,8 +7,8 @@ from fastapi import APIRouter, Header, HTTPException, status
 
 from app import store
 from app.config import get_settings
-from app.schemas import EnrollRequest, PersonEnrollment
-from app.services.speaker_embeddings import get_embedding_provider
+from app.schemas import CurrentUserRequest, EnrollRequest, PersonEnrollment
+from app.services.pyannote_client import PyannoteAIClient, PyannoteAIError, PyannotePollConfig
 from app.services.voiceprints import Voiceprint, get_voiceprint_repository
 
 router = APIRouter(prefix="/people", tags=["people"])
@@ -20,6 +21,45 @@ async def list_people() -> list[PersonEnrollment]:
     """Staff with enrollment status. Clients/externals are never listed here
     (enrollment is staff-only, requirements §4.2)."""
     return store.PEOPLE
+
+
+@router.post("/me", response_model=PersonEnrollment)
+async def ensure_current_staff(body: CurrentUserRequest, actor: str = Actor) -> PersonEnrollment:
+    """Ensure the signed-in Factor1 staff user exists before enrollment gating.
+
+    Slice 1 requires staff voiceprint enrollment before normal app use. MSAL gives
+    us the signed-in user; until the staff directory sync lands, that user record
+    is created on first sign-in and then enrolled via the normal endpoint.
+    """
+    email = body.email.strip().lower()
+    name = body.name.strip()
+    if not email or "@" not in email:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Valid email is required")
+    existing = next((p for p in store.PEOPLE if p.employee_id == email), None)
+    if existing is not None:
+        if existing.display_name != name:
+            before = existing.display_name
+            existing.display_name = name
+            store.add_audit(
+                actor,
+                "person.profile_update",
+                email,
+                before=before,
+                after=name,
+            )
+        return existing
+
+    person = PersonEnrollment(
+        employee_id=email,
+        display_name=name,
+        role="Factor1 staff",
+        enrolled=False,
+        model_version=None,
+        reenrollment_required=False,
+    )
+    store.PEOPLE.append(person)
+    store.add_audit(actor, "person.create", name, before=None, after=email)
+    return person
 
 
 @router.post("/{employee_id}/enroll", response_model=PersonEnrollment)
@@ -51,41 +91,60 @@ async def enroll(
             )
         clips.append(audio)
 
-    # Extract embeddings from all three clips, then average them (IN-76).
+    previous_enrolled = person.enrolled
+    previous_model_version = person.model_version
+
+    # Create one pyannoteAI voiceprint per clip. The app records three short
+    # samples so identification can later submit multiple same-person provider
+    # voiceprints with distinct internal labels. Raw clips are never stored.
     settings = get_settings()
-    embed_provider = get_embedding_provider()
+    if not settings.pyannote_api_key:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "pyannoteAI API key is not configured",
+        )
     voiceprint_repo = get_voiceprint_repository()
 
-    embeddings: list[list[float]] = []
-    for i, clip in enumerate(clips):
-        try:
-            emb = await embed_provider.extract_embedding(clip)
-            if not emb or len(emb) != embed_provider.embedding_dim:
-                raise HTTPException(
-                    status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    f"Clip {i + 1} produced invalid embedding",
+    def create_voiceprints() -> list[str]:
+        client = PyannoteAIClient(
+            settings.pyannote_api_key,
+            settings.pyannote_api_endpoint or "https://api.pyannote.ai",
+        )
+        poll = PyannotePollConfig(
+            interval_seconds=settings.pyannote_poll_interval_seconds,
+            timeout_seconds=settings.pyannote_poll_timeout_seconds,
+        )
+        values: list[str] = []
+        suffix = ".webm" if "webm" in body.mime_type else ".bin"
+        for i, clip in enumerate(clips):
+            values.append(
+                client.extract_voiceprint_from_audio(
+                    clip,
+                    media_prefix=f"voiceprint-samples/{employee_id}/clip-{i + 1}",
+                    model=settings.pyannote_model_version or "precision-2",
+                    suffix=suffix,
+                    content_type=body.mime_type,
+                    poll=poll,
                 )
-            embeddings.append(emb)
-        except HTTPException:
-            raise
-        except Exception:
-            raise HTTPException(
-                status.HTTP_500_INTERNAL_SERVER_ERROR,
-                f"Clip {i + 1} embedding extraction failed",
             )
+        return values
 
-    # Average the embeddings into one voiceprint.
-    dim = embed_provider.embedding_dim
-    averaged = [sum(emb[i] for emb in embeddings) / len(embeddings) for i in range(dim)]
+    try:
+        provider_voiceprints = await asyncio.to_thread(create_voiceprints)
+    except PyannoteAIError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            f"pyannoteAI voiceprint extraction failed: {exc}",
+        ) from exc
 
-    # Delete source audio immediately (requirements §4.2).
+    # Delete source audio references immediately after pyannoteAI extraction.
     del clips
 
-    # Store the voiceprint.
+    # Store only provider voiceprint payloads, never raw clips.
     voiceprint = Voiceprint(
         employee_id=employee_id,
         display_name=person.display_name,
-        embedding=averaged,
+        voiceprints=provider_voiceprints,
         model_version=settings.pyannote_model_version,
         enrolled_at=datetime.now(timezone.utc).isoformat(),
     )
@@ -97,12 +156,20 @@ async def enroll(
     person.reenrollment_required = False
 
     # Biometric action — always audit-logged (requirements §7).
+    before = (
+        f"model={previous_model_version}"
+        if previous_enrolled
+        else "un-enrolled"
+    )
     store.add_audit(
         actor,
         "person.enroll",
         person.display_name,
-        before="un-enrolled" if not person.enrolled else f"model={person.model_version}",
-        after=f"model={settings.pyannote_model_version}, dim={dim}, enrollment_complete",
+        before=before,
+        after=(
+            f"model={settings.pyannote_model_version}, "
+            f"voiceprints={len(provider_voiceprints)}, enrollment_complete"
+        ),
     )
 
     return person

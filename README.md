@@ -14,9 +14,10 @@ for the provisioning runbook; each credential flips a stub via `MN_*` env vars.
 
 Working today: MS Graph calendar detection with polling runtime, auto-start/stop
 recording with idempotency, MSAL interactive sign-in, WASAPI loopback + mic
-capture, processing pipeline with queued/processing/ready states, Pyannote
-voiceprint enrollment and speaker matching (stub until HF token provisioned),
-OpenAI summaries/action items (stub until `MN_OPENAI_API_KEY` set), Graph
+capture, processing pipeline with queued/processing/ready states, pyannoteAI
+transcription + voiceprint enrollment/speaker identification (requires
+`MN_PYANNOTE_API_KEY`; otherwise speakers remain Unknown), OpenAI summaries/action
+items (stub until `MN_OPENAI_API_KEY` set), Graph
 delegated email with transcript attachment, Windows startup + tray persistence,
 recording status UI, per-meeting access control, audit log, auto-update wiring,
 CI release workflow.

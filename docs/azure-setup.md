@@ -51,10 +51,9 @@ Jira CSV is the source of truth for Slice 1. IN-64/IN-69 call for PyannoteAI
 transcription and voiceprint identification.
 
 - PyannoteAI account/API access for transcription + speaker ID
-- Set `MN_PYANNOTE_API_ENDPOINT` if the hosted API exposes a tenant endpoint
-- Set `MN_PYANNOTE_HF_TOKEN` / equivalent API token → replaces the stub
-  transcript provider in `backend/app/services/speech.py` and enables real
-  voiceprint embeddings in `backend/app/services/speaker_embeddings.py`
+- Set `MN_PYANNOTE_API_KEY` to the pyannoteAI API key from the pyannoteAI dashboard
+- Optional: set `MN_PYANNOTE_API_ENDPOINT` only for a tenant-specific pyannoteAI base URL; default is `https://api.pyannote.ai`
+- Optional: set `MN_PYANNOTE_TRANSCRIPTION_MODEL` / `MN_PYANNOTE_TRANSCRIPTION_LANGUAGE` for pyannoteAI STT orchestration tuning
 
 ## 6. OpenAI (summaries + action items)
 
@@ -83,9 +82,9 @@ If neither is set, `StubLLMProvider` returns deterministic placeholder output.
 |---|---|---|
 | `backend/var/audio` files | Blob Storage `audio` container | `MN_BLOB_ACCOUNT_URL` |
 | `backend/var/store.json` | PostgreSQL | `MN_POSTGRES_DSN` |
-| `StubSpeechProvider` | PyannoteAI transcription/speaker ID | `MN_PYANNOTE_API_ENDPOINT` / `MN_PYANNOTE_HF_TOKEN` |
+| `StubSpeechProvider` | pyannoteAI transcription/speaker ID | `MN_PYANNOTE_API_KEY` |
 | `StubLLMProvider` | OpenAI (direct or Azure) | `MN_OPENAI_API_KEY` or `MN_OPENAI_ENDPOINT` + `MN_OPENAI_DEPLOYMENT` |
 | `StubEmailProvider` (logs) | Graph sendMail | `MN_KEY_VAULT_URL` |
 | Dev sign-in stub | Entra ID via MSAL | tenant + client ID (main process) |
 | Display-name actor header | Entra token subject | with MSAL wiring |
-| Speaker-match heuristic | pyannote embeddings vs enrolled voiceprints | pipeline work post-provisioning |
+| Unidentified speaker fallback | pyannoteAI voiceprint identification | voiceprints + `MN_PYANNOTE_API_KEY` |
