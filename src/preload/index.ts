@@ -43,6 +43,10 @@ const api = {
   saveRecording: (name: string, data: ArrayBuffer): Promise<{ path: string }> =>
     ipcRenderer.invoke('recording:save', name, data),
 
+  /** Load a saved capture for retry after backend/upload failures. */
+  readRecording: (name: string): Promise<{ exists: boolean; data?: ArrayBuffer }> =>
+    ipcRenderer.invoke('recording:read', name),
+
   /** Renderer diagnostics mirrored into the main log for live desktop debugging. */
   debugLog: (message: string, details?: unknown): void =>
     ipcRenderer.send('renderer:debug-log', message, details),

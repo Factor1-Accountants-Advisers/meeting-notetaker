@@ -18,10 +18,30 @@ function loggablePath(path: string): string {
   return path.split('?')[0]
 }
 
+function timeoutMsFor(req: ApiRequest): number {
+  const path = loggablePath(req.path)
+  if (req.method === 'POST' && path.endsWith('/audio')) return 120_000
+  if (req.method === 'POST' && path.endsWith('/email')) return 90_000
+  if (req.method === 'POST') return 30_000
+  return 15_000
+}
+
+function parseBody(text: string): unknown {
+  if (!text) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    return text
+  }
+}
+
 export function registerApiProxyIpc(): void {
   ipcMain.handle('api:request', async (_event, req: ApiRequest) => {
     const path = loggablePath(req.path)
-    logger().info('[api-proxy] request', { method: req.method, path })
+    const timeoutMs = timeoutMsFor(req)
+    logger().info('[api-proxy] request', { method: req.method, path, timeoutMs })
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
     try {
       const headers: Record<string, string> = { 'X-MN-User': getCurrentUser() }
       if (req.body !== undefined) headers['content-type'] = 'application/json'
@@ -35,7 +55,8 @@ export function registerApiProxyIpc(): void {
       const res = await fetch(`${API_BASE}${req.path}`, {
         method: req.method,
         headers,
-        body: req.body !== undefined ? JSON.stringify(req.body) : undefined
+        body: req.body !== undefined ? JSON.stringify(req.body) : undefined,
+        signal: controller.signal
       })
       const text = await res.text()
       if (!res.ok) {
@@ -45,15 +66,20 @@ export function registerApiProxyIpc(): void {
           status: res.status
         })
       }
-      return { ok: res.ok, status: res.status, body: text ? JSON.parse(text) : null }
+      return { ok: res.ok, status: res.status, body: parseBody(text) }
     } catch (err) {
+      const aborted = controller.signal.aborted
       logger().warn('[api-proxy] backend request failed', {
         method: req.method,
         path,
-        message: err instanceof Error ? err.message : String(err)
+        timeoutMs,
+        aborted,
+        message: aborted ? `Backend request timed out after ${timeoutMs}ms` : err instanceof Error ? err.message : String(err)
       })
-      // Backend not running / unreachable — renderer falls back to sample data.
-      return { ok: false, status: 0, body: null }
+      // Backend not running / wedged / unreachable — renderer keeps the local recording and exposes retry.
+      return { ok: false, status: aborted ? 408 : 0, body: null }
+    } finally {
+      clearTimeout(timer)
     }
   })
 }

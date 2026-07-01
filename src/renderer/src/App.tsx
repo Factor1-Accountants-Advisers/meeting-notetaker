@@ -6,7 +6,7 @@ import { PeopleScreen } from './screens/PeopleScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
 import { LoginScreen, type User } from './screens/LoginScreen'
 import { RecordingScreen, type RecordingSession } from './screens/RecordingScreen'
-import { createMeeting, emailNotes, ensureCurrentPerson, fetchMeetingReview, uploadAudio, type GraphMeetingMetadata } from './lib/api'
+import { createMeeting, emailNotes, ensureCurrentPerson, fetchMeetingReview, retryPipeline, uploadAudio, type GraphMeetingMetadata } from './lib/api'
 import { capture, type CaptureStatus } from './lib/capture'
 import { loadPrefs } from './lib/prefs'
 import { useNotifications } from './lib/useNotifications'
@@ -29,8 +29,10 @@ function loadUser(): User | null {
 
 type View = ScreenId | 'recording'
 
+type PostCaptureState = 'processing' | 'emailing' | 'ready' | 'upload_failed' | 'processing_failed' | 'email_failed'
+
 type PostCaptureNotice = {
-  state: 'processing' | 'emailing' | 'ready' | 'failed'
+  state: PostCaptureState
   meetingId: string
   title: string
   message: string
@@ -225,7 +227,7 @@ function App(): JSX.Element {
           })
         } else {
           setPostCaptureNotice({
-            state: 'failed',
+            state: 'email_failed',
             meetingId,
             title,
             message: 'Notes are ready, but the transcript email was not sent. Sign in to Outlook, then retry email.'
@@ -235,10 +237,10 @@ function App(): JSX.Element {
       }
       if (status === 'failed') {
         setPostCaptureNotice({
-          state: 'failed',
+          state: 'processing_failed',
           meetingId,
           title,
-          message: 'Processing failed. The recording was saved and can be retried.'
+          message: 'Processing failed. The recording is saved and can be retried.'
         })
         return
       }
@@ -248,10 +250,10 @@ function App(): JSX.Element {
       }
 
       setPostCaptureNotice({
-        state: 'failed',
+        state: 'processing_failed',
         meetingId,
         title,
-        message: 'Processing is taking longer than expected. The recording was saved; open the meeting list or refresh to check the latest status.'
+        message: 'Processing status is taking longer than expected. The recording is saved; retry will check the backend and continue from the saved state.'
       })
     }
 
@@ -276,7 +278,7 @@ function App(): JSX.Element {
         setUser(nextUser)
       } else {
         setPostCaptureNotice({
-          state: 'failed',
+          state: 'email_failed',
           meetingId,
           title,
           message: signedIn.error || 'Outlook sign-in did not complete. Transcript email was not sent.'
@@ -293,13 +295,90 @@ function App(): JSX.Element {
     })
     const result = await emailNotes(meetingId, null, recorderEmail)
     setPostCaptureNotice({
-      state: result ? 'ready' : 'failed',
+      state: result ? 'ready' : 'email_failed',
       meetingId,
       title,
       message: result
         ? `Transcript emailed to ${result.recipients.join(', ')}.`
         : 'Email still failed. The notes are ready and the recording is safe.'
     })
+  }
+
+  const retrySavedUpload = async (meetingId: string, title: string): Promise<void> => {
+    setPostCaptureNotice({
+      state: 'processing',
+      meetingId,
+      title,
+      message: 'Retrying upload from the saved local recording…'
+    })
+
+    const mic = await window.api.readRecording(`${meetingId}.webm`)
+    if (!mic.exists || !mic.data) {
+      setPostCaptureNotice({
+        state: 'upload_failed',
+        meetingId,
+        title,
+        message: 'Could not find the saved local recording to retry upload. Please keep this app open and contact support.'
+      })
+      return
+    }
+
+    const system = await window.api.readRecording(`${meetingId}.system.webm`)
+    const uploaded = await uploadAudio(
+      meetingId,
+      await blobToBase64(new Blob([mic.data], { type: 'audio/webm;codecs=opus' })),
+      'audio/webm;codecs=opus',
+      null,
+      null,
+      system.exists && system.data
+        ? {
+            audioB64: await blobToBase64(new Blob([system.data], { type: 'audio/webm;codecs=opus' })),
+            mimeType: 'audio/webm;codecs=opus'
+          }
+        : null
+    )
+
+    window.api.debugLog('retry saved upload finished', { meetingId, ok: Boolean(uploaded) })
+    if (uploaded) {
+      watchProcessing(meetingId, title)
+    } else {
+      setPostCaptureNotice({
+        state: 'upload_failed',
+        meetingId,
+        title,
+        message: 'Upload still failed. The recording remains saved locally; retry once the backend is healthy.'
+      })
+    }
+  }
+
+  const retryProcessingStatus = async (meetingId: string, title: string): Promise<void> => {
+    setPostCaptureNotice({
+      state: 'processing',
+      meetingId,
+      title,
+      message: 'Checking backend processing status…'
+    })
+
+    const review = await fetchMeetingReview(meetingId)
+    if (review?.meeting.pipeline_status === 'ready') {
+      await retryTranscriptEmail(meetingId, title)
+      return
+    }
+    if (review?.meeting.pipeline_status === 'failed') {
+      await retryPipeline(meetingId)
+    }
+    watchProcessing(meetingId, title)
+  }
+
+  const retryPostCapture = async (meetingId: string, title: string): Promise<void> => {
+    const state = postCaptureNotice?.state
+    if (state === 'upload_failed') {
+      await retrySavedUpload(meetingId, title)
+    } else if (state === 'processing_failed') {
+      await retryProcessingStatus(meetingId, title)
+    } else {
+      await retryTranscriptEmail(meetingId, title)
+    }
   }
 
   const startCapture = async (title: string, link: string | null): Promise<void> => {
@@ -388,10 +467,10 @@ function App(): JSX.Element {
         if (uploaded) watchProcessing(meetingId, session?.title ?? 'Recording')
         else {
           setPostCaptureNotice({
-            state: 'failed',
+            state: 'upload_failed',
             meetingId,
             title: session?.title ?? 'Recording',
-            message: 'Recording saved locally, but upload failed. Keep the app open and retry once backend is reachable.'
+            message: 'Recording saved locally, but upload failed. Retry upload once the backend is reachable.'
           })
         }
       }
@@ -515,7 +594,7 @@ function App(): JSX.Element {
           recordingState={autoRecordingState}
           postCaptureNotice={postCaptureNotice}
           onDismissPostCaptureNotice={() => setPostCaptureNotice(null)}
-          onRetryPostCaptureEmail={(meetingId, title) => void retryTranscriptEmail(meetingId, title)}
+          onRetryPostCapture={(meetingId, title) => void retryPostCapture(meetingId, title)}
         />
       )}
       {view === 'people' && <PeopleScreen />}

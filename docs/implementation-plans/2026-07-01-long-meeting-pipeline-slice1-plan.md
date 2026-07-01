@@ -49,6 +49,7 @@ These are implementation details that support Slice 1 and do not change user-fac
 
 - backend processing stages;
 - durable stage/progress state;
+- persistent MSAL token cache so users do not need to sign in before every meeting;
 - longer or duration-based Pyannote timeout;
 - OpenAI transcript chunking;
 - structured OpenAI output for summary/decisions/action items/follow-ups;
@@ -83,7 +84,38 @@ These are implementation details that support Slice 1 and do not change user-fac
      - 1 hour meeting: under 10-15 minutes after meeting end;
      - 3 hour meeting: under 30-45 minutes after meeting end.
 
+6. **Calendar auth persistence**
+   - Decision: users should sign in once, not before every meeting.
+   - Add a persistent MSAL token cache owned by the Electron main process, stored under Electron `userData` and protected on Windows where possible.
+   - On app startup/background launch, restore the cached MSAL account, acquire Graph tokens silently, run an immediate calendar sync, then start polling.
+   - Only prompt for sign-in when there is no cached account, the user signs out, consent is missing, admin revokes access, or MSAL returns `interaction_required`.
+   - The renderer must not store Graph tokens, refresh tokens, or MSAL cache data.
+
 ## 3. Target Slice 1 pipeline
+
+### Calendar polling and sign-in baseline
+
+The app should keep calendar detection alive in the Electron main process while the tray app is running.
+
+Current/recommended polling behavior:
+
+- immediate sync on app ready/startup;
+- immediate sync after successful MSAL sign-in;
+- immediate sync on resume/unlock/network recovery with debounce/jitter;
+- normal polling every 5 minutes;
+- 24-hour lookahead window for MVP;
+- no tight Graph polling near meeting start; use local timers from the last synced event set;
+- auto-start eligibility only inside the 3-minute start window;
+- respect Graph `Retry-After` on 429 and pause/back off on repeated failures;
+- pause polling and show a sign-in-required state when silent token acquisition fails.
+
+Implementation hardening required:
+
+1. Add a persistent MSAL cache plugin/storage layer for `@azure/msal-node`.
+2. Restore the first cached account on app startup before the first Graph sync.
+3. Keep the cache in Electron main process only.
+4. Store cache material under `app.getPath('userData')`; prefer Windows-protected storage/DPAPI or Electron `safeStorage` when available.
+5. Add a restart smoke test: sign in once, quit app, relaunch, verify Graph token acquisition and `/me/calendarView` sync happen silently without browser sign-in.
 
 ### Current baseline
 
