@@ -8,13 +8,13 @@ interface HomeProps {
   onUploadRecording: (title: string, file: File) => void
   recordingState?: 'idle' | 'recording' | 'processing'
   postCaptureNotice?: {
-    state: 'processing' | 'emailing' | 'ready' | 'failed'
+    state: 'processing' | 'emailing' | 'ready' | 'upload_failed' | 'processing_failed' | 'email_failed'
     meetingId: string
     title: string
     message: string
   } | null
   onDismissPostCaptureNotice?: () => void
-  onRetryPostCaptureEmail?: (meetingId: string, title: string) => void
+  onRetryPostCapture?: (meetingId: string, title: string) => void
 }
 
 export function HomeScreen({
@@ -24,7 +24,7 @@ export function HomeScreen({
   recordingState,
   postCaptureNotice,
   onDismissPostCaptureNotice,
-  onRetryPostCaptureEmail
+  onRetryPostCapture
 }: HomeProps): JSX.Element {
   return (
     <div className="flex flex-col gap-4">
@@ -39,7 +39,7 @@ export function HomeScreen({
         <PostCaptureNotice
           notice={postCaptureNotice}
           onDismiss={onDismissPostCaptureNotice}
-          onRetryEmail={onRetryPostCaptureEmail}
+          onRetry={onRetryPostCapture}
         />
       )}
       <CaptureCard onStart={onStartCapture} onUpload={onUploadRecording} />
@@ -50,16 +50,17 @@ export function HomeScreen({
 function PostCaptureNotice({
   notice,
   onDismiss,
-  onRetryEmail
+  onRetry
 }: {
   notice: NonNullable<HomeProps['postCaptureNotice']>
   onDismiss?: () => void
-  onRetryEmail?: (meetingId: string, title: string) => void
+  onRetry?: (meetingId: string, title: string) => void
 }): JSX.Element {
+  const failed = notice.state.endsWith('_failed')
   const icon =
     notice.state === 'ready' ? (
       <CheckCircle2 size={16} strokeWidth={1.75} />
-    ) : notice.state === 'failed' ? (
+    ) : failed ? (
       <XCircle size={16} strokeWidth={1.75} />
     ) : (
       <Loader2 className="animate-spin" size={16} strokeWidth={1.75} />
@@ -67,9 +68,17 @@ function PostCaptureNotice({
   const toneClass =
     notice.state === 'ready'
       ? 'border-edge-success bg-bg-success text-content-success'
-      : notice.state === 'failed'
+      : failed
         ? 'border-edge-danger bg-bg-danger text-content-danger'
         : 'border-edge-info bg-bg-info text-content-info'
+  const actionLabel =
+    notice.state === 'upload_failed'
+      ? 'Retry upload'
+      : notice.state === 'processing_failed'
+        ? 'Check status'
+        : notice.state === 'email_failed'
+          ? 'Retry email'
+          : null
 
   return (
     <div className={`rounded-md border-[0.5px] px-3 py-2.5 ${toneClass}`}>
@@ -80,13 +89,13 @@ function PostCaptureNotice({
           <div className="mt-0.5 text-[12px] opacity-90">{notice.message}</div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {notice.state === 'failed' && onRetryEmail && (
+          {actionLabel && onRetry && (
             <button
               type="button"
               className="rounded-sm border-[0.5px] border-current px-2 py-1 text-[12px] opacity-85 hover:opacity-100"
-              onClick={() => onRetryEmail(notice.meetingId, notice.title)}
+              onClick={() => onRetry(notice.meetingId, notice.title)}
             >
-              Retry email
+              {actionLabel}
             </button>
           )}
           {notice.state !== 'processing' && notice.state !== 'emailing' && onDismiss && (
