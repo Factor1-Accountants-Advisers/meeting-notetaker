@@ -203,6 +203,7 @@ function App(): JSX.Element {
     })
 
     let attempts = 0
+    const maxAttempts = 300
     const poll = async (): Promise<void> => {
       attempts += 1
       const review = await fetchMeetingReview(meetingId)
@@ -241,7 +242,17 @@ function App(): JSX.Element {
         })
         return
       }
-      if (attempts < 30) window.setTimeout(() => void poll(), 2000)
+      if (attempts < maxAttempts) {
+        window.setTimeout(() => void poll(), 2000)
+        return
+      }
+
+      setPostCaptureNotice({
+        state: 'failed',
+        meetingId,
+        title,
+        message: 'Processing is taking longer than expected. The recording was saved; open the meeting list or refresh to check the latest status.'
+      })
     }
 
     void poll()
