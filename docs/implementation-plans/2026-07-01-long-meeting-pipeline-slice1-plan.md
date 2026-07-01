@@ -56,27 +56,32 @@ These are implementation details that support Slice 1 and do not change user-fac
 - retry/failure metadata;
 - cost/latency instrumentation.
 
-### Potential conflicts to resolve
+### Resolved scope decisions from Joseph on 2026-07-01
 
 1. **Meeting review/detail UI**
-   - Jira says the full meeting detail page, transcript/summary/waveform, action items view, and dashboard meeting list are absent in Slice 1.
-   - Recent debug work reconnected search results to the review screen so Joseph could inspect a stuck meeting.
-   - For Slice 1 handoff, this should either be reverted/hidden behind a dev-only flag, or explicitly accepted as a temporary debug affordance. Default recommendation: hide it for production Slice 1 and rely on email + SharePoint output + processing status.
+   - Decision: remove the restored review/search-to-detail path for Slice 1 production handoff.
+   - Reason: Jira explicitly says the full meeting detail page, transcript/summary/waveform, action items view, dashboard meeting list, and past-meetings navigation are absent in Slice 1.
+   - Replacement: users receive transcript/action output via email and SharePoint; the UI shows processing/delivery status only.
 
-2. **Self-service voiceprint enrollment**
-   - Exported Slice 1 mentions admin CLI / initial voiceprint registration and voice samples available.
-   - Earlier Joseph direction prefers required post-sign-in enrollment before app use.
-   - If required enrollment remains in Slice 1, document it as a Joseph-approved product override because it overlaps the scoping document's Slice 2 self-service enrollment controls.
+2. **Voiceprint enrollment**
+   - Decision: keep the Joseph product direction as an approved Slice 1 override after OpenAI/Pyannote optimization.
+   - Required behavior: after sign-in, the app checks the central voiceprint database/registry for the signed-in user. If no registered voiceprint exists, the user must enroll before using the app.
+   - Implementation order: do not block the current optimization work on this; first optimize OpenAI and Pyannote API calls, then complete the required-enrollment gate against the central registry.
 
-3. **SharePoint timing**
-   - The latest IN-64 export includes locked-down SharePoint transcript saving in Slice 1.
-   - Older scoping text puts SharePoint storage in Slice 3.
-   - Jira export wins for current planning: include a minimal Slice 1 SharePoint transcript writer if credentials/permissions are available. If permissions are unavailable, email remains the primary delivery path and SharePoint is marked blocked with evidence.
+3. **SharePoint transcript storage**
+   - Decision: Slice 1 will use the shared SharePoint folder for transcriptions.
+   - Target folder URL: `https://futurebusinessgroup.sharepoint.com/sites/InnovationsandSystems/Transcriptions/Forms/AllItems.aspx`
+   - Current access finding: the desktop app currently requests only `User.Read`, `Calendars.Read`, and `Mail.Send`. It does not request SharePoint/Files/Sites scopes yet, and the current local MSAL cache is empty after restart. Therefore live write access is not yet proven. Add SharePoint scopes and run an interactive delegated smoke test before claiming this is working.
 
 4. **Pyannote chunking**
-   - Jira requires Pyannote transcription + voiceprint identification with confidence per transcript segment.
-   - Audio chunking may make speaker continuity and confidence harder. It should not replace the full-audio baseline until proven.
-   - Recommendation: full-audio Pyannote is the Slice 1 default; Pyannote chunking is a spike/fallback only.
+   - Decision: ship full-audio Pyannote plus OpenAI chunking first.
+   - Pyannote audio chunking is a fallback spike only if long-meeting tests fail on timeout, latency, cost, or reliability.
+
+5. **Long-meeting SLA**
+   - Decision: use these target SLAs for planning and verification:
+     - 20 min meeting: under 5 minutes after meeting end;
+     - 1 hour meeting: under 10-15 minutes after meeting end;
+     - 3 hour meeting: under 30-45 minutes after meeting end.
 
 ## 3. Target Slice 1 pipeline
 
@@ -281,28 +286,38 @@ Examples:
 
 This should be configured by environment, not hardcoded.
 
-### Pyannote chunking spike only
+### Pyannote full-audio vs audio chunking tradeoff
 
-Run a small spike before implementing audio chunking. Test with known recordings:
+For Slice 1, use full-audio Pyannote first. The tradeoffs are:
+
+| Dimension | Full-audio Pyannote | Chunked Pyannote audio |
+|---|---|---|
+| Diarization quality | Usually better because the model sees the whole meeting and can form global speaker clusters. | Riskier because each chunk reclusters speakers independently; `SPEAKER_00` can mean different people in different chunks. |
+| Speaker identification | Simpler: one identify job over the whole meeting, one set of identity ranges. | More complex: identify per chunk or reconcile chunk labels after the fact; confidence/evidence stitching is required. |
+| Speed | One long provider job; may be slower wall-clock if provider processing is not internally parallelized. | Potentially faster wall-clock because chunks could run in parallel, if Pyannote rate limits and queueing allow it. |
+| Cost | Typically simpler and likely cheaper or equal because there are fewer jobs and less duplicated overlap audio. Exact pricing must be confirmed against the account plan. | Potentially more expensive due to multiple jobs, repeated upload overhead, overlap audio, and possible retries/reconciliation. |
+| Reliability | One job can timeout/fail for very long meetings; duration-aware timeout mitigates this. | One failed chunk can be retried, but stitching errors become a new failure mode. |
+| Implementation risk | Lower. Aligns directly with Jira's confidence-per-segment requirement. | Higher. Requires absolute timestamp stitching, overlap dedupe, cross-chunk speaker reconciliation, and stricter QA. |
+
+Decision: ship full-audio Pyannote + OpenAI transcript chunking first. Only run a Pyannote chunking spike if long-meeting tests fail the agreed SLAs or provider timeouts.
+
+If adopted later, the spike must test:
 
 1. 20 minute David/Joseph call;
 2. synthetic 60 minute concatenated audio;
 3. 2-3 hour generated or stitched test recording if available.
 
-Compare:
+Compare full-audio vs 15 minute chunks with 30-60 second overlap for:
 
-- full-audio Pyannote result;
-- 15 minute audio chunks with 30-60 sec overlap;
-- chunk stitching quality;
-- speaker consistency across chunks;
+- transcription completeness;
+- diarization speaker consistency;
 - known-speaker identification confidence;
 - cost;
 - latency;
-- retry behavior.
+- retry behavior;
+- stitching quality.
 
-Only adopt Pyannote chunking if it clearly improves reliability or latency without degrading speaker identity.
-
-If adopted later:
+If chunking is adopted later:
 
 - preserve absolute timestamps;
 - overlap chunks;
@@ -525,20 +540,16 @@ Evidence to collect:
 - email delivery timestamp;
 - failure/retry behavior.
 
-## 9. Questions for Joseph
+## 9. Resolved Joseph answers
 
-1. Should the recently restored review/search path be removed or hidden behind a dev-only flag for Slice 1 handoff?
-
-2. Should required post-sign-in self-service voiceprint enrollment remain in Slice 1 as a Joseph override, or should Slice 1 use admin/seeded voiceprints only and leave self-service enrollment to Slice 2?
-
-3. For SharePoint in Slice 1: do we already have the target folder/library and Graph write permission, or should this plan mark SharePoint transcript save as blocked until IT grants access?
-
-4. For long meetings, what is the acceptable completion SLA after meeting end?
-   - 20 min meeting: target under 5 min?
-   - 1 hour meeting: target under 10-15 min?
-   - 3 hour meeting: target under 30-45 min?
-
-5. For Pyannote chunking, do we want a spike now, or should we first ship full-audio Pyannote + OpenAI chunking and only spike chunked audio if long-meeting tests fail?
+1. Remove the meeting review/search path from Slice 1 UI.
+2. Accept required signed-in-user voiceprint enrollment as a Joseph-approved override, but implement it after OpenAI/Pyannote optimization.
+3. Use the shared SharePoint folder for transcript storage: `https://futurebusinessgroup.sharepoint.com/sites/InnovationsandSystems/Transcriptions/Forms/AllItems.aspx`. Access still needs an app smoke test with SharePoint scopes.
+4. Use these SLA targets:
+   - 20 min meeting: under 5 min after meeting end;
+   - 1 hour meeting: under 10-15 min after meeting end;
+   - 3 hour meeting: under 30-45 min after meeting end.
+5. Ship full-audio Pyannote + OpenAI chunking first. Only spike Pyannote audio chunking if long-meeting tests fail.
 
 ## 10. Recommendation
 
