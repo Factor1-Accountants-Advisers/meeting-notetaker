@@ -4,6 +4,7 @@ import { EnrollmentModal } from './components/EnrollmentModal'
 import { HomeScreen } from './screens/HomeScreen'
 import { PeopleScreen } from './screens/PeopleScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
+import { MeetingReviewScreen } from './screens/MeetingReviewScreen'
 import { LoginScreen, type User } from './screens/LoginScreen'
 import { RecordingScreen, type RecordingSession } from './screens/RecordingScreen'
 import { createMeeting, emailNotes, ensureCurrentPerson, fetchMeetingReview, uploadAudio, type GraphMeetingMetadata } from './lib/api'
@@ -27,7 +28,7 @@ function loadUser(): User | null {
   }
 }
 
-type View = ScreenId | 'recording'
+type View = ScreenId | 'recording' | 'review'
 
 type PostCaptureNotice = {
   state: 'processing' | 'emailing' | 'ready' | 'failed'
@@ -42,6 +43,7 @@ function App(): JSX.Element {
   const [enrollmentLoading, setEnrollmentLoading] = useState(false)
   const [enrollmentError, setEnrollmentError] = useState<string | null>(null)
   const [view, setView] = useState<View>('home')
+  const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null)
   const [recording, setRecording] = useState<RecordingSession | null>(null)
   const recordingRef = useRef<RecordingSession | null>(null)
   const autoGraphMetadataRef = useRef<GraphMeetingMetadata | null>(null)
@@ -192,6 +194,11 @@ function App(): JSX.Element {
 
   const navigate = (id: ScreenId): void => {
     setView(id)
+  }
+
+  const openMeeting = (meetingId: string): void => {
+    setSelectedMeetingId(meetingId)
+    setView('review')
   }
 
   const watchProcessing = (meetingId: string, title: string): void => {
@@ -474,7 +481,7 @@ function App(): JSX.Element {
 
   return (
     <AppShell
-      active={view === 'recording' ? null : view}
+      active={view === 'recording' || view === 'review' ? null : view}
       onSelect={navigate}
       theme={theme}
       onToggleTheme={toggle}
@@ -482,6 +489,7 @@ function App(): JSX.Element {
       onOpenRecording={
         recording ? () => setView('recording') : null
       }
+      onOpenMeeting={openMeeting}
       notifications={notifications}
       unreadCount={unread}
       onNotificationsOpened={markAllRead}
@@ -519,6 +527,9 @@ function App(): JSX.Element {
         />
       )}
       {view === 'people' && <PeopleScreen />}
+      {view === 'review' && selectedMeetingId && (
+        <MeetingReviewScreen meetingId={selectedMeetingId} onBack={() => setView('home')} />
+      )}
       {view === 'settings' && (
         <SettingsScreen
           theme={theme}
