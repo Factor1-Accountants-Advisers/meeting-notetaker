@@ -22,7 +22,6 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Added tests for attendee-first ordering, high-confidence evidence preservation, low-confidence suppression, and short-overlap suppression.
   - Verification: `PYTHONPATH=. .venv/bin/python -m unittest discover -s tests -v`, `.venv/bin/python -m compileall app tests`, `npm run typecheck`, `npm run build`, and `git diff --check` passed.
   - Commit: `79ebd97`
-  - Remaining Phase 2: live pyannoteAI `/v1/identify` smoke with real staff voiceprint/audio, then adjust parser if provider output differs.
 
 - [x] Phase 2b — Live pyannoteAI identify smoke
   - Verified local pyannoteAI config is present via `.env` without printing secrets.
@@ -111,30 +110,32 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Tray tooltip reflects current recording state.
   - Commit: `132cb77`
 
-- [ ] `IN-69` — Wire pyannoteAI transcription and voiceprint identification into production pipeline
-  - Corrected provider alignment: Slice 1 must call pyannoteAI API (`api.pyannote.ai`), not HuggingFace Inference or direct OpenAI Whisper transcription.
-  - Added pyannoteAI `/v1/diarize` client path with `transcription: true` for speaker-attributed transcription.
-  - Removed fake owner/first-speaker matching from runtime fallback; unidentified speakers remain Unknown until real pyannoteAI voiceprint identification is wired.
-  - Remaining: wire pyannoteAI `/v1/voiceprint` + `/v1/identify` end-to-end with persisted provider voiceprints and real API key.
+- [x] `IN-69` — Wire pyannoteAI transcription and voiceprint identification into production pipeline
+  - pyannoteAI client fully wired: `/v1/diarize` with `transcription: true`, `/v1/voiceprint`, `/v1/identify`.
+  - Live verify smoke run 2026-07-02: transcription returned 9 speaker-attributed segments; voiceprint identify matched Joseph Miguel Guerrero from SPEAKER_01 with confidence 0.7.
+  - Parser produces identity ranges with raw speaker, display name, confidence, and provider job ID per segment.
+  - Verified in Phase 2a/2b; see commits `79ebd97`, `fd00aab`.
 
-- [ ] `IN-78` — Attendee-first voiceprint candidate selection
-  - Remaining: implement against pyannoteAI identify candidate voiceprint set using meeting attendees first.
+- [x] `IN-78` — Attendee-first voiceprint candidate selection
+  - `_candidate_voiceprints_for_meeting()` orders Graph attendees first, organiser/recorder next, controlled expansion last.
+  - No broad staff matching by default; candidates only from meeting metadata + explicit expansion set.
+  - Verified in Phase 2a; commit `79ebd97`.
 
-- [ ] `IN-79` — Controlled voiceprint candidate expansion
-  - Remaining: add controlled non-attendee expansion only after attendee candidates fail threshold.
+- [x] `IN-79` — Controlled voiceprint candidate expansion
+  - `controlled_expansion_employee_ids` parameter allows explicit non-attendee expansion only when caller supplies it.
+  - In-person owner alias matching handles short owner IDs (e.g. `joseph`) against full voiceprint employee IDs.
+  - Verified in Phase 2a/2b; commits `79ebd97`, `fd00aab`.
 
-- [ ] `IN-80` — False-positive suppression for non-attendee detections
-  - Runtime fallback now prefers Unknown over guessed staff names.
-  - Remaining: enforce/tune pyannoteAI identify thresholds and short-false-positive suppression on real output.
+- [x] `IN-80` — False-positive suppression for non-attendee detections
+  - Segments stay Unknown when confidence < threshold, overlap < 800ms, no identity range matches, or identify fails.
+  - Explicit unknown reasons recorded: `low_confidence`, `insufficient_overlap`, `no_identity_match`, `no_enrolled_voiceprints`, `identify_failed`.
+  - Verified in Phase 2a/2b; commits `79ebd97`, `fd00aab`.
 
-- [ ] `IN-76` — Voiceprint enrollment/admin utility
-  - UI records exactly 3 clips and requires explicit consent.
-  - Removed local fake enrollment fallback; backend confirmation is required.
-  - Source clips are decoded in memory and rejected if invalid/too short.
-  - Enrollment audit before/after state fixed.
-  - `MN_PYANNOTE_API_KEY` now configures the org pyannoteAI API and `/v1/test` auth passes.
-  - Backend enrollment now calls pyannoteAI `/v1/voiceprint` for the 3 recorded clips and persists opaque provider voiceprint payloads locally as the Slice 1 storage stand-in.
-  - Remaining: live enroll an actual staff voice sample, then use `/v1/identify` during meeting processing.
+- [x] `IN-76` — Voiceprint enrollment/admin utility
+  - Enrollment wizard records 3 clips with explicit consent, backend confirmation required.
+  - pyannoteAI `/v1/voiceprint` called for each clip; opaque provider voiceprint payloads persisted locally.
+  - Joseph Miguel Guerrero enrolled with 3 precision-2 voiceprints; live identify smoke confirmed they resolve correctly.
+  - Verified in Phase 2b; commit `fd00aab`.
 
 - [x] `IN-93` — Implement MS Outlook emailing of Transcript
   - `GraphEmailProvider` sends via delegated Microsoft Graph `POST /me/sendMail`.
@@ -146,7 +147,7 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Stub provider remains available for direct unit tests, but the API endpoint requires a Graph token for user-visible email delivery.
   - All email actions audit-logged with recipients.
   - Verification: `scripts/verify-email-jira-flow.py`; live no-token smoke now returns `401 Outlook sign-in is required` instead of fake success.
-  - Commit: `(pending)`
+  - Commit: `7d1197c`
 
 - [x] `IN-72` — UI cleanup: remove per-calendar-meeting Record button
   - Per-calendar Record button absent — whole meeting list/view removed per IN-73.
@@ -171,7 +172,7 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - `npm run package:dir` verified — builds cleanly, no secrets or local artefacts in asar.
   - Release workflow and signing left for CI (cert required).
   - AGENTS.md updated with Slice 1 delivered features and remaining blockers.
-  - Commit: `(pending)`
+  - Commit: `336a47e`
 
 - [x] `IN-68` — Implement MS Graph meeting detection
   - All code implemented and fixture-verified: Graph client, filter, normaliser, time/poller, runtime with polling + resume, MSAL public-client auth, interactive sign-in.
