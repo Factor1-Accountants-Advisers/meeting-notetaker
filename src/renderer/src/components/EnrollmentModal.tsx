@@ -15,11 +15,14 @@ const CLIPS_NEEDED = 3
 const MIN_CLIP_SECONDS = 5
 const MAX_CLIP_SECONDS = 20
 
-const PROMPTS = [
-  'Hi, this is Joseph Miguel Guerrero. I’m setting up Notetaker so it can identify my voice in meeting transcripts. I usually speak with clients and colleagues about work progress, decisions, and follow-up actions.',
-  'Today I’m working on meeting notes, client updates, action items, and making sure everyone has clear next steps after each conversation.',
-  'I’ll speak clearly for a few seconds in my normal meeting voice. The goal is to help Notetaker recognise me accurately without keeping the original recording.'
-]
+const promptsFor = (name: string): string[] => {
+  const displayName = name.trim() || 'the signed-in user'
+  return [
+    `Hi, this is ${displayName}. I’m setting up Notetaker so it can identify my voice in meeting transcripts. I usually speak with clients and colleagues about work progress, decisions, and follow-up actions.`,
+    'Today I’m working on meeting notes, client updates, action items, and making sure everyone has clear next steps after each conversation.',
+    'I’ll speak clearly for a few seconds in my normal meeting voice. The goal is to help Notetaker recognise me accurately without keeping the original recording.'
+  ]
+}
 
 type RecState = 'idle' | 'recording' | 'checking' | 'denied' | 'saving'
 type WizardStep = 'welcome' | 'consent' | 'sample-0' | 'sample-1' | 'sample-2' | 'complete'
@@ -202,7 +205,7 @@ export function EnrollmentModal({ person, onClose, onEnrolled, required = false 
           {step.startsWith('sample-') && sampleIndex >= 0 && (
             <SamplePage
               index={sampleIndex}
-              prompt={PROMPTS[sampleIndex]}
+              prompt={promptsFor(person.name)[sampleIndex]}
               clip={currentClip}
               state={state}
               seconds={seconds}
