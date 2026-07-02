@@ -325,6 +325,10 @@ export async function emailNotes(
   })
 }
 
+export async function saveTranscriptToSharePoint(meetingId: string): Promise<MeetingDto | null> {
+  return call<MeetingDto>('POST', `/meetings/${meetingId}/sharepoint`)
+}
+
 export interface AuditEntryDto {
   id: string
   meeting_id: string | null

@@ -6,7 +6,7 @@ import { PeopleScreen } from './screens/PeopleScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
 import { LoginScreen, type User } from './screens/LoginScreen'
 import { RecordingScreen, type RecordingSession } from './screens/RecordingScreen'
-import { createMeeting, emailNotes, ensureCurrentPerson, fetchMeetingReview, retryPipeline, uploadAudio, type GraphMeetingMetadata } from './lib/api'
+import { createMeeting, emailNotes, ensureCurrentPerson, fetchMeetingReview, retryPipeline, saveTranscriptToSharePoint, uploadAudio, type GraphMeetingMetadata } from './lib/api'
 import { capture, type CaptureStatus } from './lib/capture'
 import { loadPrefs } from './lib/prefs'
 import { useNotifications } from './lib/useNotifications'
@@ -259,22 +259,37 @@ function App(): JSX.Element {
           state: 'emailing',
           meetingId,
           title,
-          message: `Notes are ready: ${review.segments.length} transcript segments and ${review.action_items.length} action items. Emailing transcript…`
+          message: `Notes are ready: ${review.segments.length} transcript segments and ${review.action_items.length} action items. Saving to SharePoint and emailing transcript…`
         })
-        const result = await emailNotes(meetingId, null, user.email)
-        if (result) {
+        const sharePointResult = await saveTranscriptToSharePoint(meetingId)
+        const emailResult = await emailNotes(meetingId, null, user.email)
+        if (emailResult && sharePointResult?.sharepoint_web_url) {
           setPostCaptureNotice({
             state: 'ready',
             meetingId,
             title,
-            message: `Transcript emailed to ${result.recipients.join(', ')}.`
+            message: `Transcript saved to SharePoint and emailed to ${emailResult.recipients.join(', ')}.`
+          })
+        } else if (emailResult) {
+          setPostCaptureNotice({
+            state: 'email_failed',
+            meetingId,
+            title,
+            message: 'Transcript email was sent, but SharePoint save failed. Sign in again, then retry delivery.'
+          })
+        } else if (sharePointResult?.sharepoint_web_url) {
+          setPostCaptureNotice({
+            state: 'email_failed',
+            meetingId,
+            title,
+            message: 'Transcript saved to SharePoint, but email was not sent. Sign in to Outlook, then retry email.'
           })
         } else {
           setPostCaptureNotice({
             state: 'email_failed',
             meetingId,
             title,
-            message: 'Notes are ready, but the transcript email was not sent. Sign in to Outlook, then retry email.'
+            message: 'Notes are ready, but SharePoint save and transcript email failed. Sign in to Microsoft, then retry delivery.'
           })
         }
         return
@@ -343,16 +358,21 @@ function App(): JSX.Element {
       state: 'emailing',
       meetingId,
       title,
-      message: 'Retrying transcript email…'
+      message: 'Retrying SharePoint save and transcript email…'
     })
-    const result = await emailNotes(meetingId, null, recorderEmail)
+    const sharePointResult = await saveTranscriptToSharePoint(meetingId)
+    const emailResult = await emailNotes(meetingId, null, recorderEmail)
     setPostCaptureNotice({
-      state: result ? 'ready' : 'email_failed',
+      state: emailResult && sharePointResult?.sharepoint_web_url ? 'ready' : 'email_failed',
       meetingId,
       title,
-      message: result
-        ? `Transcript emailed to ${result.recipients.join(', ')}.`
-        : 'Email still failed. The notes are ready and the recording is safe.'
+      message: emailResult && sharePointResult?.sharepoint_web_url
+        ? `Transcript saved to SharePoint and emailed to ${emailResult.recipients.join(', ')}.`
+        : emailResult
+          ? 'Transcript email was sent, but SharePoint save still failed.'
+          : sharePointResult?.sharepoint_web_url
+            ? 'Transcript saved to SharePoint, but email still failed.'
+            : 'SharePoint save and email still failed. The notes are ready and the recording is safe.'
     })
   }
 
