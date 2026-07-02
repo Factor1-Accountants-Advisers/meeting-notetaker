@@ -10,6 +10,17 @@ import { detectGraphMeetings } from '../src/main/graph/poller.ts'
 import { syncGraphDetectionOnce, startGraphDetectionRuntime } from '../src/main/graph/runtime.ts'
 import { evaluateHostGate } from '../src/main/graph/host-gate.ts'
 import { createRecordingStateMachine } from '../src/main/recording-state.ts'
+import {
+  cleanupRecordingIpc,
+  getRecordingStateMachine,
+  handleRendererRecordingReady,
+  handleRendererRecordingStarted,
+  handleRendererRecordingStopped,
+  registerManualRecording,
+  sendAutoStartRequest,
+  setAutoStartAckTimeoutMsForTest,
+  setMainWindow
+} from '../src/main/recording-ipc.ts'
 import { parseGraphDateTime } from '../src/main/graph/time.ts'
 import type { GraphDecisionReason, GraphFilterOptions, RawGraphEvent } from '../src/main/graph/types.ts'
 
@@ -59,6 +70,25 @@ function expectReason(name: string, event: RawGraphEvent, reason: GraphDecisionR
   assert.equal(decision.reason, reason, `${name}: expected ${reason}, got ${decision.reason}`)
 }
 
+function fakeWindow(): { window: any; sent: { channel: string; data: unknown }[] } {
+  const sent: { channel: string; data: unknown }[] = []
+  return {
+    window: {
+      isDestroyed: () => false,
+      show: () => undefined,
+      hide: () => undefined,
+      webContents: {
+        send: (channel: string, data: unknown) => sent.push({ channel, data })
+      }
+    },
+    sent
+  }
+}
+
+async function wait(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 async function main(): Promise<void> {
   expectReason('cancelled Teams meeting', baseEvent({ id: 'cancelled', isCancelled: true }), 'cancelled')
   expectReason('all-day event', baseEvent({ id: 'all-day', isAllDay: true }), 'all_day')
@@ -91,6 +121,11 @@ async function main(): Promise<void> {
     'future meeting before auto-start window',
     baseEvent({ id: 'not-due-yet', start: { dateTime: '2026-06-26T03:00:00Z' }, end: { dateTime: '2026-06-26T03:30:00Z' } }),
     'not_due_yet'
+  )
+  expectReason(
+    'recently ended meeting is not auto eligible',
+    baseEvent({ id: 'recently-ended', start: { dateTime: '2026-06-26T00:00:00Z' }, end: { dateTime: '2026-06-26T00:55:00Z' } }),
+    'already_ended'
   )
 
   const notDueYet = decisionFor(baseEvent({ id: 'not-due-auto', start: { dateTime: '2026-06-26T03:00:00Z' }, end: { dateTime: '2026-06-26T03:30:00Z' } }))
@@ -220,6 +255,90 @@ async function main(): Promise<void> {
   assert.equal(sm.canStartAutoRecording('key-1'), false)
   assert.equal(sm.canStartAutoRecording('key-2'), false)
   assert.equal(sm.canStartAutoRecording('key-3'), true)
+
+  // Auto-start IPC must not move to recording until the renderer acknowledges capture start.
+  cleanupRecordingIpc()
+  setAutoStartAckTimeoutMsForTest(10)
+  const firstWindow = fakeWindow()
+  setMainWindow(firstWindow.window)
+  handleRendererRecordingReady()
+  sendAutoStartRequest({
+    eventId: 'ipc-event-1',
+    idempotencyKey: 'ipc-key-1',
+    startTimeUtc: '2026-06-26T01:00:00.000Z',
+    endTimeUtc: '2026-06-26T02:00:00.000Z',
+    source: 'auto'
+  })
+  assert.equal(firstWindow.sent.length, 1)
+  assert.equal(firstWindow.sent[0].channel, 'recording:auto-start-request')
+  assert.equal(getRecordingStateMachine().getState(), 'idle')
+  handleRendererRecordingStarted()
+  assert.equal(getRecordingStateMachine().getState(), 'recording')
+  handleRendererRecordingStopped()
+  assert.equal(getRecordingStateMachine().getState(), 'idle')
+
+  // If the renderer misses the message, the pending start times out and does not wedge the session.
+  sendAutoStartRequest({
+    eventId: 'ipc-event-timeout',
+    idempotencyKey: 'ipc-key-timeout',
+    startTimeUtc: '2026-06-26T01:00:00.000Z',
+    endTimeUtc: '2026-06-26T02:00:00.000Z',
+    source: 'auto'
+  })
+  await wait(20)
+  assert.equal(getRecordingStateMachine().getState(), 'idle')
+  sendAutoStartRequest({
+    eventId: 'ipc-event-after-timeout',
+    idempotencyKey: 'ipc-key-after-timeout',
+    startTimeUtc: '2026-06-26T01:00:00.000Z',
+    endTimeUtc: '2026-06-26T02:00:00.000Z',
+    source: 'auto'
+  })
+  assert.equal(firstWindow.sent.at(-1)?.channel, 'recording:auto-start-request')
+  handleRendererRecordingStarted()
+  handleRendererRecordingStopped()
+
+  // Renderer-ready notification replays a pending auto-start after the listener mounts.
+  const replayWindow = fakeWindow()
+  cleanupRecordingIpc()
+  setAutoStartAckTimeoutMsForTest(100)
+  setMainWindow(replayWindow.window)
+  sendAutoStartRequest({
+    eventId: 'ipc-event-replay',
+    idempotencyKey: 'ipc-key-replay',
+    startTimeUtc: '2026-06-26T01:00:00.000Z',
+    endTimeUtc: '2026-06-26T02:00:00.000Z',
+    source: 'auto'
+  })
+  assert.equal(replayWindow.sent.length, 0)
+  handleRendererRecordingReady()
+  assert.equal(replayWindow.sent.length, 1)
+  handleRendererRecordingStarted()
+  assert.equal(getRecordingStateMachine().getState(), 'recording')
+  handleRendererRecordingStopped()
+
+  // Manual recordings are registered in the main-process state machine and block auto-start.
+  cleanupRecordingIpc()
+  const manualWindow = fakeWindow()
+  setMainWindow(manualWindow.window)
+  registerManualRecording({
+    eventId: 'manual-event',
+    idempotencyKey: 'manual-key',
+    startTimeUtc: '2026-06-26T01:00:00.000Z',
+    endTimeUtc: '2026-06-26T02:00:00.000Z',
+    source: 'manual'
+  })
+  assert.equal(getRecordingStateMachine().getActiveRecording()?.source, 'manual')
+  sendAutoStartRequest({
+    eventId: 'blocked-auto-event',
+    idempotencyKey: 'blocked-auto-key',
+    startTimeUtc: '2026-06-26T01:00:00.000Z',
+    endTimeUtc: '2026-06-26T02:00:00.000Z',
+    source: 'auto'
+  })
+  assert.equal(manualWindow.sent.length, 0)
+  handleRendererRecordingStopped()
+  cleanupRecordingIpc()
 
   const runtimeDir = await mkdtemp(join(tmpdir(), 'notetaker-graph-fixtures-'))
   try {

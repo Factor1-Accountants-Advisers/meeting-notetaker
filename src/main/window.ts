@@ -1,4 +1,4 @@
-import { BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { logger } from './logger'
@@ -7,6 +7,11 @@ import { setMainWindow } from './recording-ipc'
 interface CreateWindowOptions {
   showOnReady?: boolean
 }
+
+let appIsQuitting = false
+app.on('before-quit', () => {
+  appIsQuitting = true
+})
 
 export function createWindow(options: CreateWindowOptions = {}): void {
   const showOnReady = options.showOnReady ?? true
@@ -35,8 +40,15 @@ export function createWindow(options: CreateWindowOptions = {}): void {
     if (showOnReady) mainWindow.show()
   })
 
+  mainWindow.on('close', (event) => {
+    if (appIsQuitting) return
+    event.preventDefault()
+    logger().info('[window] hiding main window to tray')
+    mainWindow.hide()
+  })
+
   mainWindow.on('closed', () => {
-    setMainWindow(null as unknown as BrowserWindow)
+    setMainWindow(null)
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {

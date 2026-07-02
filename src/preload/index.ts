@@ -30,6 +30,14 @@ export interface AutoStopRequest {
   idempotencyKey: string
 }
 
+export interface ManualRecordingNotification {
+  eventId: string
+  idempotencyKey: string
+  startTimeUtc: string
+  endTimeUtc: string
+  source: 'manual'
+}
+
 // Single funnel to the FastAPI backend via the main process. The renderer
 // never touches the network or any credentials directly.
 const api = {
@@ -104,6 +112,13 @@ const api = {
       ipcRenderer.removeListener('recording:auto-stop-request', handler)
     }
   },
+
+  /** Notify main process that the auto-recording listeners are mounted and eligible. */
+  notifyRecordingReady: (): void => ipcRenderer.send('recording:ready'),
+
+  /** Notify main process that a manual recording has started and should block auto-start. */
+  notifyManualRecordingStarted: (recording: ManualRecordingNotification): void =>
+    ipcRenderer.send('recording:manual-started', recording),
 
   /** Notify main process that the renderer started recording successfully. */
   notifyRecordingStarted: (): void => ipcRenderer.send('recording:started'),

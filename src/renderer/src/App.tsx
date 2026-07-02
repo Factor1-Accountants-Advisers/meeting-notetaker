@@ -144,6 +144,10 @@ function App(): JSX.Element {
 
     const unsubStart = window.api.onAutoStartRequest(async (data) => {
       try {
+        if (recordingRef.current) {
+          window.api.notifyRecordingError('Auto-recording skipped because another recording is already active.')
+          return
+        }
         const graphMetadata = data.metadata ?? null
         autoGraphMetadataRef.current = graphMetadata
         const title = graphMetadata?.title?.trim() || 'Auto-recorded Teams meeting'
@@ -213,6 +217,10 @@ function App(): JSX.Element {
         window.api.notifyRecordingError(err instanceof Error ? err.message : String(err))
       }
     })
+
+    if (typeof window.api.notifyRecordingReady === 'function') {
+      window.api.notifyRecordingReady()
+    }
 
     return () => {
       unsubStart()
@@ -460,13 +468,24 @@ function App(): JSX.Element {
     const created = await createMeeting(title, link)
     window.api.debugLog('manual meeting create finished', { meetingId: created?.id ?? null })
     const status = await capture.start(source, loadPrefs().micDeviceId)
+    const startedAt = Date.now()
+    const manualKey = created?.id ?? `manual-${startedAt}`
+    if (typeof window.api.notifyManualRecordingStarted === 'function') {
+      window.api.notifyManualRecordingStarted({
+        eventId: manualKey,
+        idempotencyKey: manualKey,
+        startTimeUtc: new Date(startedAt).toISOString(),
+        endTimeUtc: new Date(startedAt + 8 * 60 * 60 * 1000).toISOString(),
+        source: 'manual'
+      })
+    }
     window.api.debugLog('manual capture start finished', { status })
     setCaptureStatus(status)
     setRecording({
       meetingId: created?.id ?? null,
       title,
       source,
-      startedAt: Date.now(),
+      startedAt,
       pausedAccum: 0,
       pausedAt: null
     })

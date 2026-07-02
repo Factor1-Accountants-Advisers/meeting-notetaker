@@ -52,7 +52,7 @@ function getExclusionReason(
   const nowMs = options.now.getTime()
   const startMs = new Date(event.startUtc).getTime()
   const endMs = new Date(event.endUtc).getTime()
-  if (endMs < nowMs - options.graceMs) return 'already_ended'
+  if (endMs <= nowMs) return 'already_ended'
   if (startMs > nowMs + options.lookaheadMs) return 'outside_lookahead'
 
   if (options.requireOnlineMeeting && (!event.isOnlineMeeting || !event.hasJoinUrl)) {

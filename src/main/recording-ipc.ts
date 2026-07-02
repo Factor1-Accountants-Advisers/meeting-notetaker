@@ -5,14 +5,23 @@ import { logger } from './logger'
 let mainWindow: BrowserWindow | null = null
 let recordingSM: RecordingStateMachine | null = null
 let autoStopTimer: ReturnType<typeof setTimeout> | null = null
+let autoStartAckTimer: ReturnType<typeof setTimeout> | null = null
+let autoStartAckTimeoutMs = 15_000
+let pendingAutoStart: ActiveRecording | null = null
+let rendererRecordingReady = false
 
 export function getRecordingStateMachine(): RecordingStateMachine {
   if (!recordingSM) recordingSM = createRecordingStateMachine()
   return recordingSM
 }
 
-export function setMainWindow(window: BrowserWindow): void {
+export function setMainWindow(window: BrowserWindow | null): void {
   mainWindow = window
+  if (!window) rendererRecordingReady = false
+}
+
+export function setAutoStartAckTimeoutMsForTest(timeoutMs: number): void {
+  autoStartAckTimeoutMs = timeoutMs
 }
 
 export function sendAutoStartRequest(recording: ActiveRecording): void {
@@ -22,6 +31,14 @@ export function sendAutoStartRequest(recording: ActiveRecording): void {
   }
 
   const sm = getRecordingStateMachine()
+  if (pendingAutoStart) {
+    logger().info('[recording] auto-start skipped', {
+      reason: 'pending auto-start awaiting renderer ack',
+      recordingKey: recording.idempotencyKey,
+      pendingKey: pendingAutoStart.idempotencyKey
+    })
+    return
+  }
   if (!sm.canStartAutoRecording(recording.idempotencyKey)) {
     logger().info('[recording] auto-start skipped', {
       reason: 'state machine rejected',
@@ -30,25 +47,16 @@ export function sendAutoStartRequest(recording: ActiveRecording): void {
     return
   }
 
-  sm.startAutoRecording(recording)
-
-  logger().info('[recording] sending auto-start to renderer', {
-    eventId: recording.eventId,
-    idempotencyKey: recording.idempotencyKey,
-    startTimeUtc: recording.startTimeUtc,
-    endTimeUtc: recording.endTimeUtc
-  })
-
-  mainWindow.webContents.send('recording:auto-start-request', {
-    eventId: recording.eventId,
-    idempotencyKey: recording.idempotencyKey,
-    startTimeUtc: recording.startTimeUtc,
-    endTimeUtc: recording.endTimeUtc,
-    source: recording.source,
-    metadata: recording.metadata
-  })
-
-  scheduleAutoStop(recording)
+  pendingAutoStart = { ...recording, source: 'auto' }
+  if (!rendererRecordingReady) {
+    logger().info('[recording] auto-start pending until renderer is ready', {
+      eventId: recording.eventId,
+      idempotencyKey: recording.idempotencyKey
+    })
+    return
+  }
+  sendPendingAutoStart('sending auto-start to renderer')
+  scheduleAutoStartAckTimeout()
 }
 
 export function sendAutoStopRequest(): void {
@@ -77,10 +85,35 @@ export function sendAutoStopRequest(): void {
   })
 }
 
+export function handleRendererRecordingReady(): void {
+  rendererRecordingReady = true
+  if (!pendingAutoStart) return
+  sendPendingAutoStart('sending pending auto-start to ready renderer')
+  scheduleAutoStartAckTimeout()
+}
+
 export function handleRendererRecordingStarted(): void {
   const sm = getRecordingStateMachine()
+  if (pendingAutoStart) {
+    const recording = pendingAutoStart
+    pendingAutoStart = null
+    clearAutoStartAckTimer()
+    sm.startAutoRecording(recording)
+    scheduleAutoStop(recording)
+  }
   logger().info('[recording] renderer confirmed recording started', {
     state: sm.getState()
+  })
+}
+
+export function registerManualRecording(recording: ActiveRecording): void {
+  clearAutoStartAckTimer()
+  pendingAutoStart = null
+  const sm = getRecordingStateMachine()
+  sm.startManualRecording({ ...recording, source: 'manual' })
+  logger().info('[recording] manual recording registered', {
+    eventId: recording.eventId,
+    idempotencyKey: recording.idempotencyKey
   })
 }
 
@@ -102,12 +135,61 @@ export function handleRendererRecordingStopped(): void {
 
 export function handleRendererRecordingError(message: string): void {
   clearAutoStopTimer()
+  clearAutoStartAckTimer()
+  pendingAutoStart = null
 
   const sm = getRecordingStateMachine()
   sm.stopRecording()
   sm.completeProcessing()
 
   logger().warn('[recording] renderer reported error', { message })
+}
+
+function sendPendingAutoStart(logMessage: string): void {
+  if (!pendingAutoStart) return
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    logger().warn('[recording] cannot send pending auto-start: no main window')
+    return
+  }
+
+  logger().info(`[recording] ${logMessage}`, {
+    eventId: pendingAutoStart.eventId,
+    idempotencyKey: pendingAutoStart.idempotencyKey,
+    startTimeUtc: pendingAutoStart.startTimeUtc,
+    endTimeUtc: pendingAutoStart.endTimeUtc
+  })
+
+  mainWindow.webContents.send('recording:auto-start-request', {
+    eventId: pendingAutoStart.eventId,
+    idempotencyKey: pendingAutoStart.idempotencyKey,
+    startTimeUtc: pendingAutoStart.startTimeUtc,
+    endTimeUtc: pendingAutoStart.endTimeUtc,
+    source: pendingAutoStart.source,
+    metadata: pendingAutoStart.metadata
+  })
+}
+
+function scheduleAutoStartAckTimeout(): void {
+  clearAutoStartAckTimer()
+  if (!pendingAutoStart) return
+  const pending = pendingAutoStart
+  autoStartAckTimer = setTimeout(() => {
+    if (pendingAutoStart?.idempotencyKey !== pending.idempotencyKey) return
+    logger().warn('[recording] auto-start ack timeout; returning to idle', {
+      eventId: pending.eventId,
+      idempotencyKey: pending.idempotencyKey,
+      timeoutMs: autoStartAckTimeoutMs
+    })
+    pendingAutoStart = null
+    autoStartAckTimer = null
+  }, autoStartAckTimeoutMs)
+}
+
+function clearAutoStartAckTimer(): void {
+  if (autoStartAckTimer) {
+    clearTimeout(autoStartAckTimer)
+    autoStartAckTimer = null
+  }
 }
 
 function scheduleAutoStop(recording: ActiveRecording): void {
@@ -140,6 +222,10 @@ function clearAutoStopTimer(): void {
 
 export function cleanupRecordingIpc(): void {
   clearAutoStopTimer()
+  clearAutoStartAckTimer()
+  pendingAutoStart = null
+  rendererRecordingReady = false
   mainWindow = null
   recordingSM = null
+  autoStartAckTimeoutMs = 15_000
 }

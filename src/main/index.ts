@@ -12,8 +12,10 @@ import {
   cleanupRecordingIpc,
   getRecordingStateMachine,
   handleRendererRecordingError,
+  handleRendererRecordingReady,
   handleRendererRecordingStarted,
   handleRendererRecordingStopped,
+  registerManualRecording,
   sendAutoStartRequest
 } from './recording-ipc'
 import { registerRecordingStorageIpc } from './recording-storage'
@@ -42,6 +44,13 @@ function registerRecordingIpcHandlers(): void {
     logger().info('[renderer]', { message, details })
   })
 
+  ipcMain.on('recording:ready', () => {
+    handleRendererRecordingReady()
+  })
+  ipcMain.on('recording:manual-started', (_event, recording) => {
+    registerManualRecording(recording)
+    updateTrayMenu()
+  })
   ipcMain.on('recording:started', () => {
     handleRendererRecordingStarted()
     updateTrayMenu()
