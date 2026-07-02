@@ -34,6 +34,15 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Added in-person owner alias handling so local owner id `joseph` selects `josephguerrero@factor1.com.au` without broad staff expansion.
   - Verification: `PYTHONPATH=. .venv/bin/python -m unittest discover -s tests -v`, `.venv/bin/python -m compileall app tests`, `npm run typecheck`, `npm run build`, and `git diff --check` passed.
 
+- [x] Phase 3 — OpenAI long-meeting chunking/reduce foundation
+  - Replaced single-prompt OpenAI summarisation/action extraction with a 15-minute transcript window map-reduce path.
+  - Chunk calls return structured JSON for summary bullets, decisions, risks, questions, and action items; a final reduce pass deduplicates and consolidates final summary/action items.
+  - Added bounded chunk concurrency and per-provider cache so `summarize()` followed by `extract_action_items()` reuses the same chunk/reduce result instead of paying/running twice.
+  - Labelled transcript prompts now include timestamps and speaker display names; owner prompts require exact speaker display names where available.
+  - Added tests for chunk boundaries, labelled transcript formatting, and chunk-then-reduce behavior.
+  - Live OpenAI smoke passed with configured `.env`: summary generated, 2 action items returned, cache had 1 entry, owners preserved as Joseph Guerrero and Benjamin Bryant.
+  - Verification: `PYTHONPATH=. .venv/bin/python -m unittest discover -s tests -v`, `.venv/bin/python -m compileall app tests`, `npm run typecheck`, `npm run build`, and `git diff --check` passed.
+
 ## Crossed out / completed
 
 - [x] `IN-65` — Spike: MS Graph meeting detection — subscription vs. polling
