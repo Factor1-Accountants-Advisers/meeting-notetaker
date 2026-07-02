@@ -131,12 +131,24 @@ def _candidate_voiceprints_for_meeting(
     people who were not expected in the meeting.
     """
     by_id = {record.employee_id.strip().lower(): record for record in records}
+    by_alias: dict[str, str] = {}
+    for key, record in by_id.items():
+        local = key.split("@", 1)[0]
+        by_alias.setdefault(local, key)
+        # Local dev owner IDs are often short handles like "joseph" while the
+        # voiceprint employee id is josephguerrero@factor1.com.au. Add conservative
+        # prefix aliases from display-name tokens so in-person recordings can still
+        # identify the enrolled recorder without broad staff matching.
+        for token in record.display_name.lower().replace(".", " ").split():
+            if len(token) >= 3 and local.startswith(token):
+                by_alias.setdefault(token, key)
     ordered_ids: list[str] = []
 
     def add(email: str | None) -> None:
         cleaned = (email or "").strip().lower()
-        if cleaned and cleaned in by_id and cleaned not in ordered_ids:
-            ordered_ids.append(cleaned)
+        employee_id = cleaned if cleaned in by_id else by_alias.get(cleaned)
+        if employee_id and employee_id not in ordered_ids:
+            ordered_ids.append(employee_id)
 
     if meeting.graph_metadata:
         for attendee in meeting.graph_metadata.attendees:

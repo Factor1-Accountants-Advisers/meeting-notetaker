@@ -24,6 +24,16 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Commit: `79ebd97`
   - Remaining Phase 2: live pyannoteAI `/v1/identify` smoke with real staff voiceprint/audio, then adjust parser if provider output differs.
 
+- [x] Phase 2b — Live pyannoteAI identify smoke
+  - Verified local pyannoteAI config is present via `.env` without printing secrets.
+  - Verified enrolled voiceprint registry contains Joseph Miguel Guerrero with 3 precision-2 voiceprints.
+  - Ran live `/v1/identify` against `backend/var/audio/389c0852-adbf-4e89-afa9-69cf27382f0b.webm`.
+  - Provider job succeeded; output included `confidence`, `diarization`, `exclusiveDiarization`, `identification`, and `voiceprints`.
+  - Parser produced 8 Joseph identity ranges from 13 identification rows; sample confidence normalized to `0.7`; evidence job id present.
+  - `_apply_identity_ranges` resolved `SPEAKER_01` to Joseph Miguel Guerrero with source `pyannote_voiceprint`, confidence `0.7`, and no Unknown reason.
+  - Added in-person owner alias handling so local owner id `joseph` selects `josephguerrero@factor1.com.au` without broad staff expansion.
+  - Verification: `PYTHONPATH=. .venv/bin/python -m unittest discover -s tests -v`, `.venv/bin/python -m compileall app tests`, `npm run typecheck`, `npm run build`, and `git diff --check` passed.
+
 ## Crossed out / completed
 
 - [x] `IN-65` — Spike: MS Graph meeting detection — subscription vs. polling

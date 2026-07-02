@@ -66,6 +66,23 @@ class SpeakerIdentityMatchingTests(unittest.TestCase):
             ["benjamin@factor1.com.au", "david@factor1.com.au", "joseph@factor1.com.au"],
         )
 
+    def test_owner_alias_selects_enrolled_recorder_for_in_person_meeting(self):
+        records = [
+            vp("josephguerrero@factor1.com.au", "Joseph Miguel Guerrero"),
+            vp("outside@example.com", "Outside Person"),
+        ]
+        meeting = Meeting(
+            id=uuid4(),
+            title="In person owner alias",
+            source=MeetingSource.in_person,
+            owner_id="joseph",
+            created_at=datetime.now(timezone.utc),
+        )
+
+        ordered = _candidate_voiceprints_for_meeting(records, meeting)
+
+        self.assertEqual([item.employee_id for item in ordered], ["josephguerrero@factor1.com.au"])
+
     def test_identity_evidence_is_preserved_on_high_confidence_match(self):
         segments = [segment("SPEAKER_00", 0, 5000)]
         ranges = [
