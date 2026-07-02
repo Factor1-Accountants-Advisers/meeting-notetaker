@@ -21,6 +21,7 @@ from app.services.voiceprints import Voiceprint, get_voiceprint_repository
 logger = logging.getLogger(__name__)
 
 MIN_OVERLAP_MS = 800
+DEFAULT_MIN_CONFIDENCE = 0.62
 
 
 class SpeakerMatcher(Protocol):
@@ -44,7 +45,7 @@ class UnknownOnlySpeakerMatcher:
         meeting: Meeting,
         audio_path: Path,
     ) -> tuple[list[TranscriptSegment], list[MeetingParticipant], int]:
-        return _unknown_only(segments)
+        return _unknown_only(segments, reason="no_voiceprint_identification")
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,8 @@ class IdentityRange:
     raw_speaker: str
     display_name: str
     confidence: float | None = None
+    source_label: str | None = None
+    provider_job_id: str | None = None
 
 
 class PyannoteAIVoiceprintMatcher:
@@ -68,18 +71,20 @@ class PyannoteAIVoiceprintMatcher:
         repo = get_voiceprint_repository()
         enrolled = repo.get_all()
         if not enrolled:
-            return _unknown_only(segments)
+            return _unknown_only(segments, reason="no_enrolled_voiceprints")
 
         settings = get_settings()
         if not settings.pyannote_api_key:
-            return _unknown_only(segments)
+            return _unknown_only(segments, reason="pyannote_api_key_missing")
 
+        candidates = _candidate_voiceprints_for_meeting(enrolled, meeting)
         label_to_name: dict[str, str] = {}
-        payload = _build_voiceprint_payload(enrolled, label_to_name)
+        payload = _build_voiceprint_payload(candidates, label_to_name)
         if not payload:
-            return _unknown_only(segments)
+            return _unknown_only(segments, reason="no_candidate_voiceprints")
 
-        threshold = _threshold_percent(settings.similarity_threshold)
+        threshold_percent = _threshold_percent(settings.similarity_threshold)
+        min_confidence = _normalised_confidence_threshold(settings.similarity_threshold)
 
         def identify() -> dict[str, Any]:
             client = PyannoteAIClient(
@@ -91,7 +96,7 @@ class PyannoteAIVoiceprintMatcher:
                 payload,
                 media_prefix=f"meeting-identify/{meeting.id}",
                 model=settings.pyannote_model_version or "precision-2",
-                matching_threshold=threshold,
+                matching_threshold=threshold_percent,
                 # False lets the same enrolled speaker match multiple diarized
                 # clusters if pyannote splits their voice into SPEAKER_00/03.
                 # Threshold + overlap checks still suppress weak matches.
@@ -107,12 +112,43 @@ class PyannoteAIVoiceprintMatcher:
             identity_ranges = _identity_ranges_from_result(result, label_to_name)
         except PyannoteAIError:
             logger.exception("pyannoteAI identify failed for meeting %s", meeting.id)
-            return _unknown_only(segments)
+            return _unknown_only(segments, reason="identify_failed")
 
         if not identity_ranges:
-            return _unknown_only(segments)
+            return _unknown_only(segments, reason="no_identity_ranges")
 
-        return _apply_identity_ranges(segments, identity_ranges)
+        return _apply_identity_ranges(segments, identity_ranges, min_confidence=min_confidence)
+
+
+def _candidate_voiceprints_for_meeting(
+    records: list[Voiceprint],
+    meeting: Meeting,
+    controlled_expansion_employee_ids: set[str] | None = None,
+) -> list[Voiceprint]:
+    """Order candidates attendee-first, then organiser/recorder, then controlled expansion.
+
+    This avoids broad staff matching in Slice 1 and reduces false positives for
+    people who were not expected in the meeting.
+    """
+    by_id = {record.employee_id.strip().lower(): record for record in records}
+    ordered_ids: list[str] = []
+
+    def add(email: str | None) -> None:
+        cleaned = (email or "").strip().lower()
+        if cleaned and cleaned in by_id and cleaned not in ordered_ids:
+            ordered_ids.append(cleaned)
+
+    if meeting.graph_metadata:
+        for attendee in meeting.graph_metadata.attendees:
+            add(attendee.email)
+        add(meeting.graph_metadata.organizer_email)
+
+    add(meeting.owner_id)
+
+    for employee_id in sorted(controlled_expansion_employee_ids or set()):
+        add(employee_id)
+
+    return [by_id[employee_id] for employee_id in ordered_ids]
 
 
 def _build_voiceprint_payload(
@@ -133,8 +169,18 @@ def _build_voiceprint_payload(
 
 def _threshold_percent(value: float) -> float:
     # Existing config uses 0.62 style similarity threshold. pyannoteAI matching
-    # expects 0–100. Also accept direct 62-style values for future config.
+    # expects 0-100. Also accept direct 62-style values for future config.
     return max(0.0, min(100.0, value * 100 if value <= 1 else value))
+
+
+def _normalised_confidence_threshold(value: float) -> float:
+    return max(0.0, min(1.0, value if value <= 1 else value / 100))
+
+
+def _normalise_confidence(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return max(0.0, min(1.0, value if value <= 1 else value / 100))
 
 
 def _output(result: dict[str, Any]) -> dict[str, Any]:
@@ -142,10 +188,16 @@ def _output(result: dict[str, Any]) -> dict[str, Any]:
     return output if isinstance(output, dict) else {}
 
 
+def _provider_job_id(result: dict[str, Any]) -> str | None:
+    value = result.get("jobId") or result.get("id")
+    return str(value) if value else None
+
+
 def _identity_ranges_from_result(
     result: dict[str, Any], label_to_name: dict[str, str]
 ) -> list[IdentityRange]:
     output = _output(result)
+    provider_job_id = _provider_job_id(result)
     confidence_by_raw: dict[str, float] = {}
     voiceprint_confidence = output.get("voiceprints")
     if isinstance(voiceprint_confidence, list):
@@ -158,7 +210,7 @@ def _identity_ranges_from_result(
             if isinstance(raw, str) and isinstance(match, str) and isinstance(conf, dict):
                 value = conf.get(match)
                 if isinstance(value, (int, float)):
-                    confidence_by_raw[raw] = float(value)
+                    confidence_by_raw[raw] = _normalise_confidence(float(value)) or 0.0
 
     ranges: list[IdentityRange] = []
     identification = output.get("identification")
@@ -194,28 +246,70 @@ def _identity_ranges_from_result(
                 end_ms=max(0, end_ms),
                 raw_speaker=raw,
                 display_name=display_name,
-                confidence=float(confidence) if isinstance(confidence, (int, float)) else None,
+                confidence=_normalise_confidence(float(confidence)) if isinstance(confidence, (int, float)) else None,
+                source_label=label,
+                provider_job_id=provider_job_id,
             )
         )
     return ranges
 
 
 def _apply_identity_ranges(
-    segments: list[TranscriptSegment], ranges: list[IdentityRange]
+    segments: list[TranscriptSegment],
+    ranges: list[IdentityRange],
+    *,
+    min_confidence: float = DEFAULT_MIN_CONFIDENCE,
+    min_overlap_ms: int = MIN_OVERLAP_MS,
 ) -> tuple[list[TranscriptSegment], list[MeetingParticipant], int]:
     unknown_names: dict[str, str] = {}
+    unknown_reasons: dict[str, str] = {}
     participant_known: dict[str, bool] = {}
     matched: list[TranscriptSegment] = []
 
     for seg in segments:
-        best = _best_range_for_segment(seg, ranges)
+        best, reason = _best_range_for_segment(
+            seg,
+            ranges,
+            min_confidence=min_confidence,
+            min_overlap_ms=min_overlap_ms,
+        )
+        raw_speaker = seg.raw_speaker or seg.speaker
         if best is not None:
-            matched.append(seg.model_copy(update={"speaker": best.display_name, "speaker_known": True}))
+            matched.append(
+                seg.model_copy(
+                    update={
+                        "speaker": best.display_name,
+                        "speaker_known": True,
+                        "raw_speaker": raw_speaker,
+                        "speaker_source": "pyannote_voiceprint",
+                        "speaker_confidence": best.confidence,
+                        "speaker_evidence_start_ms": best.start_ms,
+                        "speaker_evidence_end_ms": best.end_ms,
+                        "speaker_evidence_job_id": best.provider_job_id,
+                        "unknown_reason": None,
+                    }
+                )
+            )
             participant_known[best.display_name] = True
             continue
 
-        unknown = unknown_names.setdefault(seg.speaker, f"Unknown {len(unknown_names) + 1}")
-        matched.append(seg.model_copy(update={"speaker": unknown, "speaker_known": False}))
+        unknown = unknown_names.setdefault(raw_speaker, f"Unknown {len(unknown_names) + 1}")
+        unknown_reason = unknown_reasons.setdefault(raw_speaker, reason)
+        matched.append(
+            seg.model_copy(
+                update={
+                    "speaker": unknown,
+                    "speaker_known": False,
+                    "raw_speaker": raw_speaker,
+                    "speaker_source": "unknown",
+                    "speaker_confidence": None,
+                    "speaker_evidence_start_ms": None,
+                    "speaker_evidence_end_ms": None,
+                    "speaker_evidence_job_id": None,
+                    "unknown_reason": unknown_reason,
+                }
+            )
+        )
         participant_known.setdefault(unknown, False)
 
     participants = [
@@ -226,30 +320,65 @@ def _apply_identity_ranges(
     return matched, participants, unknown_count
 
 
-def _best_range_for_segment(seg: TranscriptSegment, ranges: list[IdentityRange]) -> IdentityRange | None:
+def _best_range_for_segment(
+    seg: TranscriptSegment,
+    ranges: list[IdentityRange],
+    *,
+    min_confidence: float = DEFAULT_MIN_CONFIDENCE,
+    min_overlap_ms: int = MIN_OVERLAP_MS,
+) -> tuple[IdentityRange | None, str]:
     best: tuple[int, IdentityRange] | None = None
+    saw_any = False
+    saw_overlap = False
+    saw_low_confidence = False
+    raw_speaker = seg.raw_speaker or seg.speaker
+
     for item in ranges:
+        if item.raw_speaker and item.raw_speaker != raw_speaker:
+            continue
+        saw_any = True
         overlap = min(seg.end_ms, item.end_ms) - max(seg.start_ms, item.start_ms)
-        if overlap < MIN_OVERLAP_MS:
+        if overlap < min_overlap_ms:
+            continue
+        saw_overlap = True
+        if item.confidence is not None and item.confidence < min_confidence:
+            saw_low_confidence = True
             continue
         if best is None or overlap > best[0]:
             best = (overlap, item)
-    return best[1] if best else None
+
+    if best:
+        return best[1], "matched"
+    if saw_low_confidence:
+        return None, "low_confidence"
+    if saw_any and not saw_overlap:
+        return None, "insufficient_overlap"
+    return None, "no_identity_match"
 
 
 def _unknown_only(
     segments: list[TranscriptSegment],
+    *,
+    reason: str,
 ) -> tuple[list[TranscriptSegment], list[MeetingParticipant], int]:
     label_map: dict[str, str] = {}
     for seg in segments:
-        if seg.speaker not in label_map:
-            label_map[seg.speaker] = f"Unknown {len(label_map) + 1}"
+        raw_speaker = seg.raw_speaker or seg.speaker
+        if raw_speaker not in label_map:
+            label_map[raw_speaker] = f"Unknown {len(label_map) + 1}"
 
     matched = [
         seg.model_copy(
             update={
-                "speaker": label_map[seg.speaker],
+                "speaker": label_map[seg.raw_speaker or seg.speaker],
                 "speaker_known": False,
+                "raw_speaker": seg.raw_speaker or seg.speaker,
+                "speaker_source": "unknown",
+                "speaker_confidence": None,
+                "speaker_evidence_start_ms": None,
+                "speaker_evidence_end_ms": None,
+                "speaker_evidence_job_id": None,
+                "unknown_reason": reason,
             }
         )
         for seg in segments

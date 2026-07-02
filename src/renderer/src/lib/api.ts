@@ -78,6 +78,13 @@ export interface TranscriptSegmentDto {
   text: string
   start_ms: number
   end_ms: number
+  raw_speaker?: string | null
+  speaker_source?: string
+  speaker_confidence?: number | null
+  speaker_evidence_start_ms?: number | null
+  speaker_evidence_end_ms?: number | null
+  speaker_evidence_job_id?: string | null
+  unknown_reason?: string | null
 }
 
 export interface MeetingReviewDto {

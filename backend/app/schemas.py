@@ -89,6 +89,13 @@ class TranscriptSegment(BaseModel):
     text: str
     start_ms: int
     end_ms: int
+    raw_speaker: str | None = None
+    speaker_source: str = "unknown"  # pyannote_voiceprint | unknown | user_corrected later
+    speaker_confidence: float | None = None
+    speaker_evidence_start_ms: int | None = None
+    speaker_evidence_end_ms: int | None = None
+    speaker_evidence_job_id: str | None = None
+    unknown_reason: str | None = None
 
 
 class Meeting(BaseModel):
