@@ -80,7 +80,8 @@ class GraphSharePointProvider:
     ) -> str:
         if not access_token:
             raise ValueError("SharePoint save requires a delegated Graph token")
-        quoted_path = urllib.parse.quote(f"{self._folder_path}/{filename}")
+        upload_path = f"{self._folder_path}/{filename}" if self._folder_path else filename
+        quoted_path = urllib.parse.quote(upload_path)
         url = f"{GRAPH_DRIVE_BASE}/{self._drive_id}/root:/{quoted_path}:/content"
         req = urllib.request.Request(
             url,

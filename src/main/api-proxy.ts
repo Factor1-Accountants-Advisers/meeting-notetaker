@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron'
 import { getCurrentUser, getGraphAccessToken } from './auth-session'
-import { GRAPH_EMAIL_SCOPES } from './auth-msal'
+import { GRAPH_EMAIL_SCOPES, GRAPH_SHAREPOINT_SCOPES } from './auth-msal'
 import { logger } from './logger'
 
 // All backend traffic goes through the main process: the renderer never holds
@@ -53,7 +53,7 @@ export function registerApiProxyIpc(): void {
         if (token) headers['X-MN-Graph-Token'] = token
       }
       if (req.path.includes('/sharepoint') && req.method === 'POST') {
-        const token = await getGraphAccessToken()
+        const token = await getGraphAccessToken(GRAPH_SHAREPOINT_SCOPES)
         if (token) headers['X-MN-Graph-Token'] = token
       }
 

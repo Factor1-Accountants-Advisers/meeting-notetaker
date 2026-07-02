@@ -14,7 +14,8 @@ import {
 
 export const GRAPH_DETECTION_SCOPES = ['User.Read', 'Calendars.Read'] as const
 export const GRAPH_EMAIL_SCOPES = ['User.Read', 'Mail.Send'] as const
-const SIGN_IN_SCOPES = ['User.Read', 'Calendars.Read', 'Mail.Send'] as const
+export const GRAPH_SHAREPOINT_SCOPES = ['User.Read', 'Files.ReadWrite.All'] as const
+const SIGN_IN_SCOPES = ['User.Read', 'Calendars.Read', 'Mail.Send', 'Files.ReadWrite.All'] as const
 
 export interface MsalPublicClientConfig {
   clientId: string
