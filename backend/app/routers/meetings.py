@@ -312,6 +312,7 @@ async def email_notes(
         segments, meeting.title, participants,
         summary_text=summary,
         action_items=action_items,
+        meeting=meeting,
     )
     attachments = [
         build_transcript_attachment(
@@ -370,6 +371,7 @@ async def save_transcript_to_sharepoint(
         participants,
         summary_text=summary,
         action_items=action_items,
+        meeting=meeting,
     )
 
     store.MEETINGS[meeting_id] = meeting.model_copy(
@@ -573,33 +575,157 @@ async def name_speaker(
 
 
 def _format_transcript(
-    segments, title: str, participants, summary_text: str | None = None, action_items: list | None = None
+    segments,
+    title: str,
+    participants,
+    *,
+    summary_text: str | None = None,
+    action_items: list | None = None,
+    meeting: Meeting | None = None,
 ) -> str:
-    """Format transcript segments as a readable text file with summary and action items."""
-    lines = [f"Meeting: {title}", f"Date: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}", ""]
+    """Format the meeting output as structured minutes per the Factor1 template.
 
-    if summary_text:
-        lines.append("--- SUMMARY ---")
-        lines.append(summary_text)
-        lines.append("")
+    The AI Summary Instructions document defines the output structure. Known
+    fields (title, date, attendees, organiser) are populated from the Meeting
+    model and Graph metadata. The LLM supplies summary text, decisions, and
+    action items. Unknown fields use 'TBC' rather than being omitted.
+    """
+    now_utc = datetime.now(timezone.utc)
+    date_str = now_utc.strftime('%d %B %Y')
+    attendees = _attendee_list(meeting, participants)
+    chair = _chair_name(meeting)
+    location = _location_label(meeting)
 
+    lines = [
+        'MEETING MINUTES — DRAFT',
+        '',
+        f'Meeting: {title}',
+        f'Date: {date_str}',
+        f'Location / Platform: {location}',
+        f'Chair: {chair}',
+        f'Attendees: {attendees}',
+        f'Objective: {summary_text.split(chr(10))[0] if summary_text else "TBC"}',
+        '',
+        '---',
+        '',
+    ]
+
+    # Decisions
+    lines.append('Decisions Made')
+    decisions = _extract_decisions_from_summary(summary_text)
+    if decisions:
+        for i, d in enumerate(decisions, 1):
+            lines.append(f'{i}. {d}')
+    else:
+        lines.append('No formal decisions recorded in notes provided.')
+    lines.append('')
+
+    # Action Items
+    lines.append('Action Items')
     if action_items:
-        lines.append("--- ACTION ITEMS ---")
-        for item in action_items:
-            owner = item.owner or "Unassigned"
-            deadline = item.deadline.strftime("%d %b %Y") if item.deadline else "No deadline"
-            lines.append(f"  [{item.priority.value.upper()}] {item.description} — {owner} (due {deadline})")
-        lines.append("")
+        lines.append('| # | Action | Owner | Due Date | Notes |')
+        lines.append('|---|--------|-------|----------|-------|')
+        for i, item in enumerate(action_items, 1):
+            owner = item.owner or 'TBC'
+            deadline = item.deadline.strftime('%d %b %Y') if item.deadline else 'TBC'
+            lines.append(f'| {i} | {item.description} | {owner} | {deadline} |  |')
+    else:
+        lines.append('None recorded.')
+    lines.append('')
 
-    lines.append("--- TRANSCRIPT ---")
+    # Open Questions
+    lines.append('Open Questions')
+    questions = _extract_questions_from_summary(summary_text)
+    if questions:
+        for q in questions:
+            lines.append(f'- {q}')
+    else:
+        lines.append('None recorded.')
+    lines.append('')
+
+    # Next Meeting
+    lines.append('Next Meeting')
+    lines.append('Date: TBC')
+    lines.append('Agenda items flagged for next meeting: None noted')
+    lines.append('')
+
+    lines.append('---')
+    lines.append('Minutes prepared by: Notetaker')
+    lines.append('')
+
+    # Full transcript
+    lines.append('--- TRANSCRIPT ---')
     current_speaker = None
     for seg in segments:
         if seg.speaker != current_speaker:
             current_speaker = seg.speaker
-            known = "\u2713" if seg.speaker_known else "?"
-            lines.append(f"\n[{known}] {seg.speaker}:")
-        lines.append(f"  {seg.text}")
-    return "\n".join(lines)
+            known = '\u2713' if seg.speaker_known else '?'
+            lines.append(f'\n[{known}] {seg.speaker}:')
+        lines.append(f'  {seg.text}')
+    return '\n'.join(lines)
+
+
+def _attendee_list(meeting: Meeting | None, participants: list) -> str:
+    names: list[str] = []
+    if meeting and meeting.graph_metadata:
+        for a in meeting.graph_metadata.attendees:
+            if a.name and a.name not in names:
+                names.append(a.name)
+    if not names:
+        for p in participants:
+            if p.known and p.name not in names:
+                names.append(p.name)
+    return ', '.join(names) if names else 'TBC — please add attendee list'
+
+
+def _chair_name(meeting: Meeting | None) -> str:
+    if meeting and meeting.graph_metadata and meeting.graph_metadata.organizer_email:
+        return meeting.graph_metadata.organizer_email
+    return 'TBC'
+
+
+def _location_label(meeting: Meeting | None) -> str:
+    if meeting is None:
+        return 'TBC'
+    if meeting.source.value == 'online':
+        return 'Microsoft Teams'
+    if meeting.source.value == 'in_person':
+        return 'In person'
+    return 'Uploaded recording'
+
+
+def _extract_decisions_from_summary(summary_text: str | None) -> list[str]:
+    if not summary_text:
+        return []
+    results: list[str] = []
+    for line in summary_text.split('\n'):
+        stripped = line.strip()
+        lower = stripped.lower()
+        if 'open question' in lower or 'unresolved' in lower or 'action item' in lower:
+            break
+        if stripped and (stripped.startswith('- ') or stripped.startswith('* ')):
+            results.append(stripped[2:])
+    return results
+
+
+def _extract_questions_from_summary(summary_text: str | None) -> list[str]:
+    if not summary_text:
+        return []
+    results: list[str] = []
+    in_section = False
+    for line in (summary_text or '').split('\n'):
+        stripped = line.strip()
+        lower = stripped.lower()
+        if 'open question' in lower or 'unresolved' in lower:
+            in_section = True
+            continue
+        if in_section and not stripped:
+            continue
+        if in_section and (stripped.startswith('- ') or stripped.startswith('* ')):
+            results.append(stripped[2:])
+        elif in_section and stripped and not stripped.startswith(('- ', '* ')):
+            break
+    return results
 
 
 @router.post("/{meeting_id}/finalize", response_model=Meeting)
