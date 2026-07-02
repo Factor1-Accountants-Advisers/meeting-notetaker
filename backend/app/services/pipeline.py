@@ -37,6 +37,9 @@ AUDIO_DIR = Path(__file__).resolve().parents[2] / "var" / "audio"
 # Simulated stage latency so the UI's queued/processing states are visible.
 STAGE_DELAY_S = 1.5
 
+# Keep strong references to fire-and-forget pipeline tasks until they finish.
+_PIPELINE_TASKS: set[asyncio.Task[None]] = set()
+
 
 def audio_path_for(meeting_id: UUID, mime_type: str) -> Path:
     ext = "webm" if "webm" in mime_type else "bin"
@@ -107,6 +110,33 @@ def _increment_attempt(meeting_id: UUID) -> None:
         store.MEETINGS[meeting_id] = meeting.model_copy(
             update={"processing_attempt": meeting.processing_attempt + 1}
         )
+
+
+def reconcile_interrupted_pipelines() -> int:
+    """Mark in-flight pipeline work from a prior process as retryable failed.
+
+    Queued/processing state only exists in memory as an asyncio task. If the
+    backend process restarts while a meeting is in either state, no task remains
+    to advance it and upload/retry would otherwise 409 forever. On startup we
+    make that state honest and retryable.
+    """
+    changed = 0
+    for meeting_id, meeting in list(store.MEETINGS.items()):
+        if meeting.pipeline_status not in (PipelineStatus.queued, PipelineStatus.processing):
+            continue
+        set_pipeline_state(
+            meeting_id,
+            PipelineStatus.failed,
+            PipelineStage.failed,
+            "Processing was interrupted by a backend restart. Retry processing when ready.",
+            error_code="Interrupted",
+            error_message="Backend restarted while this meeting was processing.",
+        )
+        changed += 1
+    if changed:
+        logger.warning("marked %s interrupted pipeline(s) retryable after startup", changed)
+        store.save_snapshot()
+    return changed
 
 
 async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
@@ -209,4 +239,6 @@ def kick_pipeline(meeting_id: UUID, audio_path: Path) -> None:
         PipelineStage.queued,
         "Recording uploaded. Waiting to start processing...",
     )
-    asyncio.get_running_loop().create_task(run_pipeline(meeting_id, audio_path))
+    task = asyncio.create_task(run_pipeline(meeting_id, audio_path))
+    _PIPELINE_TASKS.add(task)
+    task.add_done_callback(_PIPELINE_TASKS.discard)

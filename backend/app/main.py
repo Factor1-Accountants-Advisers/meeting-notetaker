@@ -8,11 +8,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import store
 from app.config import get_settings
 from app.routers import action_items, health, meetings, people, search
+from app.services.pipeline import reconcile_interrupted_pipelines
 from app.services.retention import retention_loop
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    reconcile_interrupted_pipelines()
     task = asyncio.create_task(retention_loop())
     yield
     task.cancel()

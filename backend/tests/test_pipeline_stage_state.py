@@ -4,7 +4,11 @@ from uuid import uuid4
 
 from app import store
 from app.schemas import DeliveryStatus, Meeting, MeetingSource, PipelineStage, PipelineStatus
-from app.services.pipeline import set_delivery_state, set_pipeline_state
+from app.services.pipeline import (
+    reconcile_interrupted_pipelines,
+    set_delivery_state,
+    set_pipeline_state,
+)
 
 
 class PipelineStageStateTests(unittest.TestCase):
@@ -79,6 +83,75 @@ class PipelineStageStateTests(unittest.TestCase):
         self.assertEqual(meeting.pipeline_stage, PipelineStage.ready)
         self.assertEqual(meeting.delivery_status, DeliveryStatus.failed)
         self.assertEqual(meeting.delivery_error_message, "Email failed. Sign in to Outlook, then retry.")
+
+    def test_startup_reconciliation_marks_queued_and_processing_retryable_failed(self):
+        queued_id = uuid4()
+        processing_id = uuid4()
+        ready_id = uuid4()
+        pending_id = uuid4()
+        created_at = datetime.now(timezone.utc)
+        store.MEETINGS[queued_id] = Meeting(
+            id=queued_id,
+            title="Queued before restart",
+            source=MeetingSource.online,
+            owner_id="test-owner",
+            created_at=created_at,
+            pipeline_status=PipelineStatus.queued,
+            pipeline_stage=PipelineStage.queued,
+            pipeline_stage_message="Waiting...",
+        )
+        store.MEETINGS[processing_id] = Meeting(
+            id=processing_id,
+            title="Processing before restart",
+            source=MeetingSource.online,
+            owner_id="test-owner",
+            created_at=created_at,
+            pipeline_status=PipelineStatus.processing,
+            pipeline_stage=PipelineStage.identifying_speakers,
+            pipeline_stage_message="Identifying...",
+        )
+        store.MEETINGS[ready_id] = Meeting(
+            id=ready_id,
+            title="Already ready",
+            source=MeetingSource.online,
+            owner_id="test-owner",
+            created_at=created_at,
+            pipeline_status=PipelineStatus.ready,
+            pipeline_stage=PipelineStage.ready,
+            pipeline_stage_message="Ready.",
+        )
+        store.MEETINGS[pending_id] = Meeting(
+            id=pending_id,
+            title="No audio yet",
+            source=MeetingSource.online,
+            owner_id="test-owner",
+            created_at=created_at,
+            pipeline_status=PipelineStatus.pending_audio,
+            pipeline_stage=PipelineStage.pending_audio,
+        )
+
+        old_save_snapshot = store.save_snapshot
+        try:
+            store.save_snapshot = lambda: None
+            changed = reconcile_interrupted_pipelines()
+        finally:
+            store.save_snapshot = old_save_snapshot
+
+        self.assertEqual(changed, 2)
+        for interrupted_id in (queued_id, processing_id):
+            meeting = store.MEETINGS[interrupted_id]
+            self.assertEqual(meeting.pipeline_status, PipelineStatus.failed)
+            self.assertEqual(meeting.pipeline_stage, PipelineStage.failed)
+            self.assertEqual(meeting.processing_error_code, "Interrupted")
+            self.assertEqual(
+                meeting.processing_error_message,
+                "Backend restarted while this meeting was processing.",
+            )
+            self.assertIn("retry", meeting.pipeline_stage_message.lower())
+            self.assertIsNotNone(meeting.pipeline_completed_at)
+
+        self.assertEqual(store.MEETINGS[ready_id].pipeline_status, PipelineStatus.ready)
+        self.assertEqual(store.MEETINGS[pending_id].pipeline_status, PipelineStatus.pending_audio)
 
 
 if __name__ == "__main__":
