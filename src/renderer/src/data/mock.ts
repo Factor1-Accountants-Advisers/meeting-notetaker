@@ -39,6 +39,16 @@ export interface ActionItem {
 
 export type MeetingStatus = 'Draft' | 'Finalized'
 export type PipelineStatus = 'pending_audio' | 'queued' | 'processing' | 'ready' | 'failed'
+export type PipelineStage =
+  | 'pending_audio'
+  | 'audio_uploaded'
+  | 'queued'
+  | 'transcribing_diarizing'
+  | 'identifying_speakers'
+  | 'extracting_notes'
+  | 'ready'
+  | 'failed'
+export type DeliveryStatus = 'not_started' | 'emailing' | 'emailed' | 'failed'
 
 export interface Meeting {
   id: string
@@ -54,6 +64,10 @@ export interface Meeting {
   attendees: Person[]
   group: 'Today' | 'Earlier this week' | 'Older'
   pipelineStatus: PipelineStatus
+  pipelineStage: PipelineStage
+  pipelineStageMessage: string
+  deliveryStatus: DeliveryStatus
+  deliveryErrorMessage: string | null
   source: 'online' | 'in_person' | 'upload'
 }
 

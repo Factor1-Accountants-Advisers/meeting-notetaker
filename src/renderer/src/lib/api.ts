@@ -3,8 +3,11 @@ import type { Tone } from '@renderer/components/ui/tones'
 import type { Priority, Status } from '@renderer/components/ui/Pill'
 import type {
   ActionItem,
+  DeliveryStatus,
   EnrollmentState,
   Meeting,
+  PipelineStage,
+  PipelineStatus,
   StaffMember
 } from '@renderer/data/mock'
 
@@ -32,7 +35,11 @@ export interface MeetingDto {
   duration_seconds: number | null
   unknown_speaker_count: number
   action_item_count: number
-  pipeline_status: 'pending_audio' | 'queued' | 'processing' | 'ready' | 'failed'
+  pipeline_status: PipelineStatus
+  pipeline_stage: PipelineStage
+  pipeline_stage_message: string
+  delivery_status: DeliveryStatus
+  delivery_error_message: string | null
   graph_metadata?: GraphMeetingMetadataDto | null
 }
 
@@ -137,6 +144,10 @@ function mapMeeting(dto: MeetingDto): Meeting {
     attendees: [], // attendee avatars come with the Graph integration
     group: groupFor(dto.created_at),
     pipelineStatus: dto.pipeline_status,
+    pipelineStage: dto.pipeline_stage,
+    pipelineStageMessage: dto.pipeline_stage_message,
+    deliveryStatus: dto.delivery_status,
+    deliveryErrorMessage: dto.delivery_error_message,
     source: dto.source
   }
 }

@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 from app.schemas import (
     AccessRole,
     AuditEntry,
+    DeliveryStatus,
     EditSegmentRequest,
     EmailRequest,
     EmailResult,
@@ -27,11 +28,12 @@ from app.schemas import (
     MeetingReview,
     MeetingStatus,
     NameSpeakerRequest,
+    PipelineStage,
     PipelineStatus,
     UploadAudioRequest,
 )
 from app.services.email import build_transcript_attachment, get_email_provider
-from app.services.pipeline import AUDIO_DIR, audio_path_for, kick_pipeline
+from app.services.pipeline import AUDIO_DIR, audio_path_for, kick_pipeline, set_delivery_state, set_pipeline_state
 
 Actor = Header("Unknown user", alias="X-MN-User")
 
@@ -229,6 +231,12 @@ async def upload_audio(
     if updates:
         store.MEETINGS[meeting_id] = meeting.model_copy(update=updates)
 
+    set_pipeline_state(
+        meeting_id,
+        PipelineStatus.queued,
+        PipelineStage.audio_uploaded,
+        "Recording uploaded. Preparing processing...",
+    )
     kick_pipeline(meeting_id, path)
     return store.MEETINGS[meeting_id]
 
@@ -279,11 +287,18 @@ async def email_notes(
     if not recipients:
         raise HTTPException(status.HTTP_409_CONFLICT, "No email recipients resolved")
     if not graph_token:
+        set_delivery_state(
+            meeting_id,
+            DeliveryStatus.failed,
+            "Outlook sign-in is required before transcript email can be sent",
+        )
+        store.save_snapshot()
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED,
             "Outlook sign-in is required before transcript email can be sent",
         )
 
+    set_delivery_state(meeting_id, DeliveryStatus.emailing)
     summary = store.SUMMARIES.get(meeting_id, "")
     action_items = [
         a for a in store.ACTION_ITEMS.values() if a.meeting_id == meeting_id
@@ -313,12 +328,15 @@ async def email_notes(
         )
     except Exception as exc:
         logger.exception("Email delivery failed for %s", meeting_id)
+        set_delivery_state(meeting_id, DeliveryStatus.failed, f"Email delivery failed: {exc}")
+        store.save_snapshot()
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
             f"Email delivery failed: {exc}",
         )
 
     sent_at = datetime.now(timezone.utc)
+    set_delivery_state(meeting_id, DeliveryStatus.emailed)
     store.add_audit(
         actor,
         "meeting.email",

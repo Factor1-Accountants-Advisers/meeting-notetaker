@@ -20,10 +20,10 @@ from uuid import UUID
 from app import store
 from app.schemas import (
     AccessRole,
+    DeliveryStatus,
     MeetingAccessEntry,
-    MeetingParticipant,
+    PipelineStage,
     PipelineStatus,
-    TranscriptSegment,
 )
 from app.services.llm import get_llm_provider
 from app.services.speech import get_speech_provider
@@ -43,10 +43,70 @@ def audio_path_for(meeting_id: UUID, mime_type: str) -> Path:
     return AUDIO_DIR / f"{meeting_id}.{ext}"
 
 
-def _set_status(meeting_id: UUID, status: PipelineStatus) -> None:
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def set_pipeline_state(
+    meeting_id: UUID,
+    status: PipelineStatus,
+    stage: PipelineStage,
+    message: str,
+    *,
+    error_code: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    """Persist backend-owned pipeline progress for UI recovery and audits."""
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        return
+
+    now = _now()
+    started_at = meeting.pipeline_started_at
+    if status in (PipelineStatus.queued, PipelineStatus.processing) and started_at is None:
+        started_at = now
+
+    completed_at = meeting.pipeline_completed_at
+    if status in (PipelineStatus.ready, PipelineStatus.failed):
+        completed_at = now
+    elif status in (PipelineStatus.queued, PipelineStatus.processing):
+        completed_at = None
+
+    updates = {
+        "pipeline_status": status,
+        "pipeline_stage": stage,
+        "pipeline_stage_message": message,
+        "pipeline_started_at": started_at,
+        "pipeline_updated_at": now,
+        "pipeline_completed_at": completed_at,
+        "processing_error_code": error_code,
+        "processing_error_message": error_message,
+    }
+    store.MEETINGS[meeting_id] = meeting.model_copy(update=updates)
+
+
+def set_delivery_state(
+    meeting_id: UUID,
+    status: DeliveryStatus,
+    error_message: str | None = None,
+) -> None:
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is not None:
-        store.MEETINGS[meeting_id] = meeting.model_copy(update={"pipeline_status": status})
+        store.MEETINGS[meeting_id] = meeting.model_copy(
+            update={
+                "delivery_status": status,
+                "delivery_error_message": error_message,
+                "pipeline_updated_at": _now(),
+            }
+        )
+
+
+def _increment_attempt(meeting_id: UUID) -> None:
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is not None:
+        store.MEETINGS[meeting_id] = meeting.model_copy(
+            update={"processing_attempt": meeting.processing_attempt + 1}
+        )
 
 
 async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
@@ -55,7 +115,12 @@ async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
         return
     try:
         await asyncio.sleep(STAGE_DELAY_S)  # sitting in the queue
-        _set_status(meeting_id, PipelineStatus.processing)
+        set_pipeline_state(
+            meeting_id,
+            PipelineStatus.processing,
+            PipelineStage.transcribing_diarizing,
+            "Transcribing and diarizing recording...",
+        )
 
         speech = get_speech_provider()
         raw_segments = await speech.transcribe_diarized(audio_path, meeting)
@@ -64,11 +129,23 @@ async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
         # Speaker matching via pyannoteAI `/v1/identify` using enrolled
         # voiceprints (IN-69). If identification fails or confidence/overlap is
         # insufficient, segments remain Unknown rather than guessed.
+        set_pipeline_state(
+            meeting_id,
+            PipelineStatus.processing,
+            PipelineStage.identifying_speakers,
+            "Identifying enrolled speakers...",
+        )
         matcher = get_speaker_matcher()
         segments, participants, unknown_count = await matcher.match_speakers(
             raw_segments, meeting, audio_path
         )
 
+        set_pipeline_state(
+            meeting_id,
+            PipelineStatus.processing,
+            PipelineStage.extracting_notes,
+            "Extracting summary and action items...",
+        )
         llm = get_llm_provider()
         summary = await llm.summarize(segments)
         items = await llm.extract_action_items(meeting_id, segments)
@@ -94,23 +171,42 @@ async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
                     MeetingAccessEntry(user=participant.name, role=AccessRole.viewer)
                 )
 
-        updated = store.MEETINGS[meeting_id].model_copy(
+        current = store.MEETINGS[meeting_id]
+        store.MEETINGS[meeting_id] = current.model_copy(
             update={
-                "pipeline_status": PipelineStatus.ready,
                 "unknown_speaker_count": unknown_count,
                 "action_item_count": len(items),
             }
         )
-        store.MEETINGS[meeting_id] = updated
-        logger.info("pipeline ready for %s at %s", meeting_id, datetime.now(timezone.utc))
-    except Exception:
+        set_pipeline_state(
+            meeting_id,
+            PipelineStatus.ready,
+            PipelineStage.ready,
+            "Transcript and notes are ready.",
+        )
+        logger.info("pipeline ready for %s at %s", meeting_id, _now())
+    except Exception as exc:
         logger.exception("pipeline failed for %s", meeting_id)
-        _set_status(meeting_id, PipelineStatus.failed)
+        set_pipeline_state(
+            meeting_id,
+            PipelineStatus.failed,
+            PipelineStage.failed,
+            "Processing failed. The recording is saved and can be retried.",
+            error_code=exc.__class__.__name__,
+            error_message=str(exc)[:500] or "Processing failed",
+        )
     finally:
         # Async task runs outside any request, so persist explicitly.
         store.save_snapshot()
 
 
 def kick_pipeline(meeting_id: UUID, audio_path: Path) -> None:
-    _set_status(meeting_id, PipelineStatus.queued)
+    _increment_attempt(meeting_id)
+    set_delivery_state(meeting_id, DeliveryStatus.not_started)
+    set_pipeline_state(
+        meeting_id,
+        PipelineStatus.queued,
+        PipelineStage.queued,
+        "Recording uploaded. Waiting to start processing...",
+    )
     asyncio.get_running_loop().create_task(run_pipeline(meeting_id, audio_path))

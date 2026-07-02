@@ -30,6 +30,24 @@ class PipelineStatus(str, Enum):
     failed = "failed"  # flagged for retry (requirements §4.4)
 
 
+class PipelineStage(str, Enum):
+    pending_audio = "pending_audio"
+    audio_uploaded = "audio_uploaded"
+    queued = "queued"
+    transcribing_diarizing = "transcribing_diarizing"
+    identifying_speakers = "identifying_speakers"
+    extracting_notes = "extracting_notes"
+    ready = "ready"
+    failed = "failed"
+
+
+class DeliveryStatus(str, Enum):
+    not_started = "not_started"
+    emailing = "emailing"
+    emailed = "emailed"
+    failed = "failed"
+
+
 class GraphMeetingAttendeeMetadata(BaseModel):
     name: str | None = None
     email: str | None = None
@@ -85,6 +103,16 @@ class Meeting(BaseModel):
     unknown_speaker_count: int = 0
     action_item_count: int = 0
     pipeline_status: PipelineStatus = PipelineStatus.pending_audio
+    pipeline_stage: PipelineStage = PipelineStage.pending_audio
+    pipeline_stage_message: str = "Waiting for recording upload."
+    pipeline_started_at: datetime | None = None
+    pipeline_updated_at: datetime | None = None
+    pipeline_completed_at: datetime | None = None
+    processing_error_code: str | None = None
+    processing_error_message: str | None = None
+    processing_attempt: int = 0
+    delivery_status: DeliveryStatus = DeliveryStatus.not_started
+    delivery_error_message: str | None = None
     graph_metadata: GraphMeetingMetadata | None = None
 
 

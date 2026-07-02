@@ -163,6 +163,7 @@ function App(): JSX.Element {
                   }
                 : null
             )
+            watchProcessing(meetingId, session?.title ?? graphMetadata?.title ?? 'Auto-recorded Teams meeting')
           }
         }
         setRecording(null)
@@ -210,6 +211,7 @@ function App(): JSX.Element {
       attempts += 1
       const review = await fetchMeetingReview(meetingId)
       const status = review?.meeting.pipeline_status
+      const stageMessage = review?.meeting.pipeline_stage_message
       if (status === 'ready' && review) {
         setPostCaptureNotice({
           state: 'emailing',
@@ -245,6 +247,14 @@ function App(): JSX.Element {
         return
       }
       if (attempts < maxAttempts) {
+        if (stageMessage) {
+          setPostCaptureNotice({
+            state: 'processing',
+            meetingId,
+            title,
+            message: stageMessage
+          })
+        }
         window.setTimeout(() => void poll(), 2000)
         return
       }
@@ -493,6 +503,7 @@ function App(): JSX.Element {
     const duration = await audioDurationSeconds(file)
     const uploaded = await uploadAudio(created.id, b64, file.type || 'audio/webm', duration)
     if (!uploaded) console.warn('Audio upload failed — backend unreachable')
+    if (uploaded) watchProcessing(created.id, title)
   }
 
   const signOut = (): void => {
