@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     pyannote_poll_timeout_seconds: int = 1800
     pyannote_hf_token: str = ""  # legacy/dev only; not the Slice 1 pyannoteAI API credential
 
+    # SharePoint transcript delivery. Empty values use the local locked-folder stand-in.
+    sharepoint_drive_id: str = ""
+    sharepoint_folder_path: str = "Notetaker Transcripts"
+
     # Raw-audio retention (requirements §6.2 engineering default).
     audio_retention_days: int = 30
 

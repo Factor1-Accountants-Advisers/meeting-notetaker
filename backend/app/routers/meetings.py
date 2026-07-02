@@ -30,9 +30,11 @@ from app.schemas import (
     NameSpeakerRequest,
     PipelineStage,
     PipelineStatus,
+    SharePointStatus,
     UploadAudioRequest,
 )
 from app.services.email import build_transcript_attachment, get_email_provider
+from app.services.sharepoint import get_sharepoint_provider, safe_transcript_filename
 from app.services.pipeline import AUDIO_DIR, audio_path_for, kick_pipeline, set_delivery_state, set_pipeline_state
 
 Actor = Header("Unknown user", alias="X-MN-User")
@@ -257,6 +259,21 @@ async def retry_pipeline(meeting_id: UUID, actor: str = Actor) -> Meeting:
     return store.MEETINGS[meeting_id]
 
 
+def _delivery_artifacts(meeting_id: UUID) -> tuple[Meeting, list, list, str, list]:
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    if meeting.pipeline_status is not PipelineStatus.ready:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Transcript is not ready yet")
+    participants = store.PARTICIPANTS.get(meeting_id, [])
+    segments = store.TRANSCRIPTS.get(meeting_id, [])
+    if not segments:
+        raise HTTPException(status.HTTP_409_CONFLICT, "No transcript is available to deliver")
+    summary = store.SUMMARIES.get(meeting_id, "")
+    action_items = [a for a in store.ACTION_ITEMS.values() if a.meeting_id == meeting_id]
+    return meeting, participants, segments, summary, action_items
+
+
 @router.post("/{meeting_id}/email", response_model=EmailResult)
 async def email_notes(
     meeting_id: UUID,
@@ -270,18 +287,7 @@ async def email_notes(
     calendar recordings go to Graph attendees; manual/ad-hoc recordings go to
     the recorder. SharePoint and Teams delivery are later slices.
     """
-    meeting = store.MEETINGS.get(meeting_id)
-    if meeting is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
-    require(meeting_id, actor, AccessRole.owner)
-
-    if meeting.pipeline_status is not PipelineStatus.ready:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Transcript is not ready yet")
-
-    participants = store.PARTICIPANTS.get(meeting_id, [])
-    segments = store.TRANSCRIPTS.get(meeting_id, [])
-    if not segments:
-        raise HTTPException(status.HTTP_409_CONFLICT, "No transcript is available to email")
+    meeting, participants, segments, summary, action_items = _delivery_artifacts(meeting_id)
 
     recipients = _email_recipients(meeting, body.recorder_email)
     if not recipients:
@@ -299,10 +305,6 @@ async def email_notes(
         )
 
     set_delivery_state(meeting_id, DeliveryStatus.emailing)
-    summary = store.SUMMARIES.get(meeting_id, "")
-    action_items = [
-        a for a in store.ACTION_ITEMS.values() if a.meeting_id == meeting_id
-    ]
     note = f"{body.note}\n\n" if body.note else ""
     email_body = f"{note}{summary}"
 
@@ -345,6 +347,77 @@ async def email_notes(
         meeting_id=meeting_id,
     )
     return EmailResult(recipients=recipients, sent_at=sent_at)
+
+
+@router.post("/{meeting_id}/sharepoint", response_model=Meeting)
+async def save_transcript_to_sharepoint(
+    meeting_id: UUID,
+    actor: str = Actor,
+    graph_token: str = Header("", alias="X-MN-Graph-Token"),
+) -> Meeting:
+    """Save the generated transcript artifact to the configured SharePoint folder.
+
+    The transcript/summary/action outputs are never modified or deleted by
+    delivery failures; failures only update SharePoint status so the user can
+    retry after credentials/folder configuration are corrected.
+    """
+    require(meeting_id, actor, AccessRole.owner)
+    meeting, participants, segments, summary, action_items = _delivery_artifacts(meeting_id)
+    filename = safe_transcript_filename(meeting.title, meeting.id)
+    transcript_text = _format_transcript(
+        segments,
+        meeting.title,
+        participants,
+        summary_text=summary,
+        action_items=action_items,
+    )
+
+    store.MEETINGS[meeting_id] = meeting.model_copy(
+        update={
+            "sharepoint_status": SharePointStatus.saving,
+            "sharepoint_error_message": None,
+        }
+    )
+    try:
+        web_url = await get_sharepoint_provider(graph_token or None).save_transcript(
+            meeting=meeting,
+            filename=filename,
+            content=transcript_text,
+            access_token=graph_token or None,
+        )
+    except Exception as exc:
+        logger.exception("SharePoint transcript save failed for %s", meeting_id)
+        current = store.MEETINGS[meeting_id]
+        store.MEETINGS[meeting_id] = current.model_copy(
+            update={
+                "sharepoint_status": SharePointStatus.failed,
+                "sharepoint_error_message": f"SharePoint save failed: {exc}",
+            }
+        )
+        store.save_snapshot()
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"SharePoint save failed: {exc}",
+        )
+
+    current = store.MEETINGS[meeting_id]
+    updated = current.model_copy(
+        update={
+            "sharepoint_status": SharePointStatus.saved,
+            "sharepoint_error_message": None,
+            "sharepoint_web_url": web_url,
+        }
+    )
+    store.MEETINGS[meeting_id] = updated
+    store.add_audit(
+        actor,
+        "meeting.sharepoint_save",
+        meeting.title,
+        after=web_url,
+        meeting_id=meeting_id,
+    )
+    store.save_snapshot()
+    return updated
 
 
 def _normalise_email(email: str | None) -> str | None:

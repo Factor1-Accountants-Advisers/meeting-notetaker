@@ -8,6 +8,7 @@ import type {
   Meeting,
   PipelineStage,
   PipelineStatus,
+  SharePointStatus,
   StaffMember
 } from '@renderer/data/mock'
 
@@ -40,6 +41,9 @@ export interface MeetingDto {
   pipeline_stage_message: string
   delivery_status: DeliveryStatus
   delivery_error_message: string | null
+  sharepoint_status: SharePointStatus
+  sharepoint_error_message: string | null
+  sharepoint_web_url: string | null
   graph_metadata?: GraphMeetingMetadataDto | null
 }
 
@@ -155,6 +159,9 @@ function mapMeeting(dto: MeetingDto): Meeting {
     pipelineStageMessage: dto.pipeline_stage_message,
     deliveryStatus: dto.delivery_status,
     deliveryErrorMessage: dto.delivery_error_message,
+    sharePointStatus: dto.sharepoint_status,
+    sharePointErrorMessage: dto.sharepoint_error_message,
+    sharePointWebUrl: dto.sharepoint_web_url,
     source: dto.source
   }
 }

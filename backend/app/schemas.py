@@ -48,6 +48,13 @@ class DeliveryStatus(str, Enum):
     failed = "failed"
 
 
+class SharePointStatus(str, Enum):
+    not_started = "not_started"
+    saving = "saving"
+    saved = "saved"
+    failed = "failed"
+
+
 class GraphMeetingAttendeeMetadata(BaseModel):
     name: str | None = None
     email: str | None = None
@@ -120,6 +127,9 @@ class Meeting(BaseModel):
     processing_attempt: int = 0
     delivery_status: DeliveryStatus = DeliveryStatus.not_started
     delivery_error_message: str | None = None
+    sharepoint_status: SharePointStatus = SharePointStatus.not_started
+    sharepoint_error_message: str | None = None
+    sharepoint_web_url: str | None = None
     graph_metadata: GraphMeetingMetadata | None = None
 
 
