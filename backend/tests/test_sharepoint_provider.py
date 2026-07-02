@@ -5,6 +5,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from app.schemas import Meeting, MeetingSource
+from app.services import sharepoint
 from app.services.sharepoint import GraphSharePointProvider
 
 
@@ -76,6 +77,19 @@ class SharePointProviderTests(unittest.IsolatedAsyncioTestCase):
             captured_urls,
             ["https://graph.microsoft.com/v1.0/drives/drive-123/root:/Notetaker%20Transcripts/minutes.txt:/content"],
         )
+    def test_provider_factory_uses_graph_when_drive_id_is_set_and_folder_path_empty(self):
+        class Settings:
+            sharepoint_drive_id = "drive-123"
+            sharepoint_folder_path = ""
+
+        old_get_settings = sharepoint.get_settings
+        try:
+            sharepoint.get_settings = lambda: Settings()
+            provider = sharepoint.get_sharepoint_provider("token")
+        finally:
+            sharepoint.get_settings = old_get_settings
+
+        self.assertIsInstance(provider, GraphSharePointProvider)
 
 
 if __name__ == "__main__":

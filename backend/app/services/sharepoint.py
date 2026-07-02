@@ -105,6 +105,6 @@ def get_sharepoint_provider(access_token: str | None = None) -> SharePointProvid
     settings = get_settings()
     drive_id = getattr(settings, "sharepoint_drive_id", "")
     folder_path = getattr(settings, "sharepoint_folder_path", "")
-    if access_token and drive_id and folder_path:
+    if access_token and drive_id:
         return GraphSharePointProvider(drive_id, folder_path)
     return LocalSharePointProvider()
