@@ -11,9 +11,9 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Iterable, Protocol
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.schemas import Meeting, MeetingParticipant, TranscriptSegment
 from app.services.pyannote_client import PyannoteAIClient, PyannoteAIError, PyannotePollConfig
 from app.services.voiceprints import Voiceprint, get_voiceprint_repository
@@ -77,14 +77,72 @@ class PyannoteAIVoiceprintMatcher:
         if not settings.pyannote_api_key:
             return _unknown_only(segments, reason="pyannote_api_key_missing")
 
-        candidates = _candidate_voiceprints_for_meeting(enrolled, meeting)
+        base_candidates = _candidate_voiceprints_for_meeting(enrolled, meeting)
+        if not base_candidates:
+            return _unknown_only(segments, reason="no_candidate_voiceprints")
+
+        base_ranges = await self._identify_ranges(
+            base_candidates,
+            meeting,
+            audio_path,
+            settings,
+            matching_threshold=_threshold_percent(settings.similarity_threshold),
+        )
+        if not base_ranges:
+            base_result = _unknown_only(segments, reason="no_identity_ranges")
+        else:
+            base_result = _apply_identity_ranges(
+                segments,
+                base_ranges,
+                min_confidence=_normalised_confidence_threshold(settings.similarity_threshold),
+            )
+
+        base_matched, _base_participants, base_unknown_count = base_result
+        expansion_ids = _controlled_expansion_ids_from_settings(settings)
+        if base_unknown_count == 0 or not expansion_ids:
+            return base_result
+
+        expanded_candidates = _candidate_voiceprints_for_meeting(
+            enrolled,
+            meeting,
+            controlled_expansion_employee_ids=expansion_ids,
+            max_controlled_expansion=settings.voiceprint_expansion_cap,
+        )
+        if _candidate_ids(expanded_candidates) == _candidate_ids(base_candidates):
+            return base_result
+
+        expansion_ranges = await self._identify_ranges(
+            expanded_candidates,
+            meeting,
+            audio_path,
+            settings,
+            matching_threshold=_threshold_percent(settings.voiceprint_expansion_min_confidence),
+        )
+        if not expansion_ranges:
+            return base_result
+
+        unresolved = [seg for seg in base_matched if not seg.speaker_known]
+        expanded_unknowns, _participants, _unknown_count = _apply_identity_ranges(
+            unresolved,
+            expansion_ranges,
+            min_confidence=_normalised_confidence_threshold(settings.voiceprint_expansion_min_confidence),
+            source="pyannote_voiceprint_expansion",
+        )
+        return _merge_expansion_matches(base_matched, expanded_unknowns)
+
+    async def _identify_ranges(
+        self,
+        candidates: list[Voiceprint],
+        meeting: Meeting,
+        audio_path: Path,
+        settings: Settings,
+        *,
+        matching_threshold: float,
+    ) -> list[IdentityRange]:
         label_to_name: dict[str, str] = {}
         payload = _build_voiceprint_payload(candidates, label_to_name)
         if not payload:
-            return _unknown_only(segments, reason="no_candidate_voiceprints")
-
-        threshold_percent = _threshold_percent(settings.similarity_threshold)
-        min_confidence = _normalised_confidence_threshold(settings.similarity_threshold)
+            return []
 
         def identify() -> dict[str, Any]:
             client = PyannoteAIClient(
@@ -96,7 +154,7 @@ class PyannoteAIVoiceprintMatcher:
                 payload,
                 media_prefix=f"meeting-identify/{meeting.id}",
                 model=settings.pyannote_model_version or "precision-2",
-                matching_threshold=threshold_percent,
+                matching_threshold=matching_threshold,
                 # False lets the same enrolled speaker match multiple diarized
                 # clusters if pyannote splits their voice into SPEAKER_00/03.
                 # Threshold + overlap checks still suppress weak matches.
@@ -109,21 +167,51 @@ class PyannoteAIVoiceprintMatcher:
 
         try:
             result = await asyncio.to_thread(identify)
-            identity_ranges = _identity_ranges_from_result(result, label_to_name)
+            return _identity_ranges_from_result(result, label_to_name)
         except PyannoteAIError:
             logger.exception("pyannoteAI identify failed for meeting %s", meeting.id)
-            return _unknown_only(segments, reason="identify_failed")
+            return []
 
-        if not identity_ranges:
-            return _unknown_only(segments, reason="no_identity_ranges")
 
-        return _apply_identity_ranges(segments, identity_ranges, min_confidence=min_confidence)
+def _controlled_expansion_ids_from_settings(settings: Settings) -> list[str]:
+    """Return capped, normalized IN-79 key-person expansion employee ids in priority order."""
+    raw = settings.voiceprint_expansion_employee_ids or ""
+    ids: list[str] = []
+    for item in raw.split(","):
+        cleaned = item.strip().lower()
+        if cleaned and cleaned not in ids:
+            ids.append(cleaned)
+    cap = max(0, settings.voiceprint_expansion_cap)
+    return ids[:cap]
+
+
+def _candidate_ids(records: list[Voiceprint]) -> list[str]:
+    return [record.employee_id.strip().lower() for record in records]
+
+
+def _merge_expansion_matches(
+    base_matched: list[TranscriptSegment],
+    expanded_unknowns: list[TranscriptSegment],
+) -> tuple[list[TranscriptSegment], list[MeetingParticipant], int]:
+    expanded_by_raw = {seg.raw_speaker or seg.speaker: seg for seg in expanded_unknowns if seg.speaker_known}
+    merged: list[TranscriptSegment] = []
+    for seg in base_matched:
+        raw = seg.raw_speaker or seg.speaker
+        merged.append(expanded_by_raw.get(raw, seg))
+
+    participant_known: dict[str, bool] = {}
+    for seg in merged:
+        participant_known.setdefault(seg.speaker, seg.speaker_known)
+    participants = [MeetingParticipant(name=name, known=known) for name, known in participant_known.items()]
+    unknown_count = sum(1 for known in participant_known.values() if not known)
+    return merged, participants, unknown_count
 
 
 def _candidate_voiceprints_for_meeting(
     records: list[Voiceprint],
     meeting: Meeting,
-    controlled_expansion_employee_ids: set[str] | None = None,
+    controlled_expansion_employee_ids: Iterable[str] | None = None,
+    max_controlled_expansion: int | None = None,
 ) -> list[Voiceprint]:
     """Order candidates attendee-first, then organiser/recorder, then controlled expansion.
 
@@ -157,7 +245,12 @@ def _candidate_voiceprints_for_meeting(
 
     add(meeting.owner_id)
 
-    for employee_id in sorted(controlled_expansion_employee_ids or set()):
+    expansion_ids = list(controlled_expansion_employee_ids or [])
+    if not isinstance(controlled_expansion_employee_ids, list):
+        expansion_ids = sorted(expansion_ids)
+    if max_controlled_expansion is not None:
+        expansion_ids = expansion_ids[: max(0, max_controlled_expansion)]
+    for employee_id in expansion_ids:
         add(employee_id)
 
     return [by_id[employee_id] for employee_id in ordered_ids]
@@ -272,6 +365,7 @@ def _apply_identity_ranges(
     *,
     min_confidence: float = DEFAULT_MIN_CONFIDENCE,
     min_overlap_ms: int = MIN_OVERLAP_MS,
+    source: str = "pyannote_voiceprint",
 ) -> tuple[list[TranscriptSegment], list[MeetingParticipant], int]:
     unknown_names: dict[str, str] = {}
     unknown_reasons: dict[str, str] = {}
@@ -293,7 +387,7 @@ def _apply_identity_ranges(
                         "speaker": best.display_name,
                         "speaker_known": True,
                         "raw_speaker": raw_speaker,
-                        "speaker_source": "pyannote_voiceprint",
+                        "speaker_source": source,
                         "speaker_confidence": best.confidence,
                         "speaker_evidence_start_ms": best.start_ms,
                         "speaker_evidence_end_ms": best.end_ms,

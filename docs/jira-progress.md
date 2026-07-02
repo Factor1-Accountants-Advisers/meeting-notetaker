@@ -122,9 +122,11 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Verified in Phase 2a; commit `79ebd97`.
 
 - [x] `IN-79` — Controlled voiceprint candidate expansion
-  - `controlled_expansion_employee_ids` parameter allows explicit non-attendee expansion only when caller supplies it.
-  - In-person owner alias matching handles short owner IDs (e.g. `joseph`) against full voiceprint employee IDs.
-  - Verified in Phase 2a/2b; commits `79ebd97`, `fd00aab`.
+  - Added second-pass controlled expansion: first identify pass uses attendees/organiser/recorder only; if speakers remain Unknown, pyannoteAI identify is retried with configured key-person expansion candidates.
+  - Added config: `MN_VOICEPRINT_EXPANSION_EMPLOYEE_IDS`, `MN_VOICEPRINT_EXPANSION_CAP`, and `MN_VOICEPRINT_EXPANSION_MIN_CONFIDENCE`.
+  - Expansion preserves configured priority order, enforces cap limits, and uses a stricter confidence threshold for key uninvited people.
+  - Decision note: `docs/decisions/2026-07-02-in79-voiceprint-candidate-expansion.md`.
+  - Verified in tests; commit `557cd08`.
 
 - [x] `IN-80` — False-positive suppression for non-attendee detections
   - Segments stay Unknown when confidence < threshold, overlap < 800ms, no identity range matches, or identify fails.

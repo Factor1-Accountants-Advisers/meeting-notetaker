@@ -27,6 +27,11 @@ class Settings(BaseSettings):
 
     # PyannoteAI transcription + voiceprint identification per Jira IN-64/IN-69.
     similarity_threshold: float = 0.62
+    # IN-79: approved key people for controlled second-pass voiceprint expansion.
+    # Comma-separated employee ids/emails, e.g. "df@factor1.com.au,tc@factor1.com.au".
+    voiceprint_expansion_employee_ids: str = ""
+    voiceprint_expansion_cap: int = 5
+    voiceprint_expansion_min_confidence: float = 0.85
     pyannote_api_key: str = ""
     pyannote_api_endpoint: str = "https://api.pyannote.ai"
     pyannote_model_version: str = "precision-2"

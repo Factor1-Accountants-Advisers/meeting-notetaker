@@ -1,10 +1,12 @@
 import unittest
 
 from app.schemas import GraphMeetingAttendeeMetadata, GraphMeetingMetadata, Meeting, MeetingSource, TranscriptSegment
+from app.config import Settings
 from app.services.speaker_matching import (
     IdentityRange,
     _apply_identity_ranges,
     _candidate_voiceprints_for_meeting,
+    _controlled_expansion_ids_from_settings,
 )
 from app.services.voiceprints import Voiceprint
 from datetime import datetime, timezone
@@ -65,6 +67,47 @@ class SpeakerIdentityMatchingTests(unittest.TestCase):
             [item.employee_id for item in ordered],
             ["benjamin@factor1.com.au", "david@factor1.com.au", "joseph@factor1.com.au"],
         )
+
+    def test_controlled_expansion_is_capped_and_only_uses_configured_people(self):
+        records = [
+            vp("david@factor1.com.au", "David Ahlhaus"),
+            vp("benjamin@factor1.com.au", "Benjamin Bryant"),
+            vp("tc@factor1.com.au", "TC"),
+            vp("df@factor1.com.au", "DF"),
+            vp("random@factor1.com.au", "Random Person"),
+        ]
+        meeting = Meeting(
+            id=uuid4(),
+            title="Expansion cap",
+            source=MeetingSource.online,
+            owner_id="joseph@factor1.com.au",
+            created_at=datetime.now(timezone.utc),
+            graph_metadata=GraphMeetingMetadata(
+                meeting_id="graph-1",
+                organizer_email="david@factor1.com.au",
+                attendees=[GraphMeetingAttendeeMetadata(email="benjamin@factor1.com.au", name="Benjamin")],
+            ),
+        )
+
+        ordered = _candidate_voiceprints_for_meeting(
+            records,
+            meeting,
+            controlled_expansion_employee_ids=["df@factor1.com.au", "tc@factor1.com.au", "random@factor1.com.au"],
+            max_controlled_expansion=2,
+        )
+
+        self.assertEqual(
+            [item.employee_id for item in ordered],
+            ["benjamin@factor1.com.au", "david@factor1.com.au", "df@factor1.com.au", "tc@factor1.com.au"],
+        )
+
+    def test_controlled_expansion_ids_are_loaded_from_config(self):
+        settings = Settings(
+            voiceprint_expansion_employee_ids=" df@factor1.com.au, tc@factor1.com.au ,,",
+            voiceprint_expansion_cap=1,
+        )
+
+        self.assertEqual(_controlled_expansion_ids_from_settings(settings), ["df@factor1.com.au"])
 
     def test_owner_alias_selects_enrolled_recorder_for_in_person_meeting(self):
         records = [
