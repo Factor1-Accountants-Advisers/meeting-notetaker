@@ -2,7 +2,9 @@ import { randomBytes, createHash } from 'crypto'
 import { createServer } from 'http'
 import type { AddressInfo } from 'net'
 import { execFile } from 'child_process'
-import { shell } from 'electron'
+import { app, shell } from 'electron'
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
+import { dirname, join } from 'path'
 import {
   PublicClientApplication,
   type AccountInfo,
@@ -44,6 +46,55 @@ let cachedApp: PublicClientApplication | null = null
 let cachedConfigKey: string | null = null
 let currentAccount: AccountInfo | null = null
 
+// ---------------------------------------------------------------------------
+// Token cache persistence (Slice 1 stand-in for encrypted OS keychain)
+// ---------------------------------------------------------------------------
+
+const CACHE_DIR = 'auth'
+const CACHE_FILE = 'msal-cache.json'
+
+function cachePath(): string {
+  return join(app.getPath('userData'), CACHE_DIR, CACHE_FILE)
+}
+
+export function getPersistedCache(): string | null {
+  try {
+    return readFileSync(cachePath(), 'utf-8')
+  } catch {
+    return null
+  }
+}
+
+export function persistTokenCache(serialized: string): void {
+  const path = cachePath()
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, serialized, 'utf-8')
+}
+
+export function clearPersistedCache(): void {
+  try {
+    unlinkSync(cachePath())
+  } catch {
+    // already absent or never written
+  }
+}
+
+function restoreTokenCache(app: PublicClientApplication): void {
+  const serialized = getPersistedCache()
+  if (!serialized) return
+  try {
+    app.getTokenCache().deserialize(serialized)
+  } catch {
+    // stale or corrupt cache — discard and re-sign-in
+    clearPersistedCache()
+  }
+}
+
+async function saveTokenCache(app: PublicClientApplication): Promise<void> {
+  const serialized = app.getTokenCache().serialize()
+  persistTokenCache(serialized)
+}
+
 function usableEnvValue(value: string | undefined): string | undefined {
   if (!value || value === 'undefined' || value === 'null') return undefined
   return value
@@ -79,11 +130,13 @@ export async function acquireGraphTokenSilent(
 
   try {
     const app = getPublicClientApplication(status.config)
+    restoreTokenCache(app)
     const account = currentAccount ?? (await getFirstCachedAccount(app))
     if (!account) return { accessToken: null, reason: 'no_cached_account' }
 
     const result = await app.acquireTokenSilent({ account, scopes: [...scopes] })
     currentAccount = result?.account ?? account
+    await saveTokenCache(app)
     return toTokenResult(result)
   } catch (err) {
     if (isInteractionRequired(err)) {
@@ -104,6 +157,7 @@ export async function signInInteractively(): Promise<MsalSignInResult> {
   }
 
   const app = getPublicClientApplication(status.config)
+  restoreTokenCache(app)
   const { verifier, challenge } = generatePkceCodes()
   const redirectUri = await startAuthRedirectServer()
 
@@ -128,6 +182,7 @@ export async function signInInteractively(): Promise<MsalSignInResult> {
     if (!result) return { ok: false, error: 'Token acquisition returned no result' }
 
     currentAccount = result.account ?? null
+    await saveTokenCache(app)
     const email = currentAccount?.username ||
       currentAccount?.idTokenClaims?.preferred_username?.toString()
     const name = currentAccount?.name ||
@@ -150,6 +205,7 @@ export function getCurrentMsalAccountEmail(): string | undefined {
 
 export function clearCurrentMsalAccount(): void {
   currentAccount = null
+  clearPersistedCache()
 }
 
 function getPublicClientApplication(config: MsalPublicClientConfig): PublicClientApplication {
@@ -171,6 +227,7 @@ function getPublicClientApplication(config: MsalPublicClientConfig): PublicClien
   cachedApp = new PublicClientApplication(msalConfig)
   cachedConfigKey = key
   currentAccount = null
+  restoreTokenCache(cachedApp)
   return cachedApp
 }
 

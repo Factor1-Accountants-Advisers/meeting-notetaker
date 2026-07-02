@@ -1,5 +1,12 @@
 import { ipcMain } from 'electron'
-import { acquireGraphTokenSilent, clearCurrentMsalAccount, getCurrentMsalAccountEmail, getMsalConfigStatus, signInInteractively } from './auth-msal'
+import {
+  acquireGraphTokenSilent,
+  clearCurrentMsalAccount,
+  getCurrentMsalAccountEmail,
+  getMsalConfigStatus,
+  getPersistedCache,
+  signInInteractively
+} from './auth-msal'
 import { logger } from './logger'
 
 // Signed-in display name; sent as the audit actor on every backend call.
@@ -38,6 +45,18 @@ export async function getGraphAccessToken(scopes?: readonly string[]): Promise<s
 
   logger().info('[auth] Graph token acquired', { accountKnown: Boolean(result.accountEmail) })
   return result.accessToken
+}
+
+export function getSignedInState(): { signedIn: boolean; email?: string; name?: string } {
+  if (currentUser !== 'Unknown user') return { signedIn: true, email: currentUserEmail, name: currentUser }
+  // On cold start, check whether a persisted cache exists so the renderer can skip the login
+  // screen without a fresh interactive sign-in.
+  const hasCache = Boolean(getPersistedCache())
+  return {
+    signedIn: hasCache,
+    email: currentUserEmail ?? getCurrentMsalAccountEmail(),
+    name: hasCache ? currentUser : undefined
+  }
 }
 
 export function registerAuthSessionIpc(): void {
@@ -80,4 +99,14 @@ export function registerAuthSessionIpc(): void {
     }
     return result
   })
+
+  ipcMain.handle('auth:sign-out', async () => {
+    logger().info('[auth] sign-out requested')
+    currentUser = 'Unknown user'
+    currentUserEmail = undefined
+    clearCurrentMsalAccount()
+    return { ok: true }
+  })
+
+  ipcMain.handle('auth:status', () => getSignedInState())
 }

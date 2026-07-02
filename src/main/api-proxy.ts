@@ -46,9 +46,14 @@ export function registerApiProxyIpc(): void {
       const headers: Record<string, string> = { 'X-MN-User': getCurrentUser() }
       if (req.body !== undefined) headers['content-type'] = 'application/json'
 
-      // Inject Graph token for email endpoints (IN-93: delegated Mail.Send)
+      // Inject Graph token for email endpoints (IN-93: delegated Mail.Send) and
+      // SharePoint delivery (Phase 4: delegated Files.ReadWrite).
       if (req.path.includes('/email') && req.method === 'POST') {
         const token = await getGraphAccessToken(GRAPH_EMAIL_SCOPES)
+        if (token) headers['X-MN-Graph-Token'] = token
+      }
+      if (req.path.includes('/sharepoint') && req.method === 'POST') {
+        const token = await getGraphAccessToken()
         if (token) headers['X-MN-Graph-Token'] = token
       }
 

@@ -52,6 +52,16 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Local SharePoint smoke passed: endpoint returned `saved`, `file:` URL, and no error.
   - Verification: `PYTHONPATH=. .venv/bin/python -m unittest discover -s tests -v` (13 tests), `.venv/bin/python -m compileall app tests`, `npm run typecheck`, `npm run build`, and `git diff --check` passed.
 
+- [x] Phase 5 — MSAL token cache persistence and cold-start recovery
+  - MSAL token cache now serialized to `userData/auth/msal-cache.json` after interactive sign-in and after every successful silent token refresh, and deserialized on app startup + new client-application creation.
+  - `clearCurrentMsalAccount()` also deletes the persisted cache file so sign-out reliably destroys all tokens.
+  - Added `auth:sign-out` IPC handler to clear local session + persisted MSAL cache from the renderer.
+  - Added `auth:status` IPC handler so the renderer can check persisted cache existence on cold start.
+  - Renderer `App.tsx` now calls `getAuthStatus` on mount: if a persisted cache is found but localStorage is empty, it auto-restores a session from the cached account email so auto-record + email/SharePoint delivery work after restart without re-prompting the user.
+  - Sign-out in the renderer now also triggers the `auth:sign-out` IPC to clear the MSAL cache, not just localStorage.
+  - API proxy now also injects the Graph access token for SharePoint POST endpoints, not only email.
+  - Verification: `npm run typecheck`, `npm run build`, `PYTHONPATH=. .venv/bin/python -m unittest discover -s tests -v` (13 tests), `.venv/bin/python -m compileall app tests`, and `git diff --check` passed.
+
 ## Crossed out / completed
 
 - [x] `IN-65` — Spike: MS Graph meeting detection — subscription vs. polling

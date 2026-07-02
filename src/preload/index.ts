@@ -80,6 +80,13 @@ const api = {
   signIn: (): Promise<{ ok: boolean; name?: string; email?: string; error?: string }> =>
     ipcRenderer.invoke('auth:sign-in'),
 
+  /** Sign out and clear persisted MSAL token cache. */
+  signOut: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('auth:sign-out'),
+
+  /** Check whether the user is signed in (or has a persisted cache from a prior session). */
+  getAuthStatus: (): Promise<{ signedIn: boolean; email?: string; name?: string }> =>
+    ipcRenderer.invoke('auth:status'),
+
   /** Listen for main→renderer auto-start recording commands. Returns unsubscribe function. */
   onAutoStartRequest: (callback: (data: AutoStartRequest) => void): (() => void) => {
     const handler = (_event: IpcRendererEvent, data: AutoStartRequest) => callback(data)

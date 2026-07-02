@@ -40,6 +40,7 @@ type PostCaptureNotice = {
 
 function App(): JSX.Element {
   const [user, setUser] = useState<User | null>(loadUser)
+  const [authChecked, setAuthChecked] = useState(Boolean(loadUser()))
   const [currentPerson, setCurrentPerson] = useState<StaffMember | null>(null)
   const [enrollmentLoading, setEnrollmentLoading] = useState(false)
   const [enrollmentError, setEnrollmentError] = useState<string | null>(null)
@@ -53,6 +54,43 @@ function App(): JSX.Element {
   const [postCaptureNotice, setPostCaptureNotice] = useState<PostCaptureNotice>(null)
   const { theme, toggle } = useTheme()
   const { items: notifications, unread, markAllRead } = useNotifications(user !== null)
+
+  // On cold start, check whether a persisted MSAL cache exists. If the user was
+  // signed in last session, skip the login screen and restore the session from
+  // the cached account email so auto-record + delivery work without re-prompting.
+  useEffect(() => {
+    if (authChecked) return
+    if (typeof window.api?.getAuthStatus !== 'function') {
+      setAuthChecked(true)
+      return
+    }
+    window.api.getAuthStatus().then((status) => {
+      if (!status.signedIn) {
+        localStorage.removeItem(USER_KEY)
+        setAuthChecked(true)
+        return
+      }
+      // Restore from localStorage if available, otherwise create a session entry
+      // from the cached account info so the voiceprint gate and auto-record fire.
+      const stored = loadUser()
+      if (stored) {
+        setUser(stored)
+        setAuthChecked(true)
+        return
+      }
+      if (status.email) {
+        const restored: User = {
+          name: status.name ?? status.email.split('@')[0],
+          email: status.email
+        }
+        localStorage.setItem(USER_KEY, JSON.stringify(restored))
+        setUser(restored)
+      }
+      setAuthChecked(true)
+    }).catch(() => {
+      setAuthChecked(true)
+    })
+  }, [authChecked])
 
   // Keep the latest recording session available to auto-stop callbacks.
   useEffect(() => {
@@ -181,6 +219,10 @@ function App(): JSX.Element {
       unsubStop()
     }
   }, [user, currentPerson?.enrollment])
+
+  if (!authChecked) {
+    return <div className="flex h-full items-center justify-center bg-page"><span className="h-5 w-5 animate-spin rounded-full border-2 border-edge-tertiary border-t-brand-blue" /></div>
+  }
 
   if (!user) {
     return (
@@ -514,6 +556,9 @@ function App(): JSX.Element {
     setEnrollmentLoading(false)
     setView('home')
     setUser(null)
+    if (typeof window.api?.signOut === 'function') {
+      window.api.signOut().catch(() => { /* clear is best-effort */ })
+    }
   }
 
   if (enrollmentLoading || enrollmentError || !currentPerson || currentPerson.enrollment !== 'enrolled') {
