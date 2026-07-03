@@ -79,23 +79,23 @@ class PyannoteAIVoiceprintMatcher:
 
         base_candidates = _candidate_voiceprints_for_meeting(enrolled, meeting)
         if not base_candidates:
-            return _unknown_only(segments, reason="no_candidate_voiceprints")
-
-        base_ranges = await self._identify_ranges(
-            base_candidates,
-            meeting,
-            audio_path,
-            settings,
-            matching_threshold=_threshold_percent(settings.similarity_threshold),
-        )
-        if not base_ranges:
-            base_result = _unknown_only(segments, reason="no_identity_ranges")
+            base_result = _unknown_only(segments, reason="no_candidate_voiceprints")
         else:
-            base_result = _apply_identity_ranges(
-                segments,
-                base_ranges,
-                min_confidence=_normalised_confidence_threshold(settings.similarity_threshold),
+            base_ranges = await self._identify_ranges(
+                base_candidates,
+                meeting,
+                audio_path,
+                settings,
+                matching_threshold=_threshold_percent(settings.similarity_threshold),
             )
+            if not base_ranges:
+                base_result = _unknown_only(segments, reason="no_identity_ranges")
+            else:
+                base_result = _apply_identity_ranges(
+                    segments,
+                    base_ranges,
+                    min_confidence=_normalised_confidence_threshold(settings.similarity_threshold),
+                )
 
         base_matched, _base_participants, base_unknown_count = base_result
         expansion_ids = _controlled_expansion_ids_from_settings(settings)
@@ -223,14 +223,24 @@ def _candidate_voiceprints_for_meeting(
     """
     by_id = {record.employee_id.strip().lower(): record for record in records}
     by_alias: dict[str, str] = {}
+
+    def alias_key(value: str | None) -> str:
+        return " ".join((value or "").strip().lower().replace(".", " ").split())
+
     for key, record in by_id.items():
         local = key.split("@", 1)[0]
         by_alias.setdefault(local, key)
+        display_alias = alias_key(record.display_name)
+        if display_alias:
+            by_alias.setdefault(display_alias, key)
+        compact_display_alias = display_alias.replace(" ", "")
+        if compact_display_alias:
+            by_alias.setdefault(compact_display_alias, key)
         # Local dev owner IDs are often short handles like "joseph" while the
         # voiceprint employee id is josephguerrero@factor1.com.au. Add conservative
         # prefix aliases from display-name tokens so in-person recordings can still
         # identify the enrolled recorder without broad staff matching.
-        for token in record.display_name.lower().replace(".", " ").split():
+        for token in display_alias.split():
             if len(token) >= 3 and local.startswith(token):
                 by_alias.setdefault(token, key)
     ordered_ids: list[str] = []
@@ -238,6 +248,10 @@ def _candidate_voiceprints_for_meeting(
     def add(email: str | None) -> None:
         cleaned = (email or "").strip().lower()
         employee_id = cleaned if cleaned in by_id else by_alias.get(cleaned)
+        if not employee_id:
+            employee_id = by_alias.get(alias_key(cleaned))
+        if not employee_id:
+            employee_id = by_alias.get(alias_key(cleaned).replace(" ", ""))
         if employee_id and employee_id not in ordered_ids:
             ordered_ids.append(employee_id)
 

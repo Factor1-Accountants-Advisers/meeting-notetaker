@@ -127,6 +127,44 @@ class SpeakerIdentityMatchingTests(unittest.TestCase):
 
         self.assertEqual([item.employee_id for item in ordered], ["josephguerrero@factor1.com.au"])
 
+    def test_owner_display_name_selects_enrolled_recorder_for_in_person_meeting(self):
+        records = [
+            vp("josephguerrero@factor1.com.au", "Joseph Miguel Guerrero"),
+            vp("outside@example.com", "Outside Person"),
+        ]
+        meeting = Meeting(
+            id=uuid4(),
+            title="In person owner display name",
+            source=MeetingSource.in_person,
+            owner_id="joseph miguel guerrero",
+            created_at=datetime.now(timezone.utc),
+        )
+
+        ordered = _candidate_voiceprints_for_meeting(records, meeting)
+
+        self.assertEqual([item.employee_id for item in ordered], ["josephguerrero@factor1.com.au"])
+
+    def test_controlled_expansion_candidates_survive_unmatched_owner(self):
+        records = [
+            vp("davidahlhaus@factor1.com.au", "David Ahlhaus"),
+            vp("outside@example.com", "Outside Person"),
+        ]
+        meeting = Meeting(
+            id=uuid4(),
+            title="In person unmatched owner",
+            source=MeetingSource.in_person,
+            owner_id="unmatched display name",
+            created_at=datetime.now(timezone.utc),
+        )
+
+        ordered = _candidate_voiceprints_for_meeting(
+            records,
+            meeting,
+            controlled_expansion_employee_ids=["davidahlhaus@factor1.com.au"],
+        )
+
+        self.assertEqual([item.employee_id for item in ordered], ["davidahlhaus@factor1.com.au"])
+
     def test_identity_evidence_is_preserved_on_high_confidence_match(self):
         segments = [segment("SPEAKER_00", 0, 5000)]
         ranges = [
