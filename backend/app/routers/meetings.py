@@ -42,6 +42,11 @@ Actor = Header("Unknown user", alias="X-MN-User")
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 
 
+def _normalise_actor_id(actor: str) -> str:
+    cleaned = actor.strip().lower()
+    return cleaned or "unknown user"
+
+
 @router.get("", response_model=list[Meeting])
 async def list_meetings(
     status_filter: MeetingStatus | None = None, actor: str = Actor
@@ -69,7 +74,7 @@ async def create_meeting(body: MeetingCreate, actor: str = Actor) -> Meeting:
         title=body.title,
         context=body.context,
         source=body.source,
-        owner_id="joseph",  # from auth once Entra ID lands
+        owner_id=_normalise_actor_id(actor),
         created_at=datetime.now(timezone.utc),
         graph_metadata=body.graph_metadata,
     )
