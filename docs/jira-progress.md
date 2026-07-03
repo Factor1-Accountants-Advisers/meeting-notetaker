@@ -68,6 +68,16 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Cross-cutting audit: `save_snapshot` called in 4 delivery paths, `set_pipeline_state` and `set_delivery_state` guarding all state transitions. No secrets in tracked files (config.py fields are empty-string defaults). Backend 11 service files, 4 test files; frontend 14 main-process files, 8 renderer screens.
   - Verification: `npm run typecheck`, `npm run build`, `.venv/bin/python -m compileall app tests`, `PYTHONPATH=. .venv/bin/python -m unittest discover -s tests -v`, `git diff --check`, and secrets audit passed.
 
+- [x] Phase 7 — Post-live voiceprint and delivery hardening
+  - Enrolled David Ahlhaus locally with 3 precision-2 voiceprints and added him to controlled expansion for Slice 1 testing.
+  - Diagnosed and fixed IN-79 expansion merge corruption: `_merge_expansion_matches` previously keyed by raw diarization cluster (`SPEAKER_01`), replacing every segment in a cluster with one matched segment object.
+  - Fix now keys expansion merge by segment identity `(raw_speaker, start_ms, end_ms, text)`, preserving each segment's transcript text and timestamps while still applying per-segment confidence/overlap gating.
+  - Added regression coverage for a multi-segment cluster where only one segment passes the expansion gate; unknown segments remain Unknown instead of being renamed or overwritten.
+  - Removed UUID suffix from SharePoint/email transcript filenames; filenames now use human-readable meeting title + date, e.g. `Test 3-2026-07-03.txt`.
+  - Verified SharePoint transcript retention behavior: transcripts are not auto-deleted; only raw audio is covered by the 30-day retention sweep.
+  - Verification: `PYTHONPATH=. .venv/bin/python -m unittest discover -s tests -v` (19 tests), `.venv/bin/python -m compileall app tests`, `npm run typecheck`, `npm run build`, and `git diff --check` passed.
+  - Commits: `7065f4c`, `8896c8b`.
+
 ## Crossed out / completed
 
 - [x] `IN-65` — Spike: MS Graph meeting detection — subscription vs. polling
@@ -196,6 +206,31 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     - Verify `.webm` saved, uploaded, and backend pipeline processes it.
   - Commits: `cf2a475`, `a59bd92`, `bb33e2c`
 
+- [x] `IN-70` — Define internal vs client meeting_type classification rules
+  - Initial Slice 1 classification rule accepted from Jira export/comments: client context is carried on the meeting record where available; otherwise internal/default context is used.
+  - No blocking code work remains for Slice 1.
+
+- [x] `IN-89` — Confirm Win32 app Intune requirements with DV
+  - DV Intune Win32 packaging guidance captured in repo packaging notes.
+  - `electron-builder.yml` excludes backend `.env` and local scripts from package output.
+  - Remaining signed installer validation is tracked under `IN-81`, not this requirements-confirmation item.
+
+- [x] `IN-91` — Define private SharePoint directory for transcript saving
+  - Target SharePoint transcript folder configured for Slice 1: `Transcriptions` under the Innovations and Systems SharePoint drive.
+  - Graph delegated upload path proven with configured drive/folder and user token.
+  - App now saves the same transcript artifact used for email into SharePoint after processing.
+  - Commits: `7a33084`, `85b4164`, `8896c8b`.
+
+- [x] `IN-95` — Define MS Outlook emailing of transcript
+  - Delegated Microsoft Graph `Mail.Send` approach selected and implemented via `GraphEmailProvider`.
+  - User-visible email delivery requires a Graph token; no fake success path is used for real delivery.
+  - Linked implementation/evidence lives under `IN-93` and `IN-94`.
+
+- [x] `IN-98` — Check how often we can poll Graph reliably / MS restrictions
+  - Polling constraints and tradeoffs documented in the Graph spike.
+  - Runtime uses immediate sync on sign-in/start/resume plus normal 5-minute polling, with no tight near-start polling loop.
+  - Webhooks/delta optimisations remain future improvements, not Slice 1 blockers.
+
 ## Test items to satisfy later
 
 - [x] `IN-85` — Manual recording still works for in-room/ad-hoc use
@@ -221,3 +256,26 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Manual/ad-hoc recipient resolution falls back to the signed-in recorder email.
   - Renderer automatically emails after the ready poll succeeds and shows transcript emailed / retry states.
   - Verified: email endpoint returns `{recipients: [...], sent_at: ...}`; live smoke returned `joseph@example.com` for a manual recording.
+
+## Remaining open / not yet Jira-closable
+
+- [ ] `IN-64` — Parent Slice 1 handoff
+  - Keep open until signed/package rollout, production provider ownership, and stakeholder handoff/comms are complete.
+
+- [ ] `IN-81` — Packaging, signing, and installer update
+  - Local unpacked build works, but signed installer, CI release, and Intune deployment validation still need final proof.
+
+- [ ] `IN-82` — Confirm PyannoteAI API availability, credentials, and costs for production
+  - Development key works. Still needs org-owned account, billing owner, production data/privacy confirmation, and approved secret storage.
+
+- [ ] `IN-86` — Test: Known speaker identified by voiceprint with high confidence
+  - Joseph and David A voiceprints are enrolled and David A matching worked, but final Jira evidence should use a clean post-`7065f4c` recording/export after the expansion-merge fix.
+
+- [ ] `IN-92` — Create F1-wide comms
+  - Non-code handoff/comms item; awaiting stakeholder decision on owner, audience, timing, and message.
+
+- [ ] `IN-96` — Communicate with DV and Gabby on Scope/Handover/Comms
+  - Non-code stakeholder alignment item; DV/Gabby decisions still needed.
+
+- [ ] `IN-97` — Get org account for Pyannote
+  - Development key exists, but production should use an organisation-owned PyannoteAI account and approved billing/secret management.
