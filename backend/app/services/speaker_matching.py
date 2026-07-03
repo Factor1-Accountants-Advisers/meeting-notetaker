@@ -193,11 +193,14 @@ def _merge_expansion_matches(
     base_matched: list[TranscriptSegment],
     expanded_unknowns: list[TranscriptSegment],
 ) -> tuple[list[TranscriptSegment], list[MeetingParticipant], int]:
-    expanded_by_raw = {seg.raw_speaker or seg.speaker: seg for seg in expanded_unknowns if seg.speaker_known}
-    merged: list[TranscriptSegment] = []
-    for seg in base_matched:
-        raw = seg.raw_speaker or seg.speaker
-        merged.append(expanded_by_raw.get(raw, seg))
+    # Key each segment by its unique audio-span + text identity, not by raw_speaker
+    # (the diarization cluster label). Using raw_speaker as a dict key collapses
+    # every segment in a cluster into a single object, overwriting distinct
+    # text/timestamps for all but the last matched segment.
+    def _key(seg: TranscriptSegment) -> tuple[str | None, int, int, str]:
+        return (seg.raw_speaker, seg.start_ms, seg.end_ms, seg.text)
+    expanded_by_key = {_key(seg): seg for seg in expanded_unknowns if seg.speaker_known}
+    merged = [expanded_by_key.get(_key(seg), seg) for seg in base_matched]
 
     participant_known: dict[str, bool] = {}
     for seg in merged:

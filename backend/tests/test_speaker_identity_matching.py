@@ -7,6 +7,7 @@ from app.services.speaker_matching import (
     _apply_identity_ranges,
     _candidate_voiceprints_for_meeting,
     _controlled_expansion_ids_from_settings,
+    _merge_expansion_matches,
 )
 from app.services.voiceprints import Voiceprint
 from datetime import datetime, timezone
