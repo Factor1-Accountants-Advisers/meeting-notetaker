@@ -13,6 +13,7 @@ import json
 import logging
 import re
 import urllib.parse
+from datetime import datetime, timezone
 import urllib.request
 from pathlib import Path
 from typing import Protocol
@@ -42,7 +43,8 @@ def safe_transcript_filename(title: str, meeting_id: object) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_. -]+", "-", title).strip(" .-")
     if not cleaned:
         cleaned = "meeting"
-    return f"{cleaned[:60]}-{str(meeting_id)[:8]}.txt"
+    date_part = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return f"{cleaned[:60]}-{date_part}.txt"
 
 
 class LocalSharePointProvider:
