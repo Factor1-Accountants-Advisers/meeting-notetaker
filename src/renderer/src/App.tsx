@@ -102,6 +102,12 @@ function App(): JSX.Element {
     if (typeof window.api?.setUser === 'function') window.api.setUser(user?.name ?? '')
   }, [user])
 
+  // Mid-capture status changes (e.g. mic falls silent) must reach the UI live.
+  useEffect(() => {
+    capture.setStatusListener((status) => setCaptureStatus(status))
+    return () => capture.setStatusListener(null)
+  }, [])
+
   // Required staff voiceprint gate after Microsoft sign-in.
   useEffect(() => {
     let cancelled = false
@@ -513,6 +519,8 @@ function App(): JSX.Element {
       window.api.debugLog('capture stop failed', {
         message: err instanceof Error ? err.message : String(err)
       })
+      // Free the main-process state machine or every future auto-start is refused.
+      window.api.notifyRecordingError('Manual capture stop failed')
       setSubmitting(false)
       return
     }
@@ -568,6 +576,13 @@ function App(): JSX.Element {
     } else {
       window.api.debugLog('capture stop returned no blob', { meetingId })
     }
+    // Manual counterpart of the auto path's stop notification (sent after the
+    // upload, matching that ordering): without it the main-process state
+    // machine stays in 'recording' forever and refuses every future auto-start.
+    window.api.notifyRecordingStopped()
+    // A manually stopped auto session would otherwise leave the shell stuck on
+    // 'recording' — the auto-stop timer that used to reset it is now cleared.
+    setAutoRecordingState('idle')
     setRecording(null)
     setCaptureStatus(null)
     setView('home')

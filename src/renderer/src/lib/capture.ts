@@ -20,7 +20,16 @@
 
 import fixWebmDuration from 'fix-webm-duration'
 
-export type StreamState = 'active' | 'error' | 'off'
+export type StreamState = 'active' | 'error' | 'off' | 'silent'
+
+// A mic stream can deliver digital silence with no error at all (observed:
+// Bluetooth hands-free / exclusive-mode contention while a Teams call holds
+// the device). getUserMedia succeeds, MediaRecorder records, and the file is
+// -90 dB throughout — so we watch the live RMS and flip the status instead.
+// Backend twin: SILENT_MAX_VOLUME_DB in backend/app/services/audio_checks.py
+// (whole-file peak, different unit) — tune the two together.
+const SILENCE_RMS = 0.0005 // ≈ -66 dBFS; quiet rooms with a live mic sit well above this
+const SILENCE_WARN_AFTER_S = 8
 
 export interface CaptureStatus {
   mic: StreamState
@@ -44,9 +53,18 @@ class CaptureController {
   private systemChunks: BlobPart[] = []
   private streams: MediaStream[] = []
   private status: CaptureStatus = { ...IDLE }
+  private monitorCtx: AudioContext | null = null
+  private monitorTimer: ReturnType<typeof setInterval> | null = null
+  private silentSeconds = 0
+  private statusListener: ((status: CaptureStatus) => void) | null = null
 
   getStatus(): CaptureStatus {
     return this.status
+  }
+
+  /** Receive status updates that happen mid-capture (e.g. mic falls silent). */
+  setStatusListener(listener: ((status: CaptureStatus) => void) | null): void {
+    this.statusListener = listener
   }
 
   async start(source: 'online' | 'in_person', micDeviceId = ''): Promise<CaptureStatus> {
@@ -62,6 +80,7 @@ class CaptureController {
       this.micRecorder = this.createRecorder(new MediaStream(mic.getAudioTracks()), this.micChunks)
       this.micRecorder.start(1000)
       status.mic = 'active'
+      this.startMicSilenceMonitor(mic)
     } catch {
       status.mic = 'error'
     }
@@ -182,7 +201,60 @@ class CaptureController {
     return blob
   }
 
+  private startMicSilenceMonitor(mic: MediaStream): void {
+    // The header warning about Web Audio applies to WASAPI/loopback streams;
+    // observing the mic stream with an AnalyserNode is safe (the enrollment
+    // recorder already does RMS analysis the same way). Best-effort: a monitor
+    // failure must never break capture.
+    try {
+      const ctx = new AudioContext()
+      const analyser = ctx.createAnalyser()
+      analyser.fftSize = 2048
+      ctx.createMediaStreamSource(mic).connect(analyser)
+      const samples = new Float32Array(analyser.fftSize)
+      this.monitorCtx = ctx
+      this.silentSeconds = 0
+      this.monitorTimer = setInterval(() => {
+        analyser.getFloatTimeDomainData(samples)
+        let sum = 0
+        for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i]
+        const rms = Math.sqrt(sum / samples.length)
+        if (rms < SILENCE_RMS) {
+          this.silentSeconds += 1
+          if (this.silentSeconds >= SILENCE_WARN_AFTER_S && this.status.mic === 'active') {
+            this.status = { ...this.status, mic: 'silent' }
+            window.api?.debugLog?.('mic capture appears silent', {
+              silentSeconds: this.silentSeconds,
+              rms
+            })
+            this.statusListener?.({ ...this.status })
+          }
+        } else {
+          if (this.status.mic === 'silent') {
+            this.status = { ...this.status, mic: 'active' }
+            window.api?.debugLog?.('mic capture recovered', { rms })
+            this.statusListener?.({ ...this.status })
+          }
+          this.silentSeconds = 0
+        }
+      }, 1000)
+    } catch {
+      // Monitoring is diagnostics only.
+    }
+  }
+
+  private stopMicSilenceMonitor(): void {
+    if (this.monitorTimer) {
+      clearInterval(this.monitorTimer)
+      this.monitorTimer = null
+    }
+    this.monitorCtx?.close().catch(() => {})
+    this.monitorCtx = null
+    this.silentSeconds = 0
+  }
+
   private releaseAll(): void {
+    this.stopMicSilenceMonitor()
     this.micRecorder = null
     this.systemRecorder = null
     this.micChunks = []

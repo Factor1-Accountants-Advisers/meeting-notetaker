@@ -35,7 +35,14 @@ from app.schemas import (
 )
 from app.services.email import build_transcript_attachment, get_email_provider
 from app.services.sharepoint import get_sharepoint_provider, safe_transcript_filename
-from app.services.pipeline import AUDIO_DIR, audio_path_for, kick_pipeline, set_delivery_state, set_pipeline_state
+from app.services.pipeline import (
+    AUDIO_DIR,
+    audio_path_for,
+    kick_pipeline,
+    mic_track_path,
+    set_delivery_state,
+    set_pipeline_state,
+)
 
 Actor = Header("Unknown user", alias="X-MN-User")
 
@@ -154,7 +161,7 @@ def _merge_mic_and_system_audio(meeting_id: UUID, mic_audio: bytes, system_audio
             "System audio was captured separately, but ffmpeg is not available to merge mic + system audio",
         )
 
-    mic_path = AUDIO_DIR / f"{meeting_id}.mic.webm"
+    mic_path = mic_track_path(meeting_id)
     system_path = AUDIO_DIR / f"{meeting_id}.system.webm"
     merged_path = AUDIO_DIR / f"{meeting_id}.webm"
     mic_path.write_bytes(mic_audio)
@@ -230,7 +237,10 @@ async def upload_audio(
         path = audio_path_for(meeting_id, body.mime_type)
         path.write_bytes(audio)
 
-    updates: dict[str, object] = {}
+    # Fresh audio invalidates any earlier silence verdict; the pipeline
+    # re-measures in the background (full-file decode is too slow for this
+    # request path).
+    updates: dict[str, object] = {"recorder_audio_missing": False}
     if body.duration_seconds:
         updates["duration_seconds"] = body.duration_seconds
     if body.graph_metadata:
@@ -610,6 +620,13 @@ def _format_transcript(
         f'Chair: {chair}',
         f'Attendees: {attendees}',
         f'Objective: {summary_text.split(chr(10))[0] if summary_text else "TBC"}',
+    ]
+    if meeting is not None and meeting.recorder_audio_missing:
+        lines.append(
+            'Note: The recorder\'s microphone was silent during this recording — '
+            'the recorder\'s own speech is not included in this transcript.'
+        )
+    lines += [
         '',
         '---',
         '',

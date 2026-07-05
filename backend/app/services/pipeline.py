@@ -22,9 +22,11 @@ from app.schemas import (
     AccessRole,
     DeliveryStatus,
     MeetingAccessEntry,
+    MeetingSource,
     PipelineStage,
     PipelineStatus,
 )
+from app.services import audio_checks
 from app.services.llm import get_llm_provider
 from app.services.speech import get_speech_provider
 from app.services.speaker_matching import get_speaker_matcher
@@ -44,6 +46,41 @@ _PIPELINE_TASKS: set[asyncio.Task[None]] = set()
 def audio_path_for(meeting_id: UUID, mime_type: str) -> Path:
     ext = "webm" if "webm" in mime_type else "bin"
     return AUDIO_DIR / f"{meeting_id}.{ext}"
+
+
+def mic_track_path(meeting_id: UUID) -> Path:
+    """Raw mic capture kept alongside the merged file for dual-track uploads."""
+    return AUDIO_DIR / f"{meeting_id}.mic.webm"
+
+
+async def _stamp_recorder_audio_missing(meeting_id: UUID, audio_path: Path) -> None:
+    """Measure the recorder's mic track and flag silent captures on the meeting.
+
+    Runs inside the background pipeline task (a full-file ffmpeg decode is too
+    slow for the upload request path). Dual-track uploads keep the raw mic file;
+    single-track uploads are the mic.
+    """
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        return
+    # Only measure tracks that are genuinely the recorder's mic: the kept raw
+    # mic file from dual-track uploads, or the single track of an in-person
+    # capture (mic-only by construction). Online single-track audio may be the
+    # system-audio fallback, and 'upload'-sourced files were never a mic.
+    mic_track = mic_track_path(meeting_id)
+    if mic_track.exists():
+        probe = mic_track
+    elif meeting.source is MeetingSource.in_person:
+        probe = audio_path
+    else:
+        return
+    mic_silent = await asyncio.to_thread(audio_checks.is_silent, probe)
+    meeting = store.MEETINGS.get(meeting_id)
+    if mic_silent is None or meeting is None:
+        return
+    store.MEETINGS[meeting_id] = meeting.model_copy(update={"recorder_audio_missing": mic_silent})
+    if mic_silent:
+        logger.warning("mic track is silent for meeting %s — recorder audio missing", meeting_id)
 
 
 def _now() -> datetime:
@@ -151,6 +188,8 @@ async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
             PipelineStage.transcribing_diarizing,
             "Transcribing and diarizing recording...",
         )
+
+        await _stamp_recorder_audio_missing(meeting_id, audio_path)
 
         speech = get_speech_provider()
         raw_segments = await speech.transcribe_diarized(audio_path, meeting)

@@ -130,6 +130,9 @@ class Meeting(BaseModel):
     sharepoint_status: SharePointStatus = SharePointStatus.not_started
     sharepoint_error_message: str | None = None
     sharepoint_web_url: str | None = None
+    # The uploaded mic track measured as digital silence (recorder's own voice
+    # absent). Set at upload; surfaced in the minutes header.
+    recorder_audio_missing: bool = False
     graph_metadata: GraphMeetingMetadata | None = None
 
 

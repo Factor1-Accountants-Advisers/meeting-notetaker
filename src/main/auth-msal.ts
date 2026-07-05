@@ -5,6 +5,7 @@ import { execFile } from 'child_process'
 import { app, shell } from 'electron'
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
+import { logger } from './logger'
 import {
   PublicClientApplication,
   type AccountInfo,
@@ -265,13 +266,32 @@ function generatePkceCodes(): { verifier: string; challenge: string } {
 function startAuthRedirectServer(): Promise<string> {
   return new Promise((resolve) => {
     const server = createServer()
-    server.listen(0, '127.0.0.1', () => {
-      const port = (server.address() as AddressInfo).port
-      const redirectUri = `http://localhost:${port}`
+    // In WSL dev the browser runs on Windows, while this listener runs inside
+    // WSL. Binding only to WSL 127.0.0.1 makes Windows Chrome land on
+    // ERR_CONNECTION_REFUSED at localhost:<port>. Keep the redirect URI as
+    // localhost for Entra loopback compatibility, but listen on all interfaces
+    // so WSL localhost forwarding can deliver the callback.
+    const isWsl = process.platform === 'linux' && Boolean(process.env.WSL_DISTRO_NAME)
+    const host = isWsl ? '0.0.0.0' : '127.0.0.1'
+    const requestedPort = Number(process.env.MN_ENTRA_REDIRECT_PORT ?? (isWsl ? 46623 : 0))
+    const port = Number.isInteger(requestedPort) && requestedPort >= 0 ? requestedPort : 0
+    // A fixed port can collide (abandoned prior sign-in, another process).
+    // Without this handler the 'error' event is an uncaught exception that
+    // kills the main process; fall back to an OS-assigned loopback port.
+    server.once('error', (err) => {
+      logger().warn('[auth] redirect listener failed; retrying on loopback', {
+        message: err instanceof Error ? err.message : String(err)
+      })
+      server.listen(0, '127.0.0.1')
+    })
+    server.on('listening', () => {
+      const actualPort = (server.address() as AddressInfo).port
+      const redirectUri = `http://localhost:${actualPort}`
       // Store the server reference for the code capture
       activeAuthServer = { server, redirectUri }
       resolve(redirectUri)
     })
+    server.listen(port, host)
   })
 }
 
@@ -299,6 +319,12 @@ function openBrowserAndWaitForCode(
       const url = new URL(req.url ?? '/', redirectUri)
       const code = url.searchParams.get('code')
       const error = url.searchParams.get('error')
+
+      if (!code && !error) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' })
+        res.end('Waiting for Microsoft sign-in callback')
+        return
+      }
 
       res.writeHead(200, { 'Content-Type': 'text/html' })
       res.end(AUTH_RESPONSE_HTML)

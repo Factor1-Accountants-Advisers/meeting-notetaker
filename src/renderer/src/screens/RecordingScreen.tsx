@@ -155,6 +155,13 @@ export function RecordingScreen({
               Microphone unavailable — check access in system settings.
             </span>
           )}
+          {captureStatus?.mic === 'silent' && (
+            <span className="flex items-center gap-1.5 text-content-danger">
+              <MicOff size={13} strokeWidth={1.75} />
+              Microphone appears silent — your voice is not being captured. Check your mic in
+              Settings (Bluetooth headsets in calls are a common cause).
+            </span>
+          )}
           {session.source === 'online' && captureStatus?.loopback === 'active' && (
             <span className="flex items-center gap-1.5 text-content-success">
               <Volume2 size={13} strokeWidth={1.75} />
