@@ -10,9 +10,11 @@ quietly omitting the recorder's speech.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 logger = logging.getLogger("notetaker.audio_checks")
@@ -26,6 +28,26 @@ SILENT_MAX_VOLUME_DB = -80.0
 _MAX_VOLUME_RE = re.compile(r"max_volume:\s*(-?[\d.]+)\s*dB")
 
 
+def find_ffmpeg() -> str | None:
+    """Locate ffmpeg using the agreed discovery order.
+
+    1. ``MN_FFMPEG_PATH`` environment variable (explicit override).
+    2. Bundled ``ffmpeg/ffmpeg.exe`` sibling (PyInstaller onedir).
+    3. ``shutil.which(\"ffmpeg\")`` (system PATH, dev workflow).
+    """
+    explicit = os.environ.get("MN_FFMPEG_PATH")
+    if explicit and Path(explicit).exists():
+        return explicit
+
+    # PyInstaller onedir: data files land next to the executable.
+    if getattr(sys, "frozen", False):
+        bundled = Path(sys.executable).parent / "ffmpeg" / "ffmpeg.exe"
+        if bundled.exists():
+            return str(bundled)
+
+    return shutil.which("ffmpeg")
+
+
 def parse_max_volume_db(ffmpeg_output: str) -> float | None:
     match = _MAX_VOLUME_RE.search(ffmpeg_output)
     return float(match.group(1)) if match else None
@@ -33,7 +55,7 @@ def parse_max_volume_db(ffmpeg_output: str) -> float | None:
 
 def max_volume_db(path: Path) -> float | None:
     """Peak volume of an audio file via ffmpeg volumedetect; None if unmeasurable."""
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = find_ffmpeg()
     if ffmpeg is None or not path.exists():
         return None
     try:

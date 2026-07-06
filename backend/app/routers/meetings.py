@@ -14,6 +14,7 @@ from app import store
 from app.access import can_see, require
 from app.config import get_settings
 from app.paths import audio_dir
+from app.services.audio_checks import find_ffmpeg
 
 logger = logging.getLogger(__name__)
 from app.schemas import (
@@ -155,7 +156,7 @@ def _decode_audio_b64(value: str, label: str) -> bytes:
 
 
 def _merge_mic_and_system_audio(meeting_id: UUID, mic_audio: bytes, system_audio: bytes) -> Path:
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = find_ffmpeg()
     if ffmpeg is None:
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
