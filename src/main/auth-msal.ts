@@ -161,6 +161,7 @@ export async function signInInteractively(): Promise<MsalSignInResult> {
   const app = getPublicClientApplication(status.config)
   restoreTokenCache(app)
   const { verifier, challenge } = generatePkceCodes()
+  const state = randomBytes(16).toString('base64url')
   const redirectUri = await startAuthRedirectServer()
 
   try {
@@ -168,10 +169,11 @@ export async function signInInteractively(): Promise<MsalSignInResult> {
       scopes: [...SIGN_IN_SCOPES],
       redirectUri,
       codeChallenge: challenge,
-      codeChallengeMethod: 'S256'
+      codeChallengeMethod: 'S256',
+      state
     })
 
-    const code = await openBrowserAndWaitForCode(authCodeUrl, redirectUri)
+    const code = await openBrowserAndWaitForCode(authCodeUrl, redirectUri, state)
     if (!code) return { ok: false, error: 'Sign-in was cancelled or timed out' }
 
     const result = await app.acquireTokenByCode({
@@ -300,6 +302,7 @@ let activeAuthServer: { server: ReturnType<typeof createServer>; redirectUri: st
 function openBrowserAndWaitForCode(
   authUrl: string,
   redirectUri: string,
+  expectedState: string,
   timeoutMs = 120_000
 ): Promise<string | null> {
   return new Promise((resolve) => {
@@ -319,10 +322,18 @@ function openBrowserAndWaitForCode(
       const url = new URL(req.url ?? '/', redirectUri)
       const code = url.searchParams.get('code')
       const error = url.searchParams.get('error')
+      const returnedState = url.searchParams.get('state')
 
       if (!code && !error) {
         res.writeHead(404, { 'Content-Type': 'text/plain' })
         res.end('Waiting for Microsoft sign-in callback')
+        return
+      }
+
+      // Reject callbacks whose state does not match (CSRF protection).
+      if (returnedState !== expectedState) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' })
+        res.end('Sign-in state mismatch')
         return
       }
 
