@@ -100,6 +100,7 @@ Backend (`backend/`):
 - Run: `.venv/Scripts/python -m uvicorn app.main:app --port 8787`
 - API docs (dev): `http://127.0.0.1:8787/docs`
 - State persists to `backend/var/store.json`; delete it to reset to seeds.
+- **Tests** (from repo root): `PYTHONPATH=backend backend/.venv/bin/python -m unittest discover -s backend/tests -t backend -v`. This command isolates test data via `tests/conftest_env.py` (``MN_DATA_DIR`` → temp dir) so the live store is never touched.
 
 Release: push tag `v*` → `.github/workflows/release.yml` builds the NSIS installer (unsigned until the cert lands).
 
