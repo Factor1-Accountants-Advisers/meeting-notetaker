@@ -15,8 +15,56 @@ on:
       - 'v*'
 
 jobs:
+  build-backend:
+    runs-on: windows-latest
+    outputs:
+      bundle-path: backend/dist/notetaker-backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-build.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-build.txt
+
+      - name: Download ffmpeg (BtbN essentials, LGPL)
+        working-directory: backend
+        shell: pwsh
+        run: |
+          $url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-git-essentials.7z"
+          $hash = ""  # manual: fill in after first successful download
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.7z
+          7z x ffmpeg.7z -offmpeg-extracted
+          New-Item -ItemType Directory -Force third_party\ffmpeg
+          Copy-Item ffmpeg-extracted\*\bin\ffmpeg.exe third_party\ffmpeg\ffmpeg.exe
+
+      - name: Build backend bundle (PyInstaller onedir)
+        working-directory: backend
+        run: python -m PyInstaller meeting-notetaker-backend.spec
+
+      - name: Smoke test the bundle
+        shell: pwsh
+        run: .\scripts\smoke-backend-bundle.ps1
+
+      - name: Upload backend bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: notetaker-backend-bundle
+          path: backend/dist/notetaker-backend/
+          if-no-files-found: error
+
   build-windows:
     runs-on: windows-latest
+    needs: build-backend
     steps:
       - uses: actions/checkout@v4
 
@@ -27,6 +75,12 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Download backend bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: notetaker-backend-bundle
+          path: backend/dist/notetaker-backend
 
       - name: Type check
         run: npm run typecheck
