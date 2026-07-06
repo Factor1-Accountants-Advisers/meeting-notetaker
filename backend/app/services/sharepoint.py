@@ -19,11 +19,12 @@ from pathlib import Path
 from typing import Protocol
 
 from app.config import get_settings
+from app.paths import local_sharepoint_dir
 from app.schemas import Meeting
 
 logger = logging.getLogger(__name__)
 
-LOCAL_SHAREPOINT_DIR = Path(__file__).resolve().parents[2] / "var" / "sharepoint"
+LOCAL_SHAREPOINT_DIR = local_sharepoint_dir()
 GRAPH_DRIVE_BASE = "https://graph.microsoft.com/v1.0/drives"
 
 

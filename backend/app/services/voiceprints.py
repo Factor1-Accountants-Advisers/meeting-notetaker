@@ -15,7 +15,7 @@ from typing import Protocol
 from app import store
 
 
-VOICEPRINT_PATH = Path(__file__).resolve().parents[2] / "var" / "voiceprints.json"
+from app.paths import voiceprint_path
 
 
 @dataclass
@@ -43,8 +43,8 @@ class VoiceprintRepository(Protocol):
 class JsonVoiceprintRepository:
     """Local encrypted-storage stand-in for pyannoteAI voiceprint payloads."""
 
-    def __init__(self, path: Path = VOICEPRINT_PATH) -> None:
-        self._path = path
+    def __init__(self, path: Path | None = None) -> None:
+        self._path = path or voiceprint_path()
         self._voiceprints: dict[str, Voiceprint] = {}
         self._load()
 

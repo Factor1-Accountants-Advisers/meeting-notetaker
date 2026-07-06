@@ -26,15 +26,13 @@ from app.schemas import (
     PipelineStage,
     PipelineStatus,
 )
+from app.paths import audio_dir
 from app.services import audio_checks
 from app.services.llm import get_llm_provider
 from app.services.speech import get_speech_provider
 from app.services.speaker_matching import get_speaker_matcher
 
 logger = logging.getLogger(__name__)
-
-# Local stand-in for Azure Blob Storage (30-day lifecycle handled there).
-AUDIO_DIR = Path(__file__).resolve().parents[2] / "var" / "audio"
 
 # Simulated stage latency so the UI's queued/processing states are visible.
 STAGE_DELAY_S = 1.5
@@ -45,12 +43,12 @@ _PIPELINE_TASKS: set[asyncio.Task[None]] = set()
 
 def audio_path_for(meeting_id: UUID, mime_type: str) -> Path:
     ext = "webm" if "webm" in mime_type else "bin"
-    return AUDIO_DIR / f"{meeting_id}.{ext}"
+    return audio_dir() / f"{meeting_id}.{ext}"
 
 
 def mic_track_path(meeting_id: UUID) -> Path:
     """Raw mic capture kept alongside the merged file for dual-track uploads."""
-    return AUDIO_DIR / f"{meeting_id}.mic.webm"
+    return audio_dir() / f"{meeting_id}.mic.webm"
 
 
 async def _stamp_recorder_audio_missing(meeting_id: UUID, audio_path: Path) -> None:

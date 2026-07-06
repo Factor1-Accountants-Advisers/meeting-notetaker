@@ -13,6 +13,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid5, NAMESPACE_URL
 
+from app.paths import snapshot_path
 from app.schemas import (
     AccessRole,
     ActionItem,
@@ -86,11 +87,8 @@ PEOPLE: list[PersonEnrollment] = []
 # Snapshot persistence (Postgres stand-in durability)
 # ---------------------------------------------------------------------------
 
-SNAPSHOT_PATH = Path(__file__).resolve().parents[1] / "var" / "store.json"
-
-
 def save_snapshot() -> None:
-    SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_path().parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "meetings": {str(k): v.model_dump(mode="json") for k, v in MEETINGS.items()},
         "action_items": {str(k): v.model_dump(mode="json") for k, v in ACTION_ITEMS.items()},
@@ -107,16 +105,16 @@ def save_snapshot() -> None:
         "people": [p.model_dump(mode="json") for p in PEOPLE],
         "audit_log": [e.model_dump(mode="json") for e in AUDIT_LOG],
     }
-    tmp = SNAPSHOT_PATH.with_suffix(".tmp")
+    tmp = snapshot_path().with_suffix(".tmp")
     tmp.write_text(json.dumps(payload), encoding="utf-8")
-    tmp.replace(SNAPSHOT_PATH)
+    tmp.replace(snapshot_path())
 
 
 def load_snapshot() -> bool:
-    if not SNAPSHOT_PATH.exists():
+    if not snapshot_path().exists():
         return False
     try:
-        raw = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
+        raw = json.loads(snapshot_path().read_text(encoding="utf-8"))
         meetings = {UUID(k): Meeting.model_validate(v) for k, v in raw["meetings"].items()}
         items = {UUID(k): ActionItem.model_validate(v) for k, v in raw["action_items"].items()}
         summaries = {UUID(k): v for k, v in raw["summaries"].items()}

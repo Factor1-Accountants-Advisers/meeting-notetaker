@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 
 from app import store
 from app.access import can_see, require
+from app.paths import audio_dir
 
 logger = logging.getLogger(__name__)
 from app.schemas import (
@@ -36,7 +37,6 @@ from app.schemas import (
 from app.services.email import build_transcript_attachment, get_email_provider
 from app.services.sharepoint import get_sharepoint_provider, safe_transcript_filename
 from app.services.pipeline import (
-    AUDIO_DIR,
     audio_path_for,
     kick_pipeline,
     mic_track_path,
@@ -162,8 +162,8 @@ def _merge_mic_and_system_audio(meeting_id: UUID, mic_audio: bytes, system_audio
         )
 
     mic_path = mic_track_path(meeting_id)
-    system_path = AUDIO_DIR / f"{meeting_id}.system.webm"
-    merged_path = AUDIO_DIR / f"{meeting_id}.webm"
+    system_path = audio_dir() / f"{meeting_id}.system.webm"
+    merged_path = audio_dir() / f"{meeting_id}.webm"
     mic_path.write_bytes(mic_audio)
     system_path.write_bytes(system_audio)
 
@@ -230,7 +230,7 @@ async def upload_audio(
         else None
     )
 
-    AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    audio_dir().mkdir(parents=True, exist_ok=True)
     if system_audio is not None:
         path = _merge_mic_and_system_audio(meeting_id, audio, system_audio)
     else:

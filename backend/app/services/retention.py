@@ -11,7 +11,7 @@ import time
 
 from app import store
 from app.config import get_settings
-from app.services.pipeline import AUDIO_DIR
+from app.paths import audio_dir
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +23,9 @@ def sweep_once() -> int:
     settings = get_settings()
     cutoff = time.time() - settings.audio_retention_days * 24 * 3600
     deleted = 0
-    if not AUDIO_DIR.exists():
+    if not audio_dir().exists():
         return 0
-    for path in AUDIO_DIR.iterdir():
+    for path in audio_dir().iterdir():
         if path.is_file() and path.stat().st_mtime < cutoff:
             path.unlink(missing_ok=True)
             deleted += 1
