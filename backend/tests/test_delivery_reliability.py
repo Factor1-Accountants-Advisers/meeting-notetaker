@@ -129,6 +129,63 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("--- TRANSCRIPT ---", uploads[0]["content"])
         self.assertIn("Summary survives delivery failure.", uploads[0]["content"])
 
+    async def test_email_acl_rejects_viewer(self):
+        """D2: viewer-role actor cannot send email."""
+        store.ACCESS[self.meeting_id] = [
+            MeetingAccessEntry(user="Joseph", role=AccessRole.owner),
+            MeetingAccessEntry(user="Viewer", role=AccessRole.viewer),
+        ]
+        with self.assertRaises(HTTPException) as raised:
+            await meetings_router.email_notes(
+                self.meeting_id,
+                meetings_router.EmailRequest(recorder_email="joseph@example.com"),
+                actor="Viewer",
+                graph_token="token",
+            )
+        self.assertEqual(raised.exception.status_code, 403)
+
+    async def test_email_owner_still_sends(self):
+        """D2: owner-role actor can still send email."""
+        store.ACCESS[self.meeting_id] = [
+            MeetingAccessEntry(user="Joseph", role=AccessRole.owner),
+            MeetingAccessEntry(user="Viewer", role=AccessRole.viewer),
+        ]
+        # Owner with token should pass ACL and reach the send attempt
+        with self.assertRaises(HTTPException) as raised:
+            await meetings_router.email_notes(
+                self.meeting_id,
+                meetings_router.EmailRequest(recorder_email="joseph@example.com"),
+                actor="Joseph",
+                graph_token="token",
+            )
+        # 502 = provider failure (no real provider in test), proving ACL passed
+        self.assertEqual(raised.exception.status_code, 502)
+
+    async def test_sharepoint_configured_drive_no_token_returns_401(self):
+        """D1: configured SharePoint drive + missing token → 401."""
+        from app.config import get_settings
+
+        # Temporarily set sharepoint_drive_id via env
+        import os
+        os.environ["MN_SHAREPOINT_DRIVE_ID"] = "fake-drive-id"
+        get_settings.cache_clear()
+        try:
+            with self.assertRaises(HTTPException) as raised:
+                await meetings_router.save_transcript_to_sharepoint(
+                    self.meeting_id,
+                    actor="Joseph",
+                    graph_token="",  # Explicit empty for direct call (bypasses Header injection)
+                )
+            self.assertEqual(raised.exception.status_code, 401)
+            self.assertEqual(
+                store.MEETINGS[self.meeting_id].sharepoint_status,
+                SharePointStatus.failed,
+            )
+            self.assertIn("sign-in", store.MEETINGS[self.meeting_id].sharepoint_error_message or "")
+        finally:
+            del os.environ["MN_SHAREPOINT_DRIVE_ID"]
+            get_settings.cache_clear()
+
 
 if __name__ == "__main__":
     unittest.main()

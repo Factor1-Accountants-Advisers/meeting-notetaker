@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 
 from app import store
 from app.access import can_see, require
+from app.config import get_settings
 from app.paths import audio_dir
 
 logger = logging.getLogger(__name__)
@@ -303,6 +304,7 @@ async def email_notes(
     the recorder. SharePoint and Teams delivery are later slices.
     """
     meeting, participants, segments, summary, action_items = _delivery_artifacts(meeting_id)
+    require(meeting_id, actor, AccessRole.editor)
 
     recipients = _email_recipients(meeting, body.recorder_email)
     if not recipients:
@@ -388,6 +390,20 @@ async def save_transcript_to_sharepoint(
         action_items=action_items,
         meeting=meeting,
     )
+
+    settings = get_settings()
+    if settings.sharepoint_drive_id and not graph_token:
+        store.MEETINGS[meeting_id] = meeting.model_copy(
+            update={
+                "sharepoint_status": SharePointStatus.failed,
+                "sharepoint_error_message": "SharePoint sign-in is required before transcript can be saved",
+            }
+        )
+        store.save_snapshot()
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "SharePoint sign-in is required before transcript can be saved",
+        )
 
     store.MEETINGS[meeting_id] = meeting.model_copy(
         update={
