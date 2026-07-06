@@ -15,6 +15,7 @@ class Settings(BaseSettings):
 
     environment: str = "dev"
     api_v1_prefix: str = "/api/v1"
+    data_dir: str = ""  # When set, all data paths derive from here (packaged builds)
 
     # Cloud resource endpoints (placeholders until provisioning).
     blob_account_url: str = ""
