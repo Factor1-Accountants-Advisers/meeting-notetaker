@@ -1,6 +1,6 @@
 import { app, dialog } from 'electron'
 import { spawn, ChildProcess } from 'child_process'
-import { existsSync, readFileSync, copyFileSync, mkdirSync } from 'fs'
+import { existsSync, readFileSync, copyFileSync, mkdirSync, writeFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { getLogInfo, logger } from './logger'
 import { setTrayAlert } from './tray'
@@ -21,8 +21,13 @@ const MAX_RESTARTS_IN_WINDOW = 3
 // ---------------------------------------------------------------------------
 
 let child: ChildProcess | null = null
+let adoptedPid: number | null = null
 let restartTimestamps: number[] = []
 let supervisorStarted = false
+
+function pidFilePath(): string {
+  return join(app.getPath('userData'), 'backend-data', 'backend.pid')
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -36,20 +41,64 @@ export async function startBackendSupervisor(): Promise<void> {
   const logInfo = getLogInfo()
   logger().info('[supervisor] starting', { backendLog: logInfo.backendLog })
 
-  // If 8787 is already healthy (e.g. dev uvicorn still running), adopt it.
+  // If 8787 is already healthy (e.g. an orphan from a prior crash), adopt it
+  // — and remember its PID (from our own pid file) so quit can still stop it.
   const alreadyHealthy = await healthProbe()
   if (alreadyHealthy) {
-    logger().info('[supervisor] port 8787 already healthy — adopting existing backend')
+    adoptedPid = readPidFile()
+    logger().info('[supervisor] port 8787 already healthy — adopting existing backend', {
+      adoptedPid,
+    })
     return
   }
 
   await spawnAndWait()
 }
 
+function readPidFile(): number | null {
+  try {
+    const pid = Number.parseInt(readFileSync(pidFilePath(), 'utf-8').trim(), 10)
+    return Number.isInteger(pid) && pid > 0 ? pid : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Best-effort synchronous kill for crash paths (uncaughtException / exit).
+ * Safe to call at any time; never throws.
+ */
+export function forceKillBackendChild(): void {
+  try {
+    if (child && !child.killed) child.kill('SIGKILL')
+  } catch {
+    // best-effort only
+  }
+  try {
+    if (adoptedPid) process.kill(adoptedPid)
+  } catch {
+    // already gone or not ours — fine
+  }
+}
+
 /** Stop the backend child process (called from before-quit). */
 export function stopBackendSupervisor(): void {
   const proc = child
-  if (!proc) return
+  if (!proc) {
+    // Adopted (not spawned) backend: we still own it via our pid file —
+    // kill it so quit never leaves notetaker-backend.exe running.
+    if (adoptedPid) {
+      logger().info('[supervisor] stopping adopted backend', { pid: adoptedPid })
+      try {
+        process.kill(adoptedPid)
+      } catch {
+        // already exited or PID no longer ours
+      }
+      adoptedPid = null
+      clearPidFile()
+    }
+    return
+  }
 
   logger().info('[supervisor] stopping backend child', { pid: proc.pid })
 
@@ -139,6 +188,7 @@ function spawnChild(): void {
     windowsHide: true,
   })
   child = proc
+  writePidFile(proc.pid)
 
   proc.stdout?.on('data', (data: Buffer) => {
     logger().info('[backend]', { message: data.toString().trimEnd() })
@@ -155,8 +205,35 @@ function spawnChild(): void {
   proc.on('exit', (code: number | null, signal: string | null) => {
     logger().info('[supervisor] backend child exited', { code, signal })
     child = null
+    clearPidFile()
   })
 }
+
+function writePidFile(pid: number | undefined): void {
+  if (!pid) return
+  try {
+    mkdirSync(join(app.getPath('userData'), 'backend-data'), { recursive: true })
+    writeFileSync(pidFilePath(), String(pid), 'utf-8')
+  } catch (err) {
+    logger().warn('[supervisor] could not write pid file', {
+      message: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
+function clearPidFile(): void {
+  try {
+    unlinkSync(pidFilePath())
+  } catch {
+    // already absent
+  }
+}
+
+// A crashed main process bypasses before-quit; make sure the child does not
+// outlive us as an orphan holding port 8787.
+process.on('exit', () => {
+  forceKillBackendChild()
+})
 
 async function pollHealth(): Promise<boolean> {
   const deadline = Date.now() + HEALTH_TIMEOUT_MS
@@ -205,7 +282,9 @@ async function restartWithBackoff(): Promise<void> {
 function parseEnvFile(path: string): Record<string, string> {
   if (!existsSync(path)) return {}
   try {
-    const content = readFileSync(path, 'utf-8')
+    // Strip a UTF-8 BOM: PowerShell's `-Encoding utf8` emits one, and a
+    // BOM-prefixed first key ("﻿MN_OPENAI_API_KEY") would never match.
+    const content = readFileSync(path, 'utf-8').replace(/^\uFEFF/, '')
     const env: Record<string, string> = {}
     for (const line of content.split(/\r?\n/)) {
       const trimmed = line.trim()
@@ -213,7 +292,15 @@ function parseEnvFile(path: string): Record<string, string> {
       const eqIdx = trimmed.indexOf('=')
       if (eqIdx === -1) continue
       const key = trimmed.slice(0, eqIdx).trim()
-      const value = trimmed.slice(eqIdx + 1).trim()
+      let value = trimmed.slice(eqIdx + 1).trim()
+      // Tolerate the common KEY="value" / KEY='value' convention.
+      if (
+        value.length >= 2 &&
+        ((value.startsWith('"') && value.endsWith('"')) ||
+          (value.startsWith("'") && value.endsWith("'")))
+      ) {
+        value = value.slice(1, -1)
+      }
       if (key) env[key] = value
     }
     return env

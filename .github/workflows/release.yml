@@ -36,21 +36,6 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-build.txt
 
-      - name: Write credentials file (from GitHub secrets)
-        shell: pwsh
-        env:
-          MN_OPENAI_API_KEY: ${{ secrets.MN_OPENAI_API_KEY }}
-          MN_PYANNOTE_API_KEY: ${{ secrets.MN_PYANNOTE_API_KEY }}
-        run: |
-          $lines = @()
-          if ($env:MN_OPENAI_API_KEY) { $lines += "MN_OPENAI_API_KEY=$env:MN_OPENAI_API_KEY" }
-          if ($env:MN_PYANNOTE_API_KEY) { $lines += "MN_PYANNOTE_API_KEY=$env:MN_PYANNOTE_API_KEY" }
-          if ($lines.Count -eq 0) {
-            Write-Warning "No credential secrets set — bundle will ship with stubs"
-          }
-          $lines -join "`n" | Out-File -Encoding utf8 -FilePath backend.env
-          Write-Host "Wrote backend.env ($($lines.Count) keys)"
-
       - name: Download ffmpeg (BtbN essentials, LGPL)
         working-directory: backend
         shell: pwsh
@@ -100,10 +85,41 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      - name: Write credentials file (from GitHub secrets)
+        # utf8NoBOM is required: a BOM-prefixed first line corrupts the first
+        # key name and the supervisor would silently fall back to stubs.
+        shell: pwsh
+        env:
+          MN_OPENAI_API_KEY: ${{ secrets.MN_OPENAI_API_KEY }}
+          MN_PYANNOTE_API_KEY: ${{ secrets.MN_PYANNOTE_API_KEY }}
+        run: |
+          $lines = @()
+          if ($env:MN_OPENAI_API_KEY) { $lines += "MN_OPENAI_API_KEY=$env:MN_OPENAI_API_KEY" }
+          if ($env:MN_PYANNOTE_API_KEY) { $lines += "MN_PYANNOTE_API_KEY=$env:MN_PYANNOTE_API_KEY" }
+          if ($lines.Count -eq 0) {
+            Write-Error "No credential secrets set — refusing to build a stub installer for release"
+            exit 1
+          }
+          $lines -join "`n" | Out-File -Encoding utf8NoBOM -FilePath backend.env
+          Write-Host "Wrote backend.env ($($lines.Count) keys)"
+
+      - name: Pre-package checks (bundle + ffmpeg + credentials into staging)
+        run: node scripts/prepackage.cjs
+
       - name: Build installer (unsigned until cert lands)
         # CI runners have symlink rights, so exe metadata editing is re-enabled
         # here (it is disabled in electron-builder.yml for dev machines).
         run: npx electron-vite build && npx electron-builder --publish never --config.win.signAndEditExecutable=true
+
+      - name: Assert credentials shipped in packaged output
+        shell: pwsh
+        run: |
+          $packagedEnv = "dist/win-unpacked/resources/backend/backend.env"
+          if (-not (Test-Path $packagedEnv)) {
+            Write-Error "Packaged output is missing $packagedEnv — installer would ship stub-only"
+            exit 1
+          }
+          Write-Host "Packaged credentials present: $packagedEnv"
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
