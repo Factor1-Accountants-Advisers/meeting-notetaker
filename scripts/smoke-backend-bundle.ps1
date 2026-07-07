@@ -180,11 +180,18 @@ Write-Host "=== Stopping backend ==="
 Stop-Backend
 
 # Verify the backend is gone (by image name -- $proc.Id can be null under
-# WSL interop hosts).
-Start-Sleep -Seconds 2
-$stillRunning = Get-Process -Name "notetaker-backend" -ErrorAction SilentlyContinue
-if ($stillRunning) {
-    Write-Error "Backend process still running after stop"
+# WSL interop hosts). Termination is async; poll up to 10 s.
+$stopped = $false
+for ($i = 0; $i -lt 10; $i++) {
+    Start-Sleep -Seconds 1
+    if (-not (Get-Process -Name "notetaker-backend" -ErrorAction SilentlyContinue)) {
+        $stopped = $true
+        break
+    }
+    Stop-Backend
+}
+if (-not $stopped) {
+    Write-Error "Backend process still running 10 s after stop"
     exit 1
 }
 Write-Host "  [PASS] backend process stopped"
