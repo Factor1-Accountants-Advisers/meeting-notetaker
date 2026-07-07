@@ -17,6 +17,8 @@ files:
 extraResources:
   - from: backend/dist/notetaker-backend
     to: backend
+  - from: seed-data
+    to: seed-data
 extraMetadata:
   SliceVersion: 1.0.0
 win:

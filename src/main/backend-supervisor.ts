@@ -1,6 +1,6 @@
 import { app, dialog } from 'electron'
 import { spawn, ChildProcess } from 'child_process'
-import { existsSync, readFileSync } from 'fs'
+import { existsSync, readFileSync, copyFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { getLogInfo, logger } from './logger'
 import { setTrayAlert } from './tray'
@@ -116,6 +116,9 @@ function spawnChild(): void {
 
   const cwd = join(process.resourcesPath, 'backend')
   const dataDir = join(app.getPath('userData'), 'backend-data')
+
+  // Seed initial voiceprints on first launch — bundled in extraResources.
+  seedInitialData(dataDir)
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -266,6 +269,34 @@ function loadCredentials(bundleDir: string): Record<string, string> {
   })
 
   return result
+}
+
+// ---------------------------------------------------------------------------
+// Seed data — first-launch voiceprint preload
+// ---------------------------------------------------------------------------
+
+/**
+ * Copy bundled seed files into the data directory on first launch.
+ * Never overwrites existing data — only seeds when the target is missing.
+ */
+function seedInitialData(dataDir: string): void {
+  const seedDir = join(process.resourcesPath, 'seed-data')
+  if (!existsSync(seedDir)) {
+    logger().info('[supervisor] no seed-data directory — skipping')
+    return
+  }
+
+  const seedVoiceprints = join(seedDir, 'voiceprints.json')
+  const targetVoiceprints = join(dataDir, 'voiceprints.json')
+
+  if (existsSync(seedVoiceprints) && !existsSync(targetVoiceprints)) {
+    mkdirSync(dataDir, { recursive: true })
+    copyFileSync(seedVoiceprints, targetVoiceprints)
+    logger().info('[supervisor] seeded initial voiceprints', {
+      source: seedVoiceprints,
+      target: targetVoiceprints,
+    })
+  }
 }
 
 // ---------------------------------------------------------------------------
