@@ -11,16 +11,10 @@ Windows machine with the app installed manually — no Intune, no group policy.
    - Run the installer.  Windows SmartScreen may warn "Windows protected
      your PC" — click **More info → Run anyway** (unsigned until the code
      signing cert lands, Workstream E2).
+   - Spend-capped team keys (OpenAI + pyannoteAI) are **bundled in the
+     installer** — no per-machine key setup required for initial rollout.
 
-2. **Create the credentials file**
-   - Copy `backend.env.template` to:
-     `C:\ProgramData\Factor1\MeetingNotetaker\backend.env`
-   - Replace the `REPLACE_ME` placeholders with:
-     - `MN_OPENAI_API_KEY` — David's spend-capped OpenAI key
-     - `MN_PYANNOTE_API_KEY` — org pyannoteAI key (IN-82/IN-97)
-   - Leave SharePoint/Azure Blob empty for now (stubs active).
-
-3. **Launch the app**
+2. **Launch the app**
    - Start "Meeting Notetaker" from the Start Menu or desktop shortcut.
    - The app should open to the Home screen.  Check the tray icon —
      tooltip should read "Meeting Notetaker — Idle" (not "Backend
@@ -80,3 +74,23 @@ Windows machine with the app installed manually — no Intune, no group policy.
 - [ ] `recorder_audio_missing` flag set correctly:
       mute mic at OS level → record → banner shows during recording →
       meeting flagged on completion
+
+## Key rotation
+
+Team keys (OpenAI + pyannoteAI) are bundled in the installer.  To rotate
+keys without reinstalling, drop an override file on each machine:
+
+1. Create `C:\ProgramData\Factor1\MeetingNotetaker\backend.env` with the
+   new key values:
+
+   ```
+   MN_OPENAI_API_KEY=sk-new-key-here
+   MN_PYANNOTE_API_KEY=new-pyannote-key-here
+   ```
+
+2. Restart the app.  The supervisor merges this file **on top** of the
+   bundled keys — any key present in ProgramData wins.
+
+3. After the next CI release ships with the new keys bundled, the
+   ProgramData overrides can be removed (optional — they'll keep
+   overriding harmlessly).

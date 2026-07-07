@@ -36,6 +36,11 @@ and action items for review, email distribution, and SharePoint storage.
 - Cloud services sit behind provider interfaces (`backend/app/services/`); stubs activate automatically when `MN_*` config is empty. Never bypass them.
 - Secrets live in Key Vault / env. Never in the repo or the client.
 - Desktop must not ship client secrets, API keys, database credentials, or tokens.
+  **Exception (exec-approved, 2026-07-07):** spend-capped team keys (OpenAI +
+  pyannoteAI) ship in the bundled ``backend.env`` per the packaging plan §3
+  amendment.  These are low-privilege, spend-limited, and rotatable via
+  ``%PROGRAMDATA%`` override without reinstall.  See
+  ``docs/implementation-plans/2026-07-06-packaging-readiness-plan.md`` §3.
 
 ## Product rules the code enforces (keep them enforced)
 

@@ -36,6 +36,21 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-build.txt
 
+      - name: Write credentials file (from GitHub secrets)
+        shell: pwsh
+        env:
+          MN_OPENAI_API_KEY: ${{ secrets.MN_OPENAI_API_KEY }}
+          MN_PYANNOTE_API_KEY: ${{ secrets.MN_PYANNOTE_API_KEY }}
+        run: |
+          $lines = @()
+          if ($env:MN_OPENAI_API_KEY) { $lines += "MN_OPENAI_API_KEY=$env:MN_OPENAI_API_KEY" }
+          if ($env:MN_PYANNOTE_API_KEY) { $lines += "MN_PYANNOTE_API_KEY=$env:MN_PYANNOTE_API_KEY" }
+          if ($lines.Count -eq 0) {
+            Write-Warning "No credential secrets set — bundle will ship with stubs"
+          }
+          $lines -join "`n" | Out-File -Encoding utf8 -FilePath backend.env
+          Write-Host "Wrote backend.env ($($lines.Count) keys)"
+
       - name: Download ffmpeg (BtbN essentials, LGPL)
         working-directory: backend
         shell: pwsh

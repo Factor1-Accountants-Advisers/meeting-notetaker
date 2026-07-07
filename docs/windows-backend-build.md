@@ -20,17 +20,27 @@ python -m venv .venv-win
 .venv-win\Scripts\python -m pip install -r requirements.txt
 .venv-win\Scripts\python -m pip install -r requirements-build.txt
 
-# 3. Download ffmpeg (BtbN essentials build, LGPL)
+# 3. Create credentials file (from repo root; never committed)
+#    Copy backend.env.template to backend.env and fill in the team keys:
+#      MN_OPENAI_API_KEY=sk-...
+#      MN_PYANNOTE_API_KEY=...
+#    Or set MN_ALLOW_STUB_PACKAGE=1 for a stub-only build.
+cd ..
+copy backend.env.template backend.env
+# (edit backend.env with real keys)
+
+# 4. Download ffmpeg (BtbN essentials build, LGPL)
 #    URL: https://www.gyan.dev/ffmpeg/builds/ffmpeg-git-essentials.7z
 #    Extract bin/ffmpeg.exe -> backend/third_party/ffmpeg/ffmpeg.exe
+cd backend
 mkdir third_party\ffmpeg
 # After extracting the 7z, copy:
 #   copy ffmpeg-git-essentials\bin\ffmpeg.exe third_party\ffmpeg\ffmpeg.exe
 
-# 4. Run PyInstaller
+# 5. Run PyInstaller
 .venv-win\Scripts\python -m PyInstaller meeting-notetaker-backend.spec
 
-# 5. Verify the bundle exists
+# 6. Verify the bundle exists
 if (Test-Path dist\notetaker-backend\notetaker-backend.exe) {
     Write-Host "Bundle built successfully at dist\notetaker-backend\"
 } else {
@@ -53,3 +63,16 @@ The smoke script:
 - Kills the process and verifies the port is released
 
 Passes on a machine with **no** Python and **no** ffmpeg on PATH.
+
+## CI secrets
+
+The ``build-backend`` job in ``.github/workflows/release.yml`` writes
+``backend.env`` from these GitHub Actions repository secrets:
+
+| Secret name | Description |
+|---|---|
+| ``MN_OPENAI_API_KEY`` | Spend-capped OpenAI API key for summaries/actions |
+| ``MN_PYANNOTE_API_KEY`` | Org pyannoteAI API key for transcription/speaker ID |
+
+If either secret is unset, the corresponding provider runs in stub mode
+(no error, but no real transcription/summaries).
