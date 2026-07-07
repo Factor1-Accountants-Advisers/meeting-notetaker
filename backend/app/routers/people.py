@@ -16,10 +16,52 @@ router = APIRouter(prefix="/people", tags=["people"])
 Actor = Header("Unknown user", alias="X-MN-User")
 
 
+def _sync_people_with_voiceprint_registry() -> None:
+    """Reflect the voiceprint registry in the people store.
+
+    Packaged installs seed ``voiceprints.json`` on first launch, but the
+    people store starts empty — without this sync, seeded colleagues are
+    invisible in the People screen and the enrollment gate blocks users who
+    already have voiceprints (observed on Jose T's install, 2026-07-07).
+    """
+    changed = False
+    for vp in get_voiceprint_repository().get_all():
+        if not vp.voiceprints:
+            continue
+        person = next((p for p in store.PEOPLE if p.employee_id == vp.employee_id), None)
+        if person is None:
+            store.PEOPLE.append(
+                PersonEnrollment(
+                    employee_id=vp.employee_id,
+                    display_name=vp.display_name,
+                    role="Factor1 staff",
+                    enrolled=True,
+                    model_version=vp.model_version,
+                    reenrollment_required=False,
+                )
+            )
+            store.add_audit(
+                "system", "person.enrollment_synced_from_registry", vp.display_name,
+                before=None, after=vp.employee_id,
+            )
+            changed = True
+        elif not person.enrolled:
+            person.enrolled = True
+            person.model_version = vp.model_version
+            store.add_audit(
+                "system", "person.enrollment_synced_from_registry", vp.display_name,
+                before="not enrolled", after="enrolled",
+            )
+            changed = True
+    if changed:
+        store.save_snapshot()
+
+
 @router.get("", response_model=list[PersonEnrollment])
 async def list_people() -> list[PersonEnrollment]:
     """Staff with enrollment status. Clients/externals are never listed here
     (enrollment is staff-only, requirements §4.2)."""
+    _sync_people_with_voiceprint_registry()
     return store.PEOPLE
 
 
@@ -35,6 +77,8 @@ async def ensure_current_staff(body: CurrentUserRequest, actor: str = Actor) -> 
     name = body.name.strip()
     if not email or "@" not in email:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Valid email is required")
+    # Seeded voiceprints must satisfy the enrollment gate on first sign-in.
+    _sync_people_with_voiceprint_registry()
     existing = next((p for p in store.PEOPLE if p.employee_id == email), None)
     if existing is not None:
         if existing.display_name != name:
