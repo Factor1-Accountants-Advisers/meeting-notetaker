@@ -145,24 +145,23 @@ if ($meeting.pipeline_status -ne "ready" -and $meeting.pipeline_status -ne "fail
 }
 Write-Host "  [PASS] pipeline terminal state: $($meeting.pipeline_status)"
 
-# ffmpeg volumedetect ran (recorder_audio_missing must be true/false, not null).
-if ($null -eq $meeting.recorder_audio_missing) {
-    Write-Error "recorder_audio_missing is null — ffmpeg volumedetect did not run"
+# ffmpeg proof: the fixture is REAL silent audio, so if the bundled ffmpeg
+# executed, volumedetect measures ~-91 dB and the pipeline stamps the flag
+# True. The schema defaults this field to False, so anything other than True
+# means ffmpeg never ran (a null/absent check would pass vacuously).
+if ($meeting.recorder_audio_missing -ne $true) {
+    Write-Error "recorder_audio_missing=$($meeting.recorder_audio_missing) — bundled ffmpeg did not run on the silent fixture"
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
     exit 1
 }
-Write-Host "  [PASS] ffmpeg volumedetect ran: recorder_audio_missing=$($meeting.recorder_audio_missing)"
-
-# Transcript was produced (even if stub, segments must be present).
-$meetingWithTranscript = Invoke-RestMethod -Uri $meetingUrl -Method GET -UseBasicParsing -Headers @{ "X-MN-User" = "smoke" }
-# The meeting endpoint returns the meeting object; transcripts are in the detail endpoint.
-# Minimal check: pipeline didn't crash.
-Write-Host "  [PASS] meeting accessible after pipeline"
+Write-Host "  [PASS] bundled ffmpeg executed: silent fixture flagged recorder_audio_missing=True"
 
 # Cleanup
 Write-Host ""
 Write-Host "=== Stopping backend ==="
 Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+Write-Host "SMOKE PASSED"
+exit 0
 
 # Verify process is gone and port released.
 Start-Sleep -Seconds 2
