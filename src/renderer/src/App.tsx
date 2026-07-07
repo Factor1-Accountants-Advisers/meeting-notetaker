@@ -10,7 +10,7 @@ import { createMeeting, emailNotes, ensureCurrentPerson, fetchMeetingReview, ret
 import { capture, type CaptureStatus } from './lib/capture'
 import { loadPrefs } from './lib/prefs'
 import { useNotifications } from './lib/useNotifications'
-import { audioDurationSeconds, blobToBase64 } from './lib/recorder'
+import { blobToBase64 } from './lib/recorder'
 import { elapsedMs } from './screens/RecordingScreen'
 import { useTheme } from './lib/theme'
 import type { ScreenId } from './lib/nav'
@@ -589,19 +589,6 @@ function App(): JSX.Element {
     setSubmitting(false)
   }
 
-  const uploadRecording = async (title: string, file: File): Promise<void> => {
-    const created = await createMeeting(title, null, 'upload')
-    if (!created) {
-      console.warn('Upload needs the backend — start it and try again')
-      return
-    }
-    const b64 = await blobToBase64(file)
-    const duration = await audioDurationSeconds(file)
-    const uploaded = await uploadAudio(created.id, b64, file.type || 'audio/webm', duration)
-    if (!uploaded) console.warn('Audio upload failed — backend unreachable')
-    if (uploaded) watchProcessing(created.id, title)
-  }
-
   const signOut = (): void => {
     localStorage.removeItem(USER_KEY)
     setRecording(null)
@@ -700,7 +687,6 @@ function App(): JSX.Element {
         <HomeScreen
           userName={user.name}
           onStartCapture={(t, l) => void startCapture(t, l)}
-          onUploadRecording={(t, f) => void uploadRecording(t, f)}
           recordingState={autoRecordingState}
           postCaptureNotice={postCaptureNotice}
           onDismissPostCaptureNotice={() => setPostCaptureNotice(null)}
