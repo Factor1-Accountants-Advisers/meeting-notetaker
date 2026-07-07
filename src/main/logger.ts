@@ -43,6 +43,8 @@ export function initLogger(): LogInfo {
 
   process.on('uncaughtException', (error) => {
     log.error('[process] uncaughtException', error)
+    // Rethrow crashes the main process; backend-supervisor's process 'exit'
+    // hook force-kills the backend child on that path, so no orphan remains.
     throw error
   })
 

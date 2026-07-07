@@ -14,7 +14,17 @@ if (!fs.existsSync(bundleExe)) {
   process.exit(1)
 }
 
-// 2. Credentials file must exist (unless MN_ALLOW_STUB_PACKAGE=1).
+// 2. ffmpeg must be inside the bundle — the spec includes it conditionally,
+// so a build without backend/third_party/ffmpeg/ffmpeg.exe would otherwise
+// ship silently broken dual-track merging and silence detection.
+const bundleFfmpeg = 'backend/dist/notetaker-backend/ffmpeg/ffmpeg.exe'
+if (!fs.existsSync(bundleFfmpeg)) {
+  console.error('ffmpeg missing from bundle: ' + bundleFfmpeg)
+  console.error('Download ffmpeg per docs/windows-backend-build.md step 4, then rebuild the bundle.')
+  process.exit(1)
+}
+
+// 3. Credentials file must exist (unless MN_ALLOW_STUB_PACKAGE=1).
 if (!fs.existsSync(envFile)) {
   if (process.env.MN_ALLOW_STUB_PACKAGE === '1') {
     console.warn('MN_ALLOW_STUB_PACKAGE=1: proceeding without backend.env (stub-only build)')
