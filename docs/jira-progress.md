@@ -275,6 +275,9 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - **C1** (6f094e3): `extraResources` in `electron-builder.yml`, `package:win` gate script.
   - **C2** (d09e464): backend supervisor (spawn → health poll 20s → restart backoff 1s/5s/25s / max 3 in 5 min → tray alert + error dialog). `before-quit` SIGTERM + 3s force-kill. Dev (`app.isPackaged=false`) untouched.
   - **C4** (5d70e74): `backend.env.template` (placeholders only), `docs/rollout-runbook.md`, supervisor-side `%PROGRAMDATA%` env file parser.
+  - **C5a** (c34772b): two-layer credential loading — bundled `backend.env` (base, shipped in installer per plan §3 amendment) then `%PROGRAMDATA%` on top (per-machine override, wins on conflict). Logs paths only. `email_notes` `require()` moved above `_delivery_artifacts()` so 403 returns before any 409 pipeline-state leak.
+  - **C5b** (2140a74): `scripts/prepackage.js` copies `backend.env` into bundle staging dir; `MN_ALLOW_STUB_PACKAGE=1` bypass. `.gitignore` guards `backend.env` and `backend/backend.env` from ever being committed.
+  - **C5c** (acb6c87): CI `build-backend` job writes `backend.env` from GitHub secrets (`MN_OPENAI_API_KEY`, `MN_PYANNOTE_API_KEY`). `AGENTS.md` exception documented. `rollout-runbook.md` updated: removed manual key step, added key-rotation section.
   - **Remaining for human**:
     - Workstream B build: Windows-side PyInstaller run (`docs/windows-backend-build.md`)
     - Workstream E (external): E1 Blob update-feed URL, E2 code-signing cert, E3 org keys, E4 `GET /audio` auth (deferred), E5 Intune wrap
