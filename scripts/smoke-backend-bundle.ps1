@@ -32,7 +32,7 @@ $ExePath = Join-Path $BundleDir "notetaker-backend.exe"
 $DataDir = Join-Path $Env:TEMP "mn-smoke-$PID"
 $HealthUrl = "http://127.0.0.1:$Port/health"
 $CreateMeetingUrl = "http://127.0.0.1:$Port/api/v1/meetings"
-$UploadAudioUrl = "http://127.0.0.1:$Port/api/v1/meetings/{0}/upload"
+$UploadAudioUrl = "http://127.0.0.1:$Port/api/v1/meetings/{0}/audio"
 
 if (-not (Test-Path $ExePath)) {
     Write-Error "notetaker-backend.exe not found at $ExePath -- run pyinstaller first"
@@ -69,6 +69,12 @@ function Stop-Backend {
     }
 }
 
+# Any terminating error below must not leave the backend running.
+trap {
+    Stop-Backend
+    break
+}
+
 # ------------------------------------------------------------------
 # 2. Wait for health endpoint (up to 30 s)
 # ------------------------------------------------------------------
@@ -103,7 +109,7 @@ $createBody = @{
     source = "in_person"
 } | ConvertTo-Json
 
-$createResp = Invoke-RestMethod -Uri $CreateMeetingUrl -Method POST -Body $createBody -ContentType "application/json" -UseBasicParsing
+$createResp = Invoke-RestMethod -Uri $CreateMeetingUrl -Method POST -Body $createBody -ContentType "application/json" -UseBasicParsing -Headers @{ "X-MN-User" = "smoke" }
 $meetingId = $createResp.id
 Write-Host "  meeting: $meetingId"
 
