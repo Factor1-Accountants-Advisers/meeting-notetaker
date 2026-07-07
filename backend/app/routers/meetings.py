@@ -304,8 +304,8 @@ async def email_notes(
     calendar recordings go to Graph attendees; manual/ad-hoc recordings go to
     the recorder. SharePoint and Teams delivery are later slices.
     """
-    meeting, participants, segments, summary, action_items = _delivery_artifacts(meeting_id)
     require(meeting_id, actor, AccessRole.editor)
+    meeting, participants, segments, summary, action_items = _delivery_artifacts(meeting_id)
 
     recipients = _email_recipients(meeting, body.recorder_email)
     if not recipients:

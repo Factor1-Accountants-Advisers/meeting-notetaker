@@ -122,8 +122,9 @@ function spawnChild(): void {
     MN_DATA_DIR: dataDir,
   }
 
-  // Merge %PROGRAMDATA% credentials file if present (C4).
-  const credsEnv = loadProgramDataEnv()
+  // Two-layer credentials: bundled team keys (shipped in installer) then
+  // %PROGRAMDATA% per-machine overrides (key-rotation path, wins on conflict).
+  const credsEnv = loadCredentials(join(process.resourcesPath, 'backend'))
   Object.assign(env, credsEnv)
 
   logger().info('[supervisor] spawning backend', { exePath, cwd, dataDir })
@@ -191,24 +192,17 @@ async function restartWithBackoff(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// %PROGRAMDATA% credentials file (C4)
+// Credentials — two-layer loading (C5)
 // ---------------------------------------------------------------------------
 
-function loadProgramDataEnv(): Record<string, string> {
-  const envPath = join(
-    process.env.PROGRAMDATA ?? 'C:\\ProgramData',
-    'Factor1',
-    'MeetingNotetaker',
-    'backend.env'
-  )
-
-  if (!existsSync(envPath)) {
-    logger().info('[supervisor] no credentials file at %PROGRAMDATA% — using stubs', { path: envPath })
-    return {}
-  }
-
+/**
+ * Parse a KEY=VALUE env file (``#`` comments, CRLF-tolerant).
+ * Returns parsed entries; never logs values or key names with values.
+ */
+function parseEnvFile(path: string): Record<string, string> {
+  if (!existsSync(path)) return {}
   try {
-    const content = readFileSync(envPath, 'utf-8')
+    const content = readFileSync(path, 'utf-8')
     const env: Record<string, string> = {}
     for (const line of content.split(/\r?\n/)) {
       const trimmed = line.trim()
@@ -219,15 +213,59 @@ function loadProgramDataEnv(): Record<string, string> {
       const value = trimmed.slice(eqIdx + 1).trim()
       if (key) env[key] = value
     }
-    logger().info('[supervisor] loaded credentials file', { path: envPath, keys: Object.keys(env) })
     return env
   } catch (err) {
     logger().error('[supervisor] failed to read credentials file', {
-      path: envPath,
+      path,
       message: err instanceof Error ? err.message : String(err),
     })
     return {}
   }
+}
+
+/**
+ * Load credentials in two layers:
+ * 1. Bundled ``<resources>/backend/backend.env`` — spend-capped team keys
+ *    shipped in the installer (exec-approved per plan doc §3 amendment).
+ * 2. ``%PROGRAMDATA%\\Factor1\\MeetingNotetaker\\backend.env`` — per-machine
+ *    overrides (key-rotation path; wins on conflict).
+ *
+ * Logs file paths only — never key names or values.
+ */
+function loadCredentials(bundleDir: string): Record<string, string> {
+  const bundledPath = join(bundleDir, 'backend.env')
+  const programDataPath = join(
+    process.env.PROGRAMDATA ?? 'C:\\ProgramData',
+    'Factor1',
+    'MeetingNotetaker',
+    'backend.env'
+  )
+
+  const layers: { path: string; found: boolean }[] = [
+    { path: bundledPath, found: false },
+    { path: programDataPath, found: false },
+  ]
+
+  // Layer 1: bundled team keys (base).
+  const result: Record<string, string> = {}
+  const bundled = parseEnvFile(bundledPath)
+  if (Object.keys(bundled).length > 0) {
+    layers[0].found = true
+    Object.assign(result, bundled)
+  }
+
+  // Layer 2: %PROGRAMDATA% overrides (wins on conflict).
+  const programData = parseEnvFile(programDataPath)
+  if (Object.keys(programData).length > 0) {
+    layers[1].found = true
+    Object.assign(result, programData)
+  }
+
+  logger().info('[supervisor] credentials layers', {
+    layers: layers.map((l) => ({ path: l.path, found: l.found })),
+  })
+
+  return result
 }
 
 // ---------------------------------------------------------------------------
