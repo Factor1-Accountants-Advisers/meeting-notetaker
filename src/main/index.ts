@@ -22,6 +22,7 @@ import { registerRecordingStorageIpc } from './recording-storage'
 import { ensureDefaultAutoLaunchEnabled, isBackgroundLaunch, registerStartupIpc } from './startup'
 import { createTray, destroyTray, updateTrayMenu } from './tray'
 import { checkForUpdatesOnLaunch, registerUpdaterIpc } from './updater'
+import { startBackendSupervisor, stopBackendSupervisor } from './backend-supervisor'
 import { createWindow } from './window'
 import type { GraphEventDecision } from './graph/types'
 
@@ -171,6 +172,13 @@ app.whenReady().then(() => {
   createWindow({ showOnReady: !isBackgroundLaunch() })
   createTray(showMainWindow)
 
+  // Packaged builds: spawn + supervise backend (dev uses external uvicorn).
+  startBackendSupervisor().catch((err) => {
+    logger().error('[app] backend supervisor failed to start', {
+      message: err instanceof Error ? err.message : String(err)
+    })
+  })
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
@@ -183,5 +191,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   cleanupRecordingIpc()
+  stopBackendSupervisor()
   destroyTray()
 })

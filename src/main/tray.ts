@@ -65,6 +65,16 @@ export function destroyTray(): void {
   showWindowCallback = null
 }
 
+/** Set an alert tooltip override (e.g. \"Backend unavailable\"). Pass null to restore. */
+export function setTrayAlert(message: string | null): void {
+  if (!tray) return
+  if (message) {
+    tray.setToolTip(`Meeting Notetaker — ⚠ ${message}`)
+  } else {
+    updateTrayMenu() // restores normal tooltip
+  }
+}
+
 export function setAutoLaunch(enabled: boolean): void {
   app.setLoginItemSettings({
     openAtLogin: enabled,
