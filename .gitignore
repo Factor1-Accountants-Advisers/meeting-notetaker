@@ -10,3 +10,7 @@ recordings
 !.env.example
 
 .claude/settings.local.json
+
+# Credentials file — never commit real keys (injected at build time only).
+backend.env
+backend/backend.env
