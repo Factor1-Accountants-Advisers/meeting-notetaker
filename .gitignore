@@ -14,3 +14,4 @@ recordings
 # Credentials file — never commit real keys (injected at build time only).
 backend.env
 backend/backend.env
+backend/third_party/ffmpeg/
