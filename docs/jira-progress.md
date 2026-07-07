@@ -263,7 +263,22 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Keep open until signed/package rollout, production provider ownership, and stakeholder handoff/comms are complete.
 
 - [ ] `IN-81` — Packaging, signing, and installer update
-  - Local unpacked build works, but signed installer, CI release, and Intune deployment validation still need final proof.
+  - **Implementation complete** (pending Windows build + signed CI release).
+  - **A1** (415c391): `MN_DATA_DIR` config + `paths.py` resolver. Dev behavior byte-identical when unset.
+  - **A2** (6c95017): replaced all 4 repo-relative path constants with `paths.py` functions. 6 files, 0 import-order traps.
+  - **A3** (0c798f5): test isolation via `conftest_env.py` — `MN_DATA_DIR` → temp dir before any `app.*` import. 35 tests pass, `store.json` mtime + checksum unchanged across consecutive runs.
+  - **D1+D2** (a552198): SharePoint 401 guard (configured drive + no token → `sharepoint_status=failed` + 401) + `email_notes` ACL (`require(editor)`). 3 new tests.
+  - **D3** (887beef): OAuth `state` parameter (16-byte base64url) in MSAL auth code flow. Mismatched state → 404 in callback.
+  - **B1** (53b36d1): `run_backend.py` entry point, PyInstaller onedir `.spec`, `requirements-build.txt`.
+  - **B2** (4a644cb): `find_ffmpeg()` helper (env → bundled → PATH), replaced both `shutil.which("ffmpeg")` call sites, `third_party/README.md`.
+  - **B3** (7f35102): `smoke-backend-bundle.ps1` (start bundle → health poll → upload → pipeline check → ffmpeg check → cleanup), silent webm fixture, Windows build doc, CI `build-backend` job in `release.yml`.
+  - **C1** (6f094e3): `extraResources` in `electron-builder.yml`, `package:win` gate script.
+  - **C2** (d09e464): backend supervisor (spawn → health poll 20s → restart backoff 1s/5s/25s / max 3 in 5 min → tray alert + error dialog). `before-quit` SIGTERM + 3s force-kill. Dev (`app.isPackaged=false`) untouched.
+  - **C4** (5d70e74): `backend.env.template` (placeholders only), `docs/rollout-runbook.md`, supervisor-side `%PROGRAMDATA%` env file parser.
+  - **Remaining for human**:
+    - Workstream B build: Windows-side PyInstaller run (`docs/windows-backend-build.md`)
+    - Workstream E (external): E1 Blob update-feed URL, E2 code-signing cert, E3 org keys, E4 `GET /audio` auth (deferred), E5 Intune wrap
+    - Workstream F: manual verification checklist (see `docs/rollout-runbook.md` sanity checklist)
 
 - [ ] `IN-82` — Confirm PyannoteAI API availability, credentials, and costs for production
   - Development key works. Still needs org-owned account, billing owner, production data/privacy confirmation, and approved secret storage.
