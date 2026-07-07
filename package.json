@@ -16,7 +16,8 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "verify:graph": "esbuild scripts/verify-graph-fixtures.ts --bundle --platform=node --format=cjs --outfile=out/verify-graph-fixtures.cjs --log-level=error --external:electron && node out/verify-graph-fixtures.cjs",
     "package": "electron-vite build && electron-builder",
-    "package:dir": "electron-vite build && electron-builder --dir"
+    "package:dir": "electron-vite build && electron-builder --dir",
+    "package:win": "node -e \"const fs=require('fs');const p='backend/dist/notetaker-backend/notetaker-backend.exe';if(!fs.existsSync(p)){console.error('Backend bundle missing: '+p+' — run backend PyInstaller build first');process.exit(1)}\" && electron-vite build && electron-builder --win"
   },
   "dependencies": {
     "@azure/msal-node": "^2.16.3",
