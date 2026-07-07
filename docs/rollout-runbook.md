@@ -1,7 +1,8 @@
 # Test-team rollout runbook
 
-Target: 4-person test team (David + 3 accountants).  Each person gets a
-Windows machine with the app installed manually — no Intune, no group policy.
+Target: test team — Benjamin Bryant, David Ahlhaus, Jose T (plus Joseph's
+own machine).  Each person gets a Windows machine with the app installed
+manually — no Intune, no group policy.
 
 ## Pre-flight (Joseph or David, once per machine)
 
@@ -29,24 +30,36 @@ Windows machine with the app installed manually — no Intune, no group policy.
    - After consent, the browser shows "You can close this window."
    - The app displays the user's name and email.
 
-2. **Configure audio**
+2. **Configure audio** — read this whole step; it prevents the two
+   known audio pitfalls.
    - Open **Settings → Audio Setup**.
    - Select a microphone.  Speak to verify the level meter moves.
    - Leave system audio capture enabled for Teams/Zoom meetings.
+   - **Use a wired or built-in microphone during recorded calls.**
+     Bluetooth headsets (AirPods etc.) can silently record nothing while
+     a Teams call holds the headset's hands-free profile.  If the red
+     "Microphone appears silent" banner appears while recording, your
+     voice is NOT being captured — switch mic and restart the recording.
+   - **When testing with a second device in the same room** (e.g. joining
+     the same Teams call from a phone), mute the second device's
+     microphone.  An open second mic feeds your voice back through the
+     call and every word appears twice in the transcript.
 
-3. **Enroll voiceprints**
-   - Open **Settings → People**.
-   - Click **Enroll Voiceprint**.
-   - Follow the prompt: read the displayed sentence aloud 2–3 times.
-   - Enrollment must complete with a success confirmation.
-   - Repeat for 2 additional colleagues (3 enrolled minimum per the
-     Slice 1 plan).
+3. **Voiceprints**
+   - Joseph, David, and Benjamin are **pre-enrolled** — the installer
+     seeds their voiceprints on first launch.  Open **People** and verify
+     all three appear.
+   - **Jose T only**: click **Enroll Voiceprint**, read the displayed
+     sentence aloud for each of the 3 clips, and confirm the success
+     message.  Enroll with the same wired/built-in mic used for
+     recording.
 
 4. **Record a test meeting**
    - **Manual**: Click **Record** on the Home screen, speak for ~30
      seconds, click **Stop**.
-   - Wait for the pipeline to finish (Processing → Ready).  Stub
-     providers will produce a generic transcript; that's expected.
+   - Wait for the pipeline to finish (Processing → Ready).  Real
+     providers are bundled — expect an actual transcript of what you
+     said, attributed to your name (not "Unknown").
    - Verify the meeting appears with a transcript.
 
 5. **Send transcript email** (requires Graph sign-in)
@@ -60,7 +73,8 @@ Windows machine with the app installed manually — no Intune, no group policy.
 - [ ] Tray icon visible; tooltip shows "Idle" (not "Backend unavailable")
 - [ ] No "sample data" notice anywhere in the UI
 - [ ] Microsoft sign-in completes successfully
-- [ ] Voiceprint enrollment succeeds (3 people)
+- [ ] People screen lists pre-seeded voiceprints (Joseph, David, Benjamin)
+- [ ] Voiceprint enrollment succeeds for Jose T (3 clips)
 - [ ] Manual recording → pipeline completes → transcript visible
 - [ ] Email sends after Graph sign-in
 - [ ] **Live auto-start**: schedule a Teams meeting → app in tray →
