@@ -57,6 +57,18 @@ $env:MN_BACKEND_PORT = $Port
 
 $proc = Start-Process -FilePath $ExePath -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $Env:TEMP "mn-smoke-stdout-$PID.log") -RedirectStandardError (Join-Path $Env:TEMP "mn-smoke-stderr-$PID.log")
 
+# Under some hosts (e.g. WSL interop) the -PassThru object can carry a null
+# Id, and a null -Id binding error is terminating despite -ErrorAction.
+# Fall back to killing by image name so cleanup never fails the smoke.
+function Stop-Backend {
+    if ($proc -and $proc.Id) {
+        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    } else {
+        Get-Process -Name "notetaker-backend" -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # ------------------------------------------------------------------
 # 2. Wait for health endpoint (up to 30 s)
 # ------------------------------------------------------------------
@@ -78,7 +90,7 @@ for ($i = 0; $i -lt 30; $i++) {
 
 if (-not $healthy) {
     Write-Error "Backend failed to become healthy within 30 s"
-    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    Stop-Backend
     exit 1
 }
 
@@ -128,7 +140,7 @@ for ($i = 0; $i -lt 30; $i++) {
 
 if (-not $done) {
     Write-Error "Pipeline did not reach terminal state within 60 s"
-    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    Stop-Backend
     exit 1
 }
 
@@ -140,7 +152,7 @@ Write-Host "[5/5] Assertions..."
 # Pipeline reached a terminal state.
 if ($meeting.pipeline_status -ne "ready" -and $meeting.pipeline_status -ne "failed") {
     Write-Error "Expected pipeline to be ready or failed, got $($meeting.pipeline_status)"
-    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    Stop-Backend
     exit 1
 }
 Write-Host "  [PASS] pipeline terminal state: $($meeting.pipeline_status)"
@@ -151,7 +163,7 @@ Write-Host "  [PASS] pipeline terminal state: $($meeting.pipeline_status)"
 # means ffmpeg never ran (a null/absent check would pass vacuously).
 if ($meeting.recorder_audio_missing -ne $true) {
     Write-Error "recorder_audio_missing=$($meeting.recorder_audio_missing) — bundled ffmpeg did not run on the silent fixture"
-    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    Stop-Backend
     exit 1
 }
 Write-Host "  [PASS] bundled ffmpeg executed: silent fixture flagged recorder_audio_missing=True"
@@ -159,13 +171,12 @@ Write-Host "  [PASS] bundled ffmpeg executed: silent fixture flagged recorder_au
 # Cleanup
 Write-Host ""
 Write-Host "=== Stopping backend ==="
-Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-Write-Host "SMOKE PASSED"
-exit 0
+Stop-Backend
 
-# Verify process is gone and port released.
+# Verify the backend is gone (by image name — $proc.Id can be null under
+# WSL interop hosts).
 Start-Sleep -Seconds 2
-$stillRunning = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
+$stillRunning = Get-Process -Name "notetaker-backend" -ErrorAction SilentlyContinue
 if ($stillRunning) {
     Write-Error "Backend process still running after stop"
     exit 1
@@ -174,3 +185,4 @@ Write-Host "  [PASS] backend process stopped"
 
 Write-Host ""
 Write-Host "=== ALL SMOKE CHECKS PASSED ==="
+exit 0
