@@ -26,9 +26,14 @@ a = Analysis(
     binaries=[],
     datas=[
         # Ship ffmpeg.exe alongside the frozen backend.
-        (
-            str(Path(__file__).resolve().parent / "third_party" / "ffmpeg" / "ffmpeg.exe"),
-            "ffmpeg",
+        # Conditional: only included when the binary exists locally.
+        *(
+            [(
+                str(Path(SPECPATH).parent / "third_party" / "ffmpeg" / "ffmpeg.exe"),
+                "ffmpeg",
+            )]
+            if (Path(SPECPATH).parent / "third_party" / "ffmpeg" / "ffmpeg.exe").exists()
+            else []
         ),
     ],
     hiddenimports=[
