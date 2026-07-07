@@ -17,9 +17,12 @@ if (!fs.existsSync(bundleExe)) {
 // 2. ffmpeg must be inside the bundle — the spec includes it conditionally,
 // so a build without backend/third_party/ffmpeg/ffmpeg.exe would otherwise
 // ship silently broken dual-track merging and silence detection.
-const bundleFfmpeg = 'backend/dist/notetaker-backend/ffmpeg/ffmpeg.exe'
-if (!fs.existsSync(bundleFfmpeg)) {
-  console.error('ffmpeg missing from bundle: ' + bundleFfmpeg)
+const ffmpegCandidates = [
+  'backend/dist/notetaker-backend/_internal/ffmpeg/ffmpeg.exe', // PyInstaller 6.x onedir
+  'backend/dist/notetaker-backend/ffmpeg/ffmpeg.exe', // older onedir layout
+]
+if (!ffmpegCandidates.some((p) => fs.existsSync(p))) {
+  console.error('ffmpeg missing from bundle (checked: ' + ffmpegCandidates.join(', ') + ')')
   console.error('Download ffmpeg per docs/windows-backend-build.md step 4, then rebuild the bundle.')
   process.exit(1)
 }

@@ -39,11 +39,19 @@ def find_ffmpeg() -> str | None:
     if explicit and Path(explicit).exists():
         return explicit
 
-    # PyInstaller onedir: data files land next to the executable.
+    # PyInstaller: data files land in _MEIPASS (onedir 6.x: the _internal
+    # dir; onefile: the temp extraction dir). Older layouts put them next
+    # to the executable — check both.
     if getattr(sys, "frozen", False):
-        bundled = Path(sys.executable).parent / "ffmpeg" / "ffmpeg.exe"
-        if bundled.exists():
-            return str(bundled)
+        roots = []
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            roots.append(Path(meipass))
+        roots.append(Path(sys.executable).parent)
+        for root in roots:
+            bundled = root / "ffmpeg" / "ffmpeg.exe"
+            if bundled.exists():
+                return str(bundled)
 
     return shutil.which("ffmpeg")
 
