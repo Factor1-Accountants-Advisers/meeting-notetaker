@@ -7,7 +7,7 @@ Starts the frozen ``notetaker-backend.exe`` with a temporary data directory,
 verifies the health endpoint, uploads a short webm recording, waits for the
 pipeline to reach a terminal state, checks that ffmpeg volumedetect ran, and
 kills the process.  Designed to pass on a machine with **no** Python and **no**
-ffmpeg on PATH — the bundle ships its own ffmpeg.
+ffmpeg on PATH -- the bundle ships its own ffmpeg.
 
 .PARAMETER BundleDir
 Path to the ``backend/dist/notetaker-backend/`` directory.
@@ -35,7 +35,7 @@ $CreateMeetingUrl = "http://127.0.0.1:$Port/api/v1/meetings"
 $UploadAudioUrl = "http://127.0.0.1:$Port/api/v1/meetings/{0}/upload"
 
 if (-not (Test-Path $ExePath)) {
-    Write-Error "notetaker-backend.exe not found at $ExePath — run pyinstaller first"
+    Write-Error "notetaker-backend.exe not found at $ExePath -- run pyinstaller first"
     exit 1
 }
 
@@ -162,7 +162,7 @@ Write-Host "  [PASS] pipeline terminal state: $($meeting.pipeline_status)"
 # True. The schema defaults this field to False, so anything other than True
 # means ffmpeg never ran (a null/absent check would pass vacuously).
 if ($meeting.recorder_audio_missing -ne $true) {
-    Write-Error "recorder_audio_missing=$($meeting.recorder_audio_missing) — bundled ffmpeg did not run on the silent fixture"
+    Write-Error "recorder_audio_missing=$($meeting.recorder_audio_missing) -- bundled ffmpeg did not run on the silent fixture"
     Stop-Backend
     exit 1
 }
@@ -173,7 +173,7 @@ Write-Host ""
 Write-Host "=== Stopping backend ==="
 Stop-Backend
 
-# Verify the backend is gone (by image name — $proc.Id can be null under
+# Verify the backend is gone (by image name -- $proc.Id can be null under
 # WSL interop hosts).
 Start-Sleep -Seconds 2
 $stillRunning = Get-Process -Name "notetaker-backend" -ErrorAction SilentlyContinue
