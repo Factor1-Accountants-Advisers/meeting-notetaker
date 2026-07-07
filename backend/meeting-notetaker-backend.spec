@@ -26,13 +26,16 @@ a = Analysis(
     binaries=[],
     datas=[
         # Ship ffmpeg.exe alongside the frozen backend.
-        # Conditional: only included when the binary exists locally.
+        # SPECPATH is the spec file's own directory (backend/), so third_party
+        # is a direct child — no .parent hop.
+        # Conditional: only included when the binary exists locally; the
+        # prepackage.cjs gate rejects any bundle built without it.
         *(
             [(
-                str(Path(SPECPATH).parent / "third_party" / "ffmpeg" / "ffmpeg.exe"),
+                str(Path(SPECPATH) / "third_party" / "ffmpeg" / "ffmpeg.exe"),
                 "ffmpeg",
             )]
-            if (Path(SPECPATH).parent / "third_party" / "ffmpeg" / "ffmpeg.exe").exists()
+            if (Path(SPECPATH) / "third_party" / "ffmpeg" / "ffmpeg.exe").exists()
             else []
         ),
     ],
