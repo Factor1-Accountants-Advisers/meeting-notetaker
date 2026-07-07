@@ -257,6 +257,13 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Renderer automatically emails after the ready poll succeeds and shows transcript emailed / retry states.
   - Verified: email endpoint returns `{recipients: [...], sent_at: ...}`; live smoke returned `joseph@example.com` for a manual recording.
 
+
+- [x] `IN-81` addendum — installer built and verified (2026-07-07)
+  - `Meeting Notetaker-2.0.0-setup.exe` built via `package:win` at `53d7438`; packaged output verified to contain `resources/backend/backend.env`, bundled ffmpeg (`_internal/ffmpeg/ffmpeg.exe`), and `seed-data/voiceprints.json`.
+  - Build-chain fixes landed en route: spec `SPECPATH` off-by-one (`f12be83`), `find_ffmpeg` PyInstaller-6 `_MEIPASS` layout (`399e4a5`), smoke test vacuous assertion replaced with real silent-opus fixture asserting `recorder_audio_missing=True` (`53d7438`).
+  - Bundle smoke passed on a machine with no PATH ffmpeg — genuine bundled-ffmpeg execution proof.
+  - Signed installer + CI release validation remain open (cert pending, E2).
+
 ## Remaining open / not yet Jira-closable
 
 - [ ] `IN-64` — Parent Slice 1 handoff
