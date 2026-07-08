@@ -11,6 +11,7 @@ from this module.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 import urllib.error
@@ -20,6 +21,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_API_BASE_URL = "https://api.pyannote.ai"
 TERMINAL_STATUSES = {"succeeded", "failed", "canceled", "cancelled"}
@@ -107,19 +110,41 @@ class PyannoteAIClient:
         # /v1/media/input but are rejected by /v1/voiceprint. Keep the object
         # key flat and unique.
         media_url = f"media://{safe_prefix}-{uuid4().hex}{safe_suffix}"
-        upload = self.request("POST", "/v1/media/input", {"url": media_url})
-        upload_url = upload.get("url")
-        if not isinstance(upload_url, str):
-            raise PyannoteAIError("pyannoteAI media API did not return an upload URL")
-        self.request(
-            "PUT",
-            upload_url,
-            raw_body=data,
-            headers={"Content-Type": content_type},
-            signed_url=True,
-            timeout=120,
-        )
-        return media_url
+        # Large uploads on constrained links (laptop Wi-Fi, WSL NAT under a
+        # live Teams call) stall past the socket timeout — retry the whole
+        # presign+PUT with backoff before failing the pipeline. Observed live
+        # 2026-07-07: 7-min recording, ~83 KB/s uplink, two "write operation
+        # timed out" failures that a retry would have absorbed.
+        attempts = 3
+        backoffs = [5, 15]
+        last_error: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                upload = self.request("POST", "/v1/media/input", {"url": media_url})
+                upload_url = upload.get("url")
+                if not isinstance(upload_url, str):
+                    raise PyannoteAIError("pyannoteAI media API did not return an upload URL")
+                self.request(
+                    "PUT",
+                    upload_url,
+                    raw_body=data,
+                    headers={"Content-Type": content_type},
+                    signed_url=True,
+                    timeout=300,
+                )
+                return media_url
+            except PyannoteAIError as exc:
+                last_error = exc
+                if attempt < attempts - 1:
+                    delay = backoffs[min(attempt, len(backoffs) - 1)]
+                    logger.warning(
+                        "pyannoteAI media upload attempt %d/%d failed (%s); retrying in %ds",
+                        attempt + 1, attempts, exc, delay,
+                    )
+                    time.sleep(delay)
+        raise PyannoteAIError(
+            f"pyannoteAI media upload failed after {attempts} attempts: {last_error}"
+        ) from last_error
 
     def submit_diarize_with_transcription(
         self,
