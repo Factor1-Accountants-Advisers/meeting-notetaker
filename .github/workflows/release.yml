@@ -92,10 +92,22 @@ jobs:
         env:
           MN_OPENAI_API_KEY: ${{ secrets.MN_OPENAI_API_KEY }}
           MN_PYANNOTE_API_KEY: ${{ secrets.MN_PYANNOTE_API_KEY }}
+          # Non-secret rollout config (repository variables). Without the
+          # expansion list, manual/ad-hoc recordings only ever consider the
+          # recorder's own voiceprint (IN-79) — a silent behaviour regression
+          # against locally built installers.
+          MN_VOICEPRINT_EXPANSION_EMPLOYEE_IDS: ${{ vars.MN_VOICEPRINT_EXPANSION_EMPLOYEE_IDS }}
+          MN_VOICEPRINT_EXPANSION_CAP: ${{ vars.MN_VOICEPRINT_EXPANSION_CAP }}
         run: |
           $lines = @()
           if ($env:MN_OPENAI_API_KEY) { $lines += "MN_OPENAI_API_KEY=$env:MN_OPENAI_API_KEY" }
           if ($env:MN_PYANNOTE_API_KEY) { $lines += "MN_PYANNOTE_API_KEY=$env:MN_PYANNOTE_API_KEY" }
+          if ($env:MN_VOICEPRINT_EXPANSION_EMPLOYEE_IDS) {
+            $lines += "MN_VOICEPRINT_EXPANSION_EMPLOYEE_IDS=$env:MN_VOICEPRINT_EXPANSION_EMPLOYEE_IDS"
+            if ($env:MN_VOICEPRINT_EXPANSION_CAP) { $lines += "MN_VOICEPRINT_EXPANSION_CAP=$env:MN_VOICEPRINT_EXPANSION_CAP" }
+          } else {
+            Write-Warning "MN_VOICEPRINT_EXPANSION_EMPLOYEE_IDS repo variable not set — manual recordings will only match the recorder's voiceprint (IN-79 expansion disabled)"
+          }
           if ($lines.Count -eq 0) {
             Write-Error "No credential secrets set — refusing to build a stub installer for release"
             exit 1
