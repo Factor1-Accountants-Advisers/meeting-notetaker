@@ -139,11 +139,17 @@ export function handleRendererRecordingStarted(): void {
   })
 }
 
-export function registerManualRecording(recording: ActiveRecording): void {
+export function registerManualRecording(recording: ActiveRecording & { title?: string }): void {
   clearAutoStartAckTimer()
   pendingAutoStart = null
   const sm = getRecordingStateMachine()
-  sm.startManualRecording({ ...recording, source: 'manual' })
+  // Carry the user-entered title so the tray tooltip reads "Recording: [title]"
+  // for manual recordings too (IN-77).
+  sm.startManualRecording({
+    ...recording,
+    source: 'manual',
+    metadata: recording.title ? { title: recording.title } : recording.metadata
+  })
   logger().info('[recording] manual recording registered', {
     eventId: recording.eventId,
     idempotencyKey: recording.idempotencyKey

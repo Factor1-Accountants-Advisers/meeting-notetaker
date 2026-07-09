@@ -484,7 +484,8 @@ function App(): JSX.Element {
         idempotencyKey: manualKey,
         startTimeUtc: new Date(startedAt).toISOString(),
         endTimeUtc: new Date(startedAt + 8 * 60 * 60 * 1000).toISOString(),
-        source: 'manual'
+        source: 'manual',
+        title
       })
     }
     window.api.debugLog('manual capture start finished', { status })

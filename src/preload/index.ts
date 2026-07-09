@@ -36,6 +36,7 @@ export interface ManualRecordingNotification {
   startTimeUtc: string
   endTimeUtc: string
   source: 'manual'
+  title?: string
 }
 
 // Single funnel to the FastAPI backend via the main process. The renderer
