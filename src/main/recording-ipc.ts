@@ -2,7 +2,7 @@ import { BrowserWindow, Notification } from 'electron'
 import { createRecordingStateMachine, type ActiveRecording, type RecordingStateMachine } from './recording-state'
 import { logger } from './logger'
 
-function meetingTitleFrom(metadata: unknown): string | null {
+export function meetingTitleFrom(metadata: unknown): string | null {
   if (metadata && typeof metadata === 'object' && 'title' in metadata) {
     const title = (metadata as { title?: unknown }).title
     if (typeof title === 'string' && title.trim()) return title.trim()

@@ -21,7 +21,7 @@ import {
 } from './recording-ipc'
 import { registerRecordingStorageIpc } from './recording-storage'
 import { ensureDefaultAutoLaunchEnabled, isBackgroundLaunch, registerStartupIpc } from './startup'
-import { createTray, destroyTray, updateTrayMenu } from './tray'
+import { createTray, destroyTray, setTraySkipped, updateTrayMenu } from './tray'
 import { checkForUpdatesOnLaunch, registerUpdaterIpc } from './updater'
 import { startBackendSupervisor, stopBackendSupervisor } from './backend-supervisor'
 import { createWindow } from './window'
@@ -106,6 +106,7 @@ app.whenReady().then(() => {
           ...hostGateLogContext(gate),
           ...decision.logContext
         })
+        setTraySkipped(decision.metadata?.title ?? null)
         continue
       }
 

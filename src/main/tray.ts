@@ -1,5 +1,5 @@
 import { app, Menu, nativeImage, Tray } from 'electron'
-import { getRecordingStateMachine } from './recording-ipc'
+import { getRecordingStateMachine, meetingTitleFrom } from './recording-ipc'
 import { logger } from './logger'
 
 let tray: Tray | null = null
@@ -25,11 +25,14 @@ export function updateTrayMenu(): void {
 
   const sm = getRecordingStateMachine()
   const state = sm.getState()
+  // Surface the meeting title in the tooltip per IN-77 acceptance criteria.
+  // Auto-recordings carry it in metadata; manual/ad-hoc fall back to generic.
+  const title = meetingTitleFrom(sm.getActiveRecording()?.metadata)
 
   const statusLabel = state === 'recording'
-    ? 'Recording…'
+    ? (title ? `Recording: ${title}` : 'Recording…')
     : state === 'processing'
-      ? 'Processing…'
+      ? (title ? `Processing: ${title}` : 'Processing…')
       : 'Idle'
 
   const contextMenu = Menu.buildFromTemplate([
@@ -63,6 +66,17 @@ export function destroyTray(): void {
     tray = null
   }
   showWindowCallback = null
+}
+
+/**
+ * Show the transient "Skipped: [title] (not host)" tooltip when a meeting is
+ * skipped because the user is not the organiser (IN-77/IN-84). Cleared on the
+ * next recording state change via updateTrayMenu().
+ */
+export function setTraySkipped(title: string | null): void {
+  if (!tray) return
+  const label = title ? `Skipped: ${title} (not host)` : 'Skipped (not host)'
+  tray.setToolTip(`Meeting Notetaker — ${label}`)
 }
 
 /** Set an alert tooltip override (e.g. \"Backend unavailable\"). Pass null to restore. */
