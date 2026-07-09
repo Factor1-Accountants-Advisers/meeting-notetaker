@@ -435,6 +435,67 @@ def _apply_identity_ranges(
         )
         participant_known.setdefault(unknown, False)
 
+    # --- Cluster-level identity propagation (IN-86) ---------------------------
+    # Diarization groups a speaker's turns into one raw cluster, but the
+    # per-segment voiceprint ranges frequently cover only part of it, leaving the
+    # rest as spurious "Speaker N" — one raw cluster splitting into a known person
+    # plus a phantom unknown (observed on Test10: SPEAKER_02 -> David + Unknown).
+    # When a raw cluster carries exactly one known identity, the whole cluster is
+    # that person, so apply it to the cluster's remaining unmatched segments.
+    # Clusters holding two different known identities are left untouched
+    # (ambiguous — never guess; keeps the Unknown-over-wrong-name rule).
+    cluster_identity: dict[str, str] = {}
+    cluster_ambiguous: set[str] = set()
+    cluster_evidence: dict[str, TranscriptSegment] = {}
+    for seg in matched:
+        if not seg.speaker_known:
+            continue
+        raw = seg.raw_speaker or seg.speaker
+        if raw not in cluster_identity:
+            cluster_identity[raw] = seg.speaker
+            cluster_evidence[raw] = seg
+        elif cluster_identity[raw] != seg.speaker:
+            cluster_ambiguous.add(raw)
+
+    def _propagate(seg: TranscriptSegment) -> TranscriptSegment:
+        raw = seg.raw_speaker or seg.speaker
+        if seg.speaker_known or raw in cluster_ambiguous or raw not in cluster_identity:
+            return seg
+        ev = cluster_evidence[raw]
+        return seg.model_copy(
+            update={
+                "speaker": cluster_identity[raw],
+                "speaker_known": True,
+                "speaker_source": "cluster_propagation",
+                "speaker_confidence": ev.speaker_confidence,
+                "speaker_evidence_start_ms": ev.speaker_evidence_start_ms,
+                "speaker_evidence_end_ms": ev.speaker_evidence_end_ms,
+                "speaker_evidence_job_id": ev.speaker_evidence_job_id,
+                "unknown_reason": None,
+            }
+        )
+
+    matched = [_propagate(seg) for seg in matched]
+
+    # Renumber surviving unknown clusters sequentially so absorbed ones leave no
+    # gaps (e.g. "Speaker 1, Speaker 3").
+    relabel: dict[str, str] = {}
+    for seg in matched:
+        if seg.speaker_known:
+            continue
+        raw = seg.raw_speaker or seg.speaker
+        relabel.setdefault(raw, f"Speaker {len(relabel) + 1}")
+    if relabel:
+        matched = [
+            seg
+            if seg.speaker_known
+            else seg.model_copy(update={"speaker": relabel[seg.raw_speaker or seg.speaker]})
+            for seg in matched
+        ]
+
+    participant_known = {}
+    for seg in matched:
+        participant_known[seg.speaker] = participant_known.get(seg.speaker, False) or seg.speaker_known
     participants = [
         MeetingParticipant(name=name, known=known)
         for name, known in participant_known.items()

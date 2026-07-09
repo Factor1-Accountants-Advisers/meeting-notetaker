@@ -315,6 +315,53 @@ class SpeakerIdentityMatchingTests(unittest.TestCase):
         ])
         self.assertEqual(unknown_count, 2)
 
+    def test_cluster_identity_propagates_to_unmatched_segments(self):
+        # IN-86: one raw cluster, identity range covers only the first turn.
+        # The whole cluster is David; the rest must not become a phantom Unknown.
+        segments = [
+            segment("SPEAKER_02", 0, 3000),
+            segment("SPEAKER_02", 3000, 6000),
+            segment("SPEAKER_02", 6000, 9000),
+        ]
+        ranges = [
+            IdentityRange(
+                start_ms=0,
+                end_ms=3000,
+                raw_speaker="SPEAKER_02",
+                display_name="David Ahlhaus",
+                confidence=0.9,
+                source_label="David #1",
+                provider_job_id="job-1",
+            )
+        ]
+        matched, participants, unknown_count = _apply_identity_ranges(segments, ranges)
+        self.assertTrue(all(s.speaker == "David Ahlhaus" and s.speaker_known for s in matched))
+        self.assertEqual(unknown_count, 0)
+        self.assertEqual([(p.name, p.known) for p in participants], [("David Ahlhaus", True)])
+
+    def test_propagation_does_not_leak_across_clusters(self):
+        # A different raw cluster with no match stays Unknown (per-cluster only).
+        segments = [
+            segment("SPEAKER_00", 0, 3000),
+            segment("SPEAKER_01", 3000, 6000),
+        ]
+        ranges = [
+            IdentityRange(
+                start_ms=0,
+                end_ms=3000,
+                raw_speaker="SPEAKER_00",
+                display_name="David Ahlhaus",
+                confidence=0.9,
+                source_label="David #1",
+                provider_job_id="job-1",
+            )
+        ]
+        matched, participants, unknown_count = _apply_identity_ranges(segments, ranges)
+        self.assertEqual(unknown_count, 1)
+        self.assertEqual(matched[0].speaker, "David Ahlhaus")
+        self.assertFalse(matched[1].speaker_known)
+        self.assertEqual(matched[1].speaker, "Speaker 1")
+
 
 if __name__ == "__main__":
     unittest.main()
