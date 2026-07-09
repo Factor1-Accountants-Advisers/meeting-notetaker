@@ -18,6 +18,7 @@ from pathlib import Path
 from uuid import UUID
 
 from app import store
+from app.config import get_settings
 from app.schemas import (
     AccessRole,
     DeliveryStatus,
@@ -39,6 +40,14 @@ STAGE_DELAY_S = 1.5
 
 # Keep strong references to fire-and-forget pipeline tasks until they finish.
 _PIPELINE_TASKS: set[asyncio.Task[None]] = set()
+
+# Watchdog thresholds. A meeting only sits in `queued` for a moment before its
+# task advances it to `processing`, so a long stall there means no live task.
+# `processing` legitimately runs until the provider poll times out, so its
+# limit is that timeout plus a buffer.
+WATCHDOG_INTERVAL_S = 30
+QUEUE_STALL_S = 120
+PROCESSING_STALL_BUFFER_S = 600
 
 
 def audio_path_for(meeting_id: UUID, mime_type: str) -> Path:
@@ -174,6 +183,59 @@ def reconcile_interrupted_pipelines() -> int:
     return changed
 
 
+def sweep_stuck_pipelines() -> int:
+    """Flip meetings stranded mid-pipeline to retryable-failed.
+
+    ``reconcile_interrupted_pipelines`` only runs at startup, so it catches
+    process restarts but not a *live* strand — e.g. an upload that set the
+    meeting to ``queued`` but whose pipeline task never advanced (observed on a
+    long recording whose upload request was interrupted before the task was
+    scheduled). This runs periodically so such a meeting becomes honest and
+    retryable instead of spinning in the UI forever.
+    """
+    settings = get_settings()
+    now = _now()
+    processing_limit = settings.pyannote_poll_timeout_seconds + PROCESSING_STALL_BUFFER_S
+    changed = 0
+    for meeting_id, meeting in list(store.MEETINGS.items()):
+        status = meeting.pipeline_status
+        if status is PipelineStatus.queued:
+            limit = QUEUE_STALL_S
+        elif status is PipelineStatus.processing:
+            limit = processing_limit
+        else:
+            continue
+        reference = (
+            meeting.pipeline_updated_at
+            or meeting.pipeline_started_at
+            or meeting.created_at
+        )
+        if reference is None or (now - reference).total_seconds() <= limit:
+            continue
+        set_pipeline_state(
+            meeting_id,
+            PipelineStatus.failed,
+            PipelineStage.failed,
+            "Processing stalled before finishing. The recording is saved — retry to try again.",
+            error_code="Stalled",
+            error_message=f"No pipeline progress for over {int(limit)}s while {status.value}.",
+        )
+        changed += 1
+    if changed:
+        logger.warning("watchdog marked %s stalled pipeline(s) retryable", changed)
+        store.save_snapshot()
+    return changed
+
+
+async def pipeline_watchdog_loop() -> None:
+    while True:
+        try:
+            sweep_stuck_pipelines()
+        except Exception:
+            logger.exception("pipeline watchdog sweep failed")
+        await asyncio.sleep(WATCHDOG_INTERVAL_S)
+
+
 async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is None:
@@ -219,9 +281,13 @@ async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
         items = await llm.extract_action_items(meeting_id, segments)
         await asyncio.sleep(STAGE_DELAY_S)
 
-        # Unknown-owned items stay unassigned until the speaker is named.
+        # Items owned by an unidentified speaker stay unassigned until named.
+        # Unidentified speakers are labelled "Speaker N" (IN-127); "Unknown"
+        # is kept for backward compatibility with older stored data.
         for item in items:
-            if item.owner is not None and item.owner.startswith("Unknown"):
+            if item.owner is not None and (
+                item.owner.startswith("Speaker ") or item.owner.startswith("Unknown")
+            ):
                 item.owner = None
 
         store.TRANSCRIPTS[meeting_id] = segments

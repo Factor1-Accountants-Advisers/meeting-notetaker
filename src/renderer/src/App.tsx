@@ -279,10 +279,14 @@ function App(): JSX.Element {
       message: 'Recording uploaded. Processing transcript, summary, and action items…'
     })
 
-    let attempts = 0
-    const maxAttempts = 300
+    // Poll until the backend reports a terminal state. The window covers the
+    // backend watchdog's own stall limit (provider timeout + buffer) so a
+    // legitimately long meeting is never abandoned before the backend has
+    // decided ready/failed. A genuine strand now surfaces as backend `failed`.
+    const startedAt = Date.now()
+    const pollWindowMs = 45 * 60 * 1000
     const poll = async (): Promise<void> => {
-      attempts += 1
+      const elapsedMs = Date.now() - startedAt
       const review = await fetchMeetingReview(meetingId)
       const status = review?.meeting.pipeline_status
       const stageMessage = review?.meeting.pipeline_stage_message
@@ -335,7 +339,7 @@ function App(): JSX.Element {
         })
         return
       }
-      if (attempts < maxAttempts) {
+      if (elapsedMs < pollWindowMs) {
         if (stageMessage) {
           setPostCaptureNotice({
             state: 'processing',
@@ -344,7 +348,8 @@ function App(): JSX.Element {
             message: stageMessage
           })
         }
-        window.setTimeout(() => void poll(), 2000)
+        // Fine-grained early on, then ease off for long transcriptions.
+        window.setTimeout(() => void poll(), elapsedMs < 120_000 ? 2000 : 5000)
         return
       }
 
@@ -753,6 +758,7 @@ function App(): JSX.Element {
           postCaptureNotice={postCaptureNotice}
           onDismissPostCaptureNotice={() => setPostCaptureNotice(null)}
           onRetryPostCapture={(meetingId, title) => void retryPostCapture(meetingId, title)}
+          onShowRecording={recording ? () => setView('recording') : undefined}
         />
       )}
       {view === 'people' && <PeopleScreen />}
