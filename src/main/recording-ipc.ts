@@ -1,6 +1,32 @@
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, Notification } from 'electron'
 import { createRecordingStateMachine, type ActiveRecording, type RecordingStateMachine } from './recording-state'
 import { logger } from './logger'
+
+function meetingTitleFrom(metadata: unknown): string | null {
+  if (metadata && typeof metadata === 'object' && 'title' in metadata) {
+    const title = (metadata as { title?: unknown }).title
+    if (typeof title === 'string' && title.trim()) return title.trim()
+  }
+  return null
+}
+
+/** Toast the user that auto-recording began (Jira IN-83). */
+function notifyAutoRecordingStarted(recording: ActiveRecording): void {
+  // Notification is undefined outside the Electron runtime (e.g. the
+  // esbuild-bundled verify:graph harness runs under plain Node).
+  if (!Notification?.isSupported?.()) return
+  const title = meetingTitleFrom(recording.metadata)
+  try {
+    new Notification({
+      title: 'Meeting Notetaker',
+      body: title ? `Recording: ${title}` : 'Auto-recording started'
+    }).show()
+  } catch (err) {
+    logger().warn('[recording] could not show auto-record notification', {
+      message: err instanceof Error ? err.message : String(err)
+    })
+  }
+}
 
 let mainWindow: BrowserWindow | null = null
 let recordingSM: RecordingStateMachine | null = null
@@ -100,6 +126,7 @@ export function handleRendererRecordingStarted(): void {
     clearAutoStartAckTimer()
     sm.startAutoRecording(recording)
     scheduleAutoStop(recording)
+    notifyAutoRecordingStarted(recording)
   }
   logger().info('[recording] renderer confirmed recording started', {
     state: sm.getState()
