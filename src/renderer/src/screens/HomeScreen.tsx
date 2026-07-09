@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { CheckCircle2, Loader2, Mic, Plus, UserPlus, XCircle } from 'lucide-react'
+import { CheckCircle2, Loader2, Mic, Plus, Upload, XCircle } from 'lucide-react'
 import { Card, SectionHeader } from '@renderer/components/ui/Card'
 
 interface HomeProps {
@@ -15,6 +15,7 @@ interface HomeProps {
   } | null
   onDismissPostCaptureNotice?: () => void
   onRetryPostCapture?: (meetingId: string, title: string) => void
+  onShowRecording?: () => void
 }
 
 export function HomeScreen({
@@ -24,7 +25,8 @@ export function HomeScreen({
   recordingState,
   postCaptureNotice,
   onDismissPostCaptureNotice,
-  onRetryPostCapture
+  onRetryPostCapture,
+  onShowRecording
 }: HomeProps): JSX.Element {
   return (
     <div className="flex flex-col gap-4">
@@ -33,6 +35,15 @@ export function HomeScreen({
         <div className="flex items-center gap-2 rounded-md border-[0.5px] border-edge-info bg-bg-info px-3 py-2 text-[13px] text-content-info">
           <span className={`h-2 w-2 rounded-full ${recordingState === 'recording' ? 'animate-pulse bg-edge-danger' : 'bg-edge-info'}`} />
           {recordingState === 'recording' ? 'Auto-recording in progress' : 'Processing recording…'}
+          {recordingState === 'recording' && onShowRecording && (
+            <button
+              type="button"
+              onClick={onShowRecording}
+              className="ml-auto rounded-md border-[0.5px] border-edge-info px-2.5 py-1 text-[12px] text-content-info hover:bg-bg-info"
+            >
+              Show
+            </button>
+          )}
         </div>
       )}
       {postCaptureNotice && (
@@ -139,73 +150,48 @@ function CaptureCard({
   onUpload: (title: string, file: File) => void
 }): JSX.Element {
   const [title, setTitle] = useState('')
-  const [link, setLink] = useState('')
+  const hasTitle = title.trim().length > 0
 
   return (
     <Card>
-      <SectionHeader
-        icon={Plus}
-        title="New meeting"
-        right={
-          <button
-            type="button"
-            className="flex items-center gap-1 text-[12px] font-normal text-content-info"
-          >
-            <UserPlus size={14} strokeWidth={1.75} />
-            Invite team
-          </button>
-        }
-      />
+      <SectionHeader icon={Plus} title="Meeting Title" />
       <input
         type="text"
         value={title}
         onChange={(e) => setTitle(e.target.value)}
-        placeholder="Meeting name (e.g. Tax compliance — Henderson & Co)"
-        className="mb-2.5 h-9 w-full rounded-md border-[0.5px] border-edge-tertiary bg-bg-primary px-3 text-[14px] text-content-primary placeholder:text-content-tertiary focus:border-brand-blue focus:outline-none"
-      />
-      <div className="mb-1.5 flex items-center gap-2 text-[12px] text-content-secondary">
-        Meeting link
-        <span className="flex gap-1.5 text-[11px] text-content-tertiary">Teams · Zoom · Meet</span>
-        <span className="text-[11px] text-content-tertiary">· optional, auto-fills details</span>
-      </div>
-      <input
-        type="text"
-        value={link}
-        onChange={(e) => setLink(e.target.value)}
-        placeholder="https://"
+        placeholder="e.g. Tax compliance — Henderson & Co"
         className="mb-3 h-9 w-full rounded-md border-[0.5px] border-edge-tertiary bg-bg-primary px-3 text-[14px] text-content-primary placeholder:text-content-tertiary focus:border-brand-blue focus:outline-none"
       />
-      <button
-        type="button"
-        disabled={title.trim().length === 0}
-        onClick={() => onStart(title.trim(), link.trim() || null)}
-        className="flex w-full items-center justify-center gap-1.5 rounded-md border-[0.5px] border-edge-info bg-bg-info py-2.5 text-[14px] text-content-info transition-colors hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-45"
-      >
-        <Mic size={16} strokeWidth={1.75} />
-        Start capturing
-      </button>
-      <div className="mt-2 text-center text-[12px] text-content-tertiary">
-        or{' '}
-        <label
-          className={`text-content-info ${
-            title.trim() ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'
-          }`}
-          title={title.trim() ? 'Upload an existing recording' : 'Enter a meeting name first'}
+      <div className="flex gap-2.5">
+        <button
+          type="button"
+          disabled={!hasTitle}
+          onClick={() => onStart(title.trim(), null)}
+          className="flex flex-1 items-center justify-center gap-1.5 rounded-md border-[0.5px] border-edge-info bg-bg-info py-2.5 text-[14px] text-content-info transition-colors hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-45"
         >
-          upload a recording
+          <Mic size={16} strokeWidth={1.75} />
+          Start Recording
+        </button>
+        <label
+          className={`flex items-center justify-center gap-1.5 rounded-md border-[0.5px] border-edge-secondary px-4 py-2.5 text-[14px] text-content-primary ${
+            hasTitle ? 'cursor-pointer hover:bg-bg-secondary' : 'cursor-not-allowed opacity-45'
+          }`}
+          title={hasTitle ? 'Upload an existing recording' : 'Enter a meeting name first'}
+        >
+          <Upload size={16} strokeWidth={1.75} />
+          Upload recording
           <input
             type="file"
             accept="audio/*,video/webm"
             className="hidden"
-            disabled={title.trim().length === 0}
+            disabled={!hasTitle}
             onChange={(e) => {
               const file = e.target.files?.[0]
               if (file) onUpload(title.trim(), file)
               e.target.value = ''
             }}
           />
-        </label>{' '}
-        for this meeting
+        </label>
       </div>
     </Card>
   )
