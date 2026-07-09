@@ -416,7 +416,7 @@ def _apply_identity_ranges(
             participant_known[best.display_name] = True
             continue
 
-        unknown = unknown_names.setdefault(raw_speaker, f"Unknown {len(unknown_names) + 1}")
+        unknown = unknown_names.setdefault(raw_speaker, f"Speaker {len(unknown_names) + 1}")
         unknown_reason = unknown_reasons.setdefault(raw_speaker, reason)
         matched.append(
             seg.model_copy(
@@ -488,7 +488,7 @@ def _unknown_only(
     for seg in segments:
         raw_speaker = seg.raw_speaker or seg.speaker
         if raw_speaker not in label_map:
-            label_map[raw_speaker] = f"Unknown {len(label_map) + 1}"
+            label_map[raw_speaker] = f"Speaker {len(label_map) + 1}"
 
     matched = [
         seg.model_copy(

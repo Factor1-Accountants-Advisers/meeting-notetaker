@@ -205,7 +205,7 @@ class SpeakerIdentityMatchingTests(unittest.TestCase):
         matched, participants, unknown_count = _apply_identity_ranges(segments, ranges, min_confidence=0.62)
 
         self.assertEqual(unknown_count, 1)
-        self.assertEqual(participants[0].name, "Unknown 1")
+        self.assertEqual(participants[0].name, "Speaker 1")
         self.assertFalse(matched[0].speaker_known)
         self.assertEqual(matched[0].raw_speaker, "SPEAKER_00")
         self.assertEqual(matched[0].speaker_source, "unknown")
@@ -227,14 +227,14 @@ class SpeakerIdentityMatchingTests(unittest.TestCase):
         matched, participants, unknown_count = _apply_identity_ranges(segments, ranges)
 
         self.assertEqual(unknown_count, 1)
-        self.assertEqual(participants[0].name, "Unknown 1")
+        self.assertEqual(participants[0].name, "Speaker 1")
         self.assertEqual(matched[0].unknown_reason, "insufficient_overlap")
 
     def test_expansion_merge_preserves_distinct_segments_in_same_cluster(self):
         """Regression: IN-79 expansion merge must not collapse a cluster to one segment."""
         base = [
             TranscriptSegment(
-                speaker="Unknown 1",
+                speaker="Speaker 1",
                 speaker_known=False,
                 text="David's actual first sentence",
                 start_ms=1000,
@@ -242,7 +242,7 @@ class SpeakerIdentityMatchingTests(unittest.TestCase):
                 raw_speaker="SPEAKER_01",
             ),
             TranscriptSegment(
-                speaker="Unknown 1",
+                speaker="Speaker 1",
                 speaker_known=False,
                 text="David's actual second sentence",
                 start_ms=4000,
@@ -250,7 +250,7 @@ class SpeakerIdentityMatchingTests(unittest.TestCase):
                 raw_speaker="SPEAKER_01",
             ),
             TranscriptSegment(
-                speaker="Unknown 2",
+                speaker="Speaker 2",
                 speaker_known=False,
                 text="other speaker text",
                 start_ms=7000,
@@ -273,7 +273,7 @@ class SpeakerIdentityMatchingTests(unittest.TestCase):
             # text/timestamps and remain Unknown rather than inheriting the first
             # known segment object for the whole SPEAKER_01 cluster.
             TranscriptSegment(
-                speaker="Unknown 1",
+                speaker="Speaker 1",
                 speaker_known=False,
                 text="David's actual second sentence",
                 start_ms=4000,
@@ -281,7 +281,7 @@ class SpeakerIdentityMatchingTests(unittest.TestCase):
                 raw_speaker="SPEAKER_01",
             ),
             TranscriptSegment(
-                speaker="Unknown 2",
+                speaker="Speaker 2",
                 speaker_known=False,
                 text="other speaker text",
                 start_ms=7000,
@@ -298,20 +298,20 @@ class SpeakerIdentityMatchingTests(unittest.TestCase):
         self.assertEqual(merged[0].text, "David's actual first sentence")
         self.assertEqual((merged[0].start_ms, merged[0].end_ms), (1000, 3000))
 
-        self.assertEqual(merged[1].speaker, "Unknown 1")
+        self.assertEqual(merged[1].speaker, "Speaker 1")
         self.assertFalse(merged[1].speaker_known)
         self.assertEqual(merged[1].text, "David's actual second sentence")
         self.assertEqual((merged[1].start_ms, merged[1].end_ms), (4000, 6000))
 
-        self.assertEqual(merged[2].speaker, "Unknown 2")
+        self.assertEqual(merged[2].speaker, "Speaker 2")
         self.assertFalse(merged[2].speaker_known)
         self.assertEqual(merged[2].text, "other speaker text")
         self.assertEqual((merged[2].start_ms, merged[2].end_ms), (7000, 8000))
 
         self.assertEqual([(p.name, p.known) for p in participants], [
             ("David Ahlhaus", True),
-            ("Unknown 1", False),
-            ("Unknown 2", False),
+            ("Speaker 1", False),
+            ("Speaker 2", False),
         ])
         self.assertEqual(unknown_count, 2)
 
