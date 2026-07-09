@@ -5,6 +5,7 @@ import { Card, SectionHeader } from '@renderer/components/ui/Card'
 interface HomeProps {
   userName: string
   onStartCapture: (title: string, link: string | null) => void
+  onUploadRecording: (title: string, file: File) => void
   recordingState?: 'idle' | 'recording' | 'processing'
   postCaptureNotice?: {
     state: 'processing' | 'emailing' | 'ready' | 'upload_failed' | 'processing_failed' | 'email_failed'
@@ -19,6 +20,7 @@ interface HomeProps {
 export function HomeScreen({
   userName,
   onStartCapture,
+  onUploadRecording,
   recordingState,
   postCaptureNotice,
   onDismissPostCaptureNotice,
@@ -40,7 +42,7 @@ export function HomeScreen({
           onRetry={onRetryPostCapture}
         />
       )}
-      <CaptureCard onStart={onStartCapture} />
+      <CaptureCard onStart={onStartCapture} onUpload={onUploadRecording} />
     </div>
   )
 }
@@ -130,9 +132,11 @@ function Greeting({ userName }: { userName: string }): JSX.Element {
 }
 
 function CaptureCard({
-  onStart
+  onStart,
+  onUpload
 }: {
   onStart: (title: string, link: string | null) => void
+  onUpload: (title: string, file: File) => void
 }): JSX.Element {
   const [title, setTitle] = useState('')
   const [link, setLink] = useState('')
@@ -180,6 +184,29 @@ function CaptureCard({
         <Mic size={16} strokeWidth={1.75} />
         Start capturing
       </button>
+      <div className="mt-2 text-center text-[12px] text-content-tertiary">
+        or{' '}
+        <label
+          className={`text-content-info ${
+            title.trim() ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'
+          }`}
+          title={title.trim() ? 'Upload an existing recording' : 'Enter a meeting name first'}
+        >
+          upload a recording
+          <input
+            type="file"
+            accept="audio/*,video/webm"
+            className="hidden"
+            disabled={title.trim().length === 0}
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) onUpload(title.trim(), file)
+              e.target.value = ''
+            }}
+          />
+        </label>{' '}
+        for this meeting
+      </div>
     </Card>
   )
 }
