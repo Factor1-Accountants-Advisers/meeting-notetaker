@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 
 MIN_OVERLAP_MS = 800
 DEFAULT_MIN_CONFIDENCE = 0.62
+# A known identity must already cover at least this fraction of a diarization
+# cluster's speech before its label is propagated to the cluster's unmatched
+# segments (IN-86: guards against mislabeling under-separated blended chunks).
+CLUSTER_PROPAGATE_MIN_FRACTION = 0.5
 
 
 class SpeakerMatcher(Protocol):
@@ -447,19 +451,37 @@ def _apply_identity_ranges(
     cluster_identity: dict[str, str] = {}
     cluster_ambiguous: set[str] = set()
     cluster_evidence: dict[str, TranscriptSegment] = {}
+    cluster_total_ms: dict[str, int] = {}
+    cluster_known_ms: dict[str, int] = {}
     for seg in matched:
+        raw = seg.raw_speaker or seg.speaker
+        dur = max(0, seg.end_ms - seg.start_ms)
+        cluster_total_ms[raw] = cluster_total_ms.get(raw, 0) + dur
         if not seg.speaker_known:
             continue
-        raw = seg.raw_speaker or seg.speaker
+        cluster_known_ms[raw] = cluster_known_ms.get(raw, 0) + dur
         if raw not in cluster_identity:
             cluster_identity[raw] = seg.speaker
             cluster_evidence[raw] = seg
         elif cluster_identity[raw] != seg.speaker:
             cluster_ambiguous.add(raw)
 
+    # Only fill a cluster's gaps when the single known identity already covers a
+    # majority of that cluster's speech. If it matched only a minority, the
+    # cluster is likely an under-separated blend of speakers (pyannote lumping
+    # multiple remote voices from a pre-mixed Teams downlink into one chunk), and
+    # spreading one name would mislabel the others — keep them Unknown instead.
+    propagatable = {
+        raw
+        for raw, ident in cluster_identity.items()
+        if raw not in cluster_ambiguous
+        and cluster_total_ms.get(raw, 0) > 0
+        and cluster_known_ms.get(raw, 0) >= CLUSTER_PROPAGATE_MIN_FRACTION * cluster_total_ms[raw]
+    }
+
     def _propagate(seg: TranscriptSegment) -> TranscriptSegment:
         raw = seg.raw_speaker or seg.speaker
-        if seg.speaker_known or raw in cluster_ambiguous or raw not in cluster_identity:
+        if seg.speaker_known or raw not in propagatable:
             return seg
         ev = cluster_evidence[raw]
         return seg.model_copy(

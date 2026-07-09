@@ -153,12 +153,17 @@ class PyannoteAIClient:
         model: str = "precision-2",
         transcription_model: str | None = None,
         language: str | None = None,
+        num_speakers: int | None = None,
     ) -> str:
         payload: dict[str, Any] = {
             "url": media_url,
             "model": model,
             "transcription": True,
         }
+        # Optional known-speaker-count hint (IN-86); improves separation on hard
+        # audio. Only sent when explicitly configured.
+        if isinstance(num_speakers, int) and num_speakers > 0:
+            payload["numSpeakers"] = num_speakers
         transcription_config: dict[str, Any] = {}
         if transcription_model:
             transcription_config["model"] = transcription_model

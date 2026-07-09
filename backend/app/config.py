@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     pyannote_transcription_language: str = ""
     pyannote_poll_interval_seconds: int = 10
     pyannote_poll_timeout_seconds: int = 1800
+    # Optional diarization speaker-count hint (IN-86). 0 = let pyannote decide
+    # (default). Set to a known speaker count to improve separation on hard
+    # audio (e.g. a pre-mixed Teams downlink). Deliberately NOT auto-derived
+    # from Graph attendees: attendees != speakers, and a silent recorder mic
+    # means the attendee count over-estimates the audible speakers.
+    pyannote_num_speakers: int = 0
     pyannote_hf_token: str = ""  # legacy/dev only; not the Slice 1 pyannoteAI API credential
 
     # SharePoint transcript delivery. Empty values use the local locked-folder stand-in.

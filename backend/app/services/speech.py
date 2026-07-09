@@ -89,11 +89,15 @@ class PyannoteAITranscriptionProvider:
                 settings.pyannote_api_endpoint or "https://api.pyannote.ai",
             )
             media_url = client.upload_media_file(audio_path, "meeting-audio")
+            num_speakers = settings.pyannote_num_speakers or None
+            if num_speakers:
+                logger.info("pyannoteAI diarize with numSpeakers hint=%d", num_speakers)
             job_id = client.submit_diarize_with_transcription(
                 media_url,
                 model=settings.pyannote_model_version or "precision-2",
                 transcription_model=settings.pyannote_transcription_model or None,
                 language=settings.pyannote_transcription_language or None,
+                num_speakers=num_speakers,
             )
             result = client.wait_for_job(
                 job_id,

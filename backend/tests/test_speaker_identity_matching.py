@@ -315,9 +315,9 @@ class SpeakerIdentityMatchingTests(unittest.TestCase):
         ])
         self.assertEqual(unknown_count, 2)
 
-    def test_cluster_identity_propagates_to_unmatched_segments(self):
-        # IN-86: one raw cluster, identity range covers only the first turn.
-        # The whole cluster is David; the rest must not become a phantom Unknown.
+    def test_cluster_identity_propagates_when_identity_covers_majority(self):
+        # IN-86: David matched on the majority of a clean over-segmented cluster;
+        # the small unmatched gap must inherit David, not become a phantom Unknown.
         segments = [
             segment("SPEAKER_02", 0, 3000),
             segment("SPEAKER_02", 3000, 6000),
@@ -326,7 +326,7 @@ class SpeakerIdentityMatchingTests(unittest.TestCase):
         ranges = [
             IdentityRange(
                 start_ms=0,
-                end_ms=3000,
+                end_ms=6000,  # covers 2 of 3 segments -> 67% of the cluster
                 raw_speaker="SPEAKER_02",
                 display_name="David Ahlhaus",
                 confidence=0.9,
@@ -338,6 +338,27 @@ class SpeakerIdentityMatchingTests(unittest.TestCase):
         self.assertTrue(all(s.speaker == "David Ahlhaus" and s.speaker_known for s in matched))
         self.assertEqual(unknown_count, 0)
         self.assertEqual([(p.name, p.known) for p in participants], [("David Ahlhaus", True)])
+
+    def test_minority_match_does_not_propagate_across_blended_chunk(self):
+        # IN-86 guard: an under-separated chunk (5 turns) where David matched only
+        # the first turn (20%). Do NOT spread David over the rest — that would
+        # mislabel a possibly-different speaker. The gap stays Unknown.
+        segments = [segment("SPEAKER_02", i * 3000, (i + 1) * 3000) for i in range(5)]
+        ranges = [
+            IdentityRange(
+                start_ms=0,
+                end_ms=3000,  # 1 of 5 segments -> 20% of the cluster
+                raw_speaker="SPEAKER_02",
+                display_name="David Ahlhaus",
+                confidence=0.9,
+                source_label="David #1",
+                provider_job_id="job-1",
+            )
+        ]
+        matched, participants, unknown_count = _apply_identity_ranges(segments, ranges)
+        self.assertEqual(matched[0].speaker, "David Ahlhaus")
+        self.assertTrue(all(not s.speaker_known for s in matched[1:]))
+        self.assertEqual(unknown_count, 1)
 
     def test_propagation_does_not_leak_across_clusters(self):
         # A different raw cluster with no match stays Unknown (per-cluster only).
