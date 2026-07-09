@@ -215,6 +215,7 @@ async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
         )
         llm = get_llm_provider()
         summary = await llm.summarize(segments)
+        summary_html = await llm.summarize_html(segments)
         items = await llm.extract_action_items(meeting_id, segments)
         await asyncio.sleep(STAGE_DELAY_S)
 
@@ -226,6 +227,10 @@ async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
         store.TRANSCRIPTS[meeting_id] = segments
         store.PARTICIPANTS[meeting_id] = participants
         store.SUMMARIES[meeting_id] = summary
+        if summary_html:
+            store.SUMMARY_HTML[meeting_id] = summary_html
+        else:
+            store.SUMMARY_HTML.pop(meeting_id, None)
         for item in items:
             store.ACTION_ITEMS[item.id] = item
 

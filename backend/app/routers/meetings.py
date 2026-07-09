@@ -36,7 +36,11 @@ from app.schemas import (
     SharePointStatus,
     UploadAudioRequest,
 )
-from app.services.email import build_transcript_attachment, get_email_provider
+from app.services.email import (
+    build_meeting_notes_email_html,
+    build_transcript_attachment,
+    get_email_provider,
+)
 from app.services.sharepoint import get_sharepoint_provider, safe_transcript_filename
 from app.services.pipeline import (
     audio_path_for,
@@ -323,8 +327,13 @@ async def email_notes(
         )
 
     set_delivery_state(meeting_id, DeliveryStatus.emailing)
-    note = f"{body.note}\n\n" if body.note else ""
-    email_body = f"{note}{summary}"
+    email_body = build_meeting_notes_email_html(
+        meeting_title=meeting.title,
+        summary_html=store.SUMMARY_HTML.get(meeting_id),
+        summary_text=summary,
+        note=body.note,
+        action_items=action_items,
+    )
 
     transcript_text = _format_transcript(
         segments, meeting.title, participants,
@@ -346,6 +355,7 @@ async def email_notes(
             email_body,
             attachments=attachments,
             access_token=graph_token or None,
+            content_type="HTML",
         )
     except Exception as exc:
         logger.exception("Email delivery failed for %s", meeting_id)
@@ -733,38 +743,38 @@ def _location_label(meeting: Meeting | None) -> str:
     return 'Uploaded recording'
 
 
-def _extract_decisions_from_summary(summary_text: str | None) -> list[str]:
-    if not summary_text:
-        return []
-    results: list[str] = []
-    for line in summary_text.split('\n'):
-        stripped = line.strip()
-        lower = stripped.lower()
-        if 'open question' in lower or 'unresolved' in lower or 'action item' in lower:
-            break
-        if stripped and (stripped.startswith('- ') or stripped.startswith('* ')):
-            results.append(stripped[2:])
-    return results
+def _bullets_under_heading(
+    summary_text: str | None, heading_markers: tuple[str, ...]
+) -> list[str]:
+    """Collect bullet lines that sit under a matching section heading.
 
-
-def _extract_questions_from_summary(summary_text: str | None) -> list[str]:
+    The structured summary uses 'Key discussion' / 'Decisions' / 'Open questions'
+    headings (see llm.SUMMARY_SECTIONS). A non-bullet line acts as a section
+    boundary: it starts collecting when it matches one of the markers and stops
+    collecting otherwise, so bullets from other sections are never mixed in.
+    """
     if not summary_text:
         return []
     results: list[str] = []
     in_section = False
-    for line in (summary_text or '').split('\n'):
+    for line in summary_text.split('\n'):
         stripped = line.strip()
-        lower = stripped.lower()
-        if 'open question' in lower or 'unresolved' in lower:
-            in_section = True
+        is_bullet = stripped.startswith('- ') or stripped.startswith('* ')
+        if not is_bullet and stripped:
+            lower = stripped.lower()
+            in_section = any(marker in lower for marker in heading_markers)
             continue
-        if in_section and not stripped:
-            continue
-        if in_section and (stripped.startswith('- ') or stripped.startswith('* ')):
+        if in_section and is_bullet:
             results.append(stripped[2:])
-        elif in_section and stripped and not stripped.startswith(('- ', '* ')):
-            break
     return results
+
+
+def _extract_decisions_from_summary(summary_text: str | None) -> list[str]:
+    return _bullets_under_heading(summary_text, ('decision',))
+
+
+def _extract_questions_from_summary(summary_text: str | None) -> list[str]:
+    return _bullets_under_heading(summary_text, ('open question', 'unresolved'))
 
 
 @router.post("/{meeting_id}/finalize", response_model=Meeting)
