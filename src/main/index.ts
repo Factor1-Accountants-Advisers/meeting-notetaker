@@ -17,7 +17,8 @@ import {
   handleRendererRecordingStarted,
   handleRendererRecordingStopped,
   registerManualRecording,
-  sendAutoStartRequest
+  sendAutoStartRequest,
+  setRecordingPaused
 } from './recording-ipc'
 import { registerRecordingStorageIpc } from './recording-storage'
 import { ensureDefaultAutoLaunchEnabled, isBackgroundLaunch, registerStartupIpc } from './startup'
@@ -66,6 +67,10 @@ function registerRecordingIpcHandlers(): void {
     updateTrayMenu()
   })
   ipcMain.handle('recording:extend', () => extendAutoStop())
+  ipcMain.on('recording:paused-changed', (_event, paused: boolean) => {
+    setRecordingPaused(Boolean(paused))
+    updateTrayMenu()
+  })
 }
 
 registerRecordingIpcHandlers()

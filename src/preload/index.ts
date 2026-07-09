@@ -133,7 +133,22 @@ const api = {
   /** Extend the auto-stop by one 10-minute increment (IN-117). Returns the new
    * scheduled end time, or null if there is no active auto-recording. */
   extendRecording: (): Promise<{ endTimeUtc: string } | null> =>
-    ipcRenderer.invoke('recording:extend')
+    ipcRenderer.invoke('recording:extend'),
+
+  /** Listen for tray-initiated recording controls (IN-120). Returns unsubscribe. */
+  onTrayRecordingControl: (
+    callback: (action: 'pause' | 'resume' | 'stop') => void
+  ): (() => void) => {
+    const handler = (_event: IpcRendererEvent, data: { action: 'pause' | 'resume' | 'stop' }) =>
+      callback(data.action)
+    ipcRenderer.on('recording:tray-control', handler)
+    return () => ipcRenderer.removeListener('recording:tray-control', handler)
+  },
+
+  /** Tell the main process the recording pause state so the tray menu can show
+   * Pause vs Resume (IN-120). */
+  notifyRecordingPausedChanged: (paused: boolean): void =>
+    ipcRenderer.send('recording:paused-changed', paused)
 }
 
 export type Api = typeof api

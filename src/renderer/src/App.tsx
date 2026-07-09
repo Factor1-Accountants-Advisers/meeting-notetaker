@@ -49,6 +49,13 @@ function App(): JSX.Element {
   const [extending, setExtending] = useState(false)
   const recordingRef = useRef<RecordingSession | null>(null)
   const autoGraphMetadataRef = useRef<GraphMeetingMetadata | null>(null)
+  // Latest pause/resume/stop handlers for the tray-control listener (IN-120),
+  // so the once-registered listener never calls a stale closure.
+  const controlHandlersRef = useRef<{ pause: () => void; resume: () => void; stop: () => void }>({
+    pause: () => {},
+    resume: () => {},
+    stop: () => {}
+  })
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null)
   const [autoRecordingState, setAutoRecordingState] = useState<'idle' | 'recording' | 'processing'>('idle')
   const [submitting, setSubmitting] = useState(false)
@@ -144,6 +151,15 @@ function App(): JSX.Element {
       cancelled = true
     }
   }, [user])
+
+  // Listen for tray-initiated pause/resume/stop controls (IN-120). Registered
+  // once; dispatches through the ref so it always hits the current handlers.
+  useEffect(() => {
+    if (typeof window.api?.onTrayRecordingControl !== 'function') return
+    return window.api.onTrayRecordingControl((action) => {
+      controlHandlersRef.current[action]?.()
+    })
+  }, [])
 
   // Listen for auto-recording commands from the main process (IN-66).
   useEffect(() => {
@@ -592,6 +608,29 @@ function App(): JSX.Element {
     setSubmitting(false)
   }
 
+  const pauseRecording = (): void => {
+    capture.pause()
+    setRecording((s) => (s ? { ...s, pausedAt: Date.now() } : s))
+    window.api.notifyRecordingPausedChanged?.(true)
+  }
+
+  const resumeRecording = (): void => {
+    capture.resume()
+    setRecording((s) =>
+      s && s.pausedAt !== null
+        ? { ...s, pausedAccum: s.pausedAccum + (Date.now() - s.pausedAt), pausedAt: null }
+        : s
+    )
+    window.api.notifyRecordingPausedChanged?.(false)
+  }
+
+  // Keep the tray-control ref pointing at the current handlers each render.
+  controlHandlersRef.current = {
+    pause: pauseRecording,
+    resume: resumeRecording,
+    stop: () => void stopRecording()
+  }
+
   const uploadRecording = async (title: string, file: File): Promise<void> => {
     const created = await createMeeting(title, null, 'upload')
     if (!created) {
@@ -683,18 +722,8 @@ function App(): JSX.Element {
         <RecordingScreen
           session={recording}
           captureStatus={captureStatus}
-          onPause={() => {
-            capture.pause()
-            setRecording((s) => (s ? { ...s, pausedAt: Date.now() } : s))
-          }}
-          onResume={() => {
-            capture.resume()
-            setRecording((s) =>
-              s && s.pausedAt !== null
-                ? { ...s, pausedAccum: s.pausedAccum + (Date.now() - s.pausedAt), pausedAt: null }
-                : s
-            )
-          }}
+          onPause={pauseRecording}
+          onResume={resumeRecording}
           onStop={() => void stopRecording()}
           onExtend={
             recording.scheduledEndUtc && typeof window.api?.extendRecording === 'function'
