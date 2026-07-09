@@ -127,7 +127,12 @@ const api = {
   notifyRecordingStopped: (): void => ipcRenderer.send('recording:stopped'),
 
   /** Notify main process of a recording error. */
-  notifyRecordingError: (message: string): void => ipcRenderer.send('recording:error', message)
+  notifyRecordingError: (message: string): void => ipcRenderer.send('recording:error', message),
+
+  /** Extend the auto-stop by one 10-minute increment (IN-117). Returns the new
+   * scheduled end time, or null if there is no active auto-recording. */
+  extendRecording: (): Promise<{ endTimeUtc: string } | null> =>
+    ipcRenderer.invoke('recording:extend')
 }
 
 export type Api = typeof api

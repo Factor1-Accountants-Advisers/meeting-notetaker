@@ -46,6 +46,7 @@ function App(): JSX.Element {
   const [enrollmentError, setEnrollmentError] = useState<string | null>(null)
   const [view, setView] = useState<View>('home')
   const [recording, setRecording] = useState<RecordingSession | null>(null)
+  const [extending, setExtending] = useState(false)
   const recordingRef = useRef<RecordingSession | null>(null)
   const autoGraphMetadataRef = useRef<GraphMeetingMetadata | null>(null)
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null)
@@ -166,7 +167,8 @@ function App(): JSX.Element {
           source: 'online',
           startedAt: Date.now(),
           pausedAccum: 0,
-          pausedAt: null
+          pausedAt: null,
+          scheduledEndUtc: data.endTimeUtc || null
         })
         setView('recording')
         setAutoRecordingState('recording')
@@ -680,6 +682,22 @@ function App(): JSX.Element {
             )
           }}
           onStop={() => void stopRecording()}
+          onExtend={
+            recording.scheduledEndUtc && typeof window.api?.extendRecording === 'function'
+              ? () => {
+                  setExtending(true)
+                  void window.api
+                    .extendRecording()
+                    .then((res) => {
+                      if (res?.endTimeUtc) {
+                        setRecording((s) => (s ? { ...s, scheduledEndUtc: res.endTimeUtc } : s))
+                      }
+                    })
+                    .finally(() => setExtending(false))
+                }
+              : undefined
+          }
+          extending={extending}
           saving={submitting}
         />
       )}

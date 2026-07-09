@@ -31,10 +31,16 @@ function notifyAutoRecordingStarted(recording: ActiveRecording): void {
 let mainWindow: BrowserWindow | null = null
 let recordingSM: RecordingStateMachine | null = null
 let autoStopTimer: ReturnType<typeof setTimeout> | null = null
+let autoStopReminderTimer: ReturnType<typeof setTimeout> | null = null
+let autoStopEndMs: number | null = null
 let autoStartAckTimer: ReturnType<typeof setTimeout> | null = null
 let autoStartAckTimeoutMs = 15_000
 let pendingAutoStart: ActiveRecording | null = null
 let rendererRecordingReady = false
+
+// IN-117: manual recording extension.
+const EXTEND_INCREMENT_MS = 10 * 60_000
+const END_REMINDER_LEAD_MS = 5 * 60_000
 
 export function getRecordingStateMachine(): RecordingStateMachine {
   if (!recordingSM) recordingSM = createRecordingStateMachine()
@@ -98,7 +104,7 @@ export function sendAutoStopRequest(): void {
     return
   }
 
-  clearAutoStopTimer()
+  resetAutoStopState()
 
   logger().info('[recording] sending auto-stop to renderer', {
     eventId: active.eventId,
@@ -145,7 +151,7 @@ export function registerManualRecording(recording: ActiveRecording): void {
 }
 
 export function handleRendererRecordingStopped(): void {
-  clearAutoStopTimer()
+  resetAutoStopState()
 
   const sm = getRecordingStateMachine()
   const finished = sm.stopRecording()
@@ -161,7 +167,7 @@ export function handleRendererRecordingStopped(): void {
 }
 
 export function handleRendererRecordingError(message: string): void {
-  clearAutoStopTimer()
+  resetAutoStopState()
   clearAutoStartAckTimer()
   pendingAutoStart = null
 
@@ -220,24 +226,77 @@ function clearAutoStartAckTimer(): void {
 }
 
 function scheduleAutoStop(recording: ActiveRecording): void {
+  autoStopEndMs = new Date(recording.endTimeUtc).getTime()
+  rescheduleAutoStopTimers(recording)
+}
+
+/** (Re)arm the auto-stop and 5-min-before reminder timers to `autoStopEndMs`. */
+function rescheduleAutoStopTimers(recording: ActiveRecording): void {
   clearAutoStopTimer()
+  clearAutoStopReminder()
+  if (autoStopEndMs === null) return
 
-  const endMs = new Date(recording.endTimeUtc).getTime()
-  const delayMs = Math.max(0, endMs - Date.now())
-
+  const delayMs = Math.max(0, autoStopEndMs - Date.now())
   logger().info('[recording] scheduling auto-stop', {
     eventId: recording.eventId,
     delayMs,
-    endTimeUtc: recording.endTimeUtc
+    endTimeUtc: new Date(autoStopEndMs).toISOString()
   })
-
   autoStopTimer = setTimeout(() => {
     autoStopTimer = null
-    logger().info('[recording] auto-stop timer fired', {
-      eventId: recording.eventId
-    })
+    logger().info('[recording] auto-stop timer fired', { eventId: recording.eventId })
     sendAutoStopRequest()
   }, delayMs)
+
+  // Bonus (IN-117): remind the user 5 minutes before the scheduled end.
+  const reminderDelay = autoStopEndMs - END_REMINDER_LEAD_MS - Date.now()
+  if (reminderDelay > 0) {
+    autoStopReminderTimer = setTimeout(() => {
+      autoStopReminderTimer = null
+      notifyMeetingEndingSoon(recording)
+    }, reminderDelay)
+  }
+}
+
+/**
+ * Push the scheduled auto-stop out by one increment (IN-117). Returns the new
+ * end time, or null if there is no active auto-recording to extend.
+ */
+export function extendAutoStop(incrementMs: number = EXTEND_INCREMENT_MS): { endTimeUtc: string } | null {
+  const sm = getRecordingStateMachine()
+  const active = sm.getActiveRecording()
+  if (!active || autoStopEndMs === null) {
+    logger().info('[recording] extend ignored: no active auto-recording')
+    return null
+  }
+  // Extend from the later of (scheduled end, now) so a press near the wire
+  // always buys a full increment of usable recording time.
+  autoStopEndMs = Math.max(autoStopEndMs, Date.now()) + incrementMs
+  rescheduleAutoStopTimers(active)
+  const endTimeUtc = new Date(autoStopEndMs).toISOString()
+  logger().info('[recording] recording extended', {
+    eventId: active.eventId,
+    incrementMs,
+    endTimeUtc
+  })
+  return { endTimeUtc }
+}
+
+function notifyMeetingEndingSoon(recording: ActiveRecording): void {
+  if (!Notification?.isSupported?.()) return
+  const title = meetingTitleFrom(recording.metadata)
+  try {
+    new Notification({
+      title: 'Meeting Notetaker',
+      body: title
+        ? `"${title}" is scheduled to end in 5 minutes — press Extend to keep recording.`
+        : 'Recording is scheduled to end in 5 minutes — press Extend to keep recording.'
+    }).show()
+  } catch (err) {
+    logger().warn('[recording] could not show ending-soon notification', {
+      message: err instanceof Error ? err.message : String(err)
+    })
+  }
 }
 
 function clearAutoStopTimer(): void {
@@ -247,8 +306,22 @@ function clearAutoStopTimer(): void {
   }
 }
 
-export function cleanupRecordingIpc(): void {
+function clearAutoStopReminder(): void {
+  if (autoStopReminderTimer) {
+    clearTimeout(autoStopReminderTimer)
+    autoStopReminderTimer = null
+  }
+}
+
+/** Tear down all auto-stop scheduling — used at every terminal transition. */
+function resetAutoStopState(): void {
   clearAutoStopTimer()
+  clearAutoStopReminder()
+  autoStopEndMs = null
+}
+
+export function cleanupRecordingIpc(): void {
+  resetAutoStopState()
   clearAutoStartAckTimer()
   pendingAutoStart = null
   rendererRecordingReady = false

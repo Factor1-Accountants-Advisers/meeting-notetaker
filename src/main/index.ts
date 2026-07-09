@@ -10,6 +10,7 @@ import { initLogger, logger } from './logger'
 import { registerMediaPermissions } from './media-permissions'
 import {
   cleanupRecordingIpc,
+  extendAutoStop,
   getRecordingStateMachine,
   handleRendererRecordingError,
   handleRendererRecordingReady,
@@ -64,6 +65,7 @@ function registerRecordingIpcHandlers(): void {
     handleRendererRecordingError(message)
     updateTrayMenu()
   })
+  ipcMain.handle('recording:extend', () => extendAutoStop())
 }
 
 registerRecordingIpcHandlers()

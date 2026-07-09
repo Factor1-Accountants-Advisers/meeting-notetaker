@@ -1,5 +1,16 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle, CloudOff, Mic, MicOff, Pause, Play, Square, Volume2 } from 'lucide-react'
+import {
+  AlertTriangle,
+  Clock,
+  CloudOff,
+  Mic,
+  MicOff,
+  Pause,
+  Play,
+  Plus,
+  Square,
+  Volume2
+} from 'lucide-react'
 import { Card } from '@renderer/components/ui/Card'
 import { Pill } from '@renderer/components/ui/Pill'
 import type { CaptureStatus } from '@renderer/lib/capture'
@@ -12,6 +23,9 @@ export interface RecordingSession {
   startedAt: number // epoch ms
   pausedAccum: number // total paused ms so far
   pausedAt: number | null // epoch ms when current pause began; null = recording
+  // Scheduled auto-stop time (auto-recordings only). Owned by the main process;
+  // updated here when the user extends. null/undefined for manual recordings.
+  scheduledEndUtc?: string | null
 }
 
 export function elapsedMs(s: RecordingSession, now = Date.now()): number {
@@ -29,12 +43,21 @@ function clock(ms: number): string {
   return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`
 }
 
+function countdown(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  return `${m}:${String(s).padStart(2, '0')}`
+}
+
 interface Props {
   session: RecordingSession
   captureStatus: CaptureStatus | null
   onPause: () => void
   onResume: () => void
   onStop: () => void
+  onExtend?: () => void
+  extending?: boolean
   saving?: boolean
 }
 
@@ -44,6 +67,8 @@ export function RecordingScreen({
   onPause,
   onResume,
   onStop,
+  onExtend,
+  extending,
   saving
 }: Props): JSX.Element {
   const [now, setNow] = useState(Date.now())
@@ -51,11 +76,21 @@ export function RecordingScreen({
   const paused = session.pausedAt !== null
   const isSaving = saving || stopClicked
 
+  const scheduledEndMs = session.scheduledEndUtc ? new Date(session.scheduledEndUtc).getTime() : null
+  const remainingMs = scheduledEndMs !== null ? scheduledEndMs - now : null
+  const endLabel =
+    scheduledEndMs !== null
+      ? new Date(scheduledEndMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+      : null
+
   useEffect(() => {
-    if (paused || isSaving) return
+    // Keep ticking while paused: elapsedMs freezes itself via pause math, but
+    // the scheduled-end countdown is wall-clock (auto-stop fires regardless of
+    // pause), so it must keep counting down.
+    if (isSaving) return
     const id = window.setInterval(() => setNow(Date.now()), 500)
     return () => window.clearInterval(id)
-  }, [paused, isSaving])
+  }, [isSaving])
 
   if (isSaving) {
     return (
@@ -103,6 +138,22 @@ export function RecordingScreen({
           <Pill tone="danger">Recording</Pill>
         )}
 
+        {remainingMs !== null && (
+          <div className="flex items-center gap-1.5 text-[13px] text-content-secondary">
+            <Clock size={13} strokeWidth={1.75} />
+            {remainingMs > 0 ? (
+              <span>
+                <span className="tabular-nums text-content-primary">{countdown(remainingMs)}</span> until
+                scheduled end ({endLabel})
+              </span>
+            ) : (
+              <span className="text-content-warning">
+                Past scheduled end ({endLabel}) — extend to keep recording
+              </span>
+            )}
+          </div>
+        )}
+
         <div className="flex gap-2.5">
           {paused ? (
             <button
@@ -121,6 +172,17 @@ export function RecordingScreen({
             >
               <Pause size={16} strokeWidth={1.75} />
               Pause
+            </button>
+          )}
+          {scheduledEndMs !== null && onExtend && (
+            <button
+              type="button"
+              onClick={onExtend}
+              disabled={extending}
+              className="flex items-center gap-1.5 rounded-md border-[0.5px] border-edge-secondary px-4 py-2.5 text-[14px] text-content-primary hover:bg-bg-secondary disabled:opacity-50"
+            >
+              <Plus size={16} strokeWidth={1.75} />
+              {extending ? 'Extending…' : 'Extend 10 min'}
             </button>
           )}
           <button
