@@ -63,10 +63,12 @@ $proc = Start-Process -FilePath $ExePath -PassThru -NoNewWindow -RedirectStandar
 function Stop-Backend {
     if ($proc -and $proc.Id) {
         Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-    } else {
-        Get-Process -Name "notetaker-backend" -ErrorAction SilentlyContinue |
-            Stop-Process -Force -ErrorAction SilentlyContinue
     }
+    # PyInstaller/uvicorn can outlive the original PassThru handle under WSL
+    # interop. Always sweep the image name as a safety net so smoke failures do
+    # not leave the bundle locked for the next build.
+    Get-Process -Name "notetaker-backend" -ErrorAction SilentlyContinue |
+        Stop-Process -Force -ErrorAction SilentlyContinue
 }
 
 # Any terminating error below must not leave the backend running.
