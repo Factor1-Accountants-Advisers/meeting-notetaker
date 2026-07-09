@@ -74,6 +74,11 @@ ACCESS: dict[UUID, list[MeetingAccessEntry]] = {}
 
 SUMMARIES: dict[UUID, str] = {}
 
+# Rich-text (HTML) rendering of the summary, used for email delivery. Kept
+# separate from the plain-text SUMMARIES so search/UI stay plain and legacy
+# snapshots without this key still load.
+SUMMARY_HTML: dict[UUID, str] = {}
+
 PARTICIPANTS: dict[UUID, list[MeetingParticipant]] = {}
 
 TRANSCRIPTS: dict[UUID, list[TranscriptSegment]] = {}
@@ -93,6 +98,7 @@ def save_snapshot() -> None:
         "meetings": {str(k): v.model_dump(mode="json") for k, v in MEETINGS.items()},
         "action_items": {str(k): v.model_dump(mode="json") for k, v in ACTION_ITEMS.items()},
         "summaries": {str(k): v for k, v in SUMMARIES.items()},
+        "summary_html": {str(k): v for k, v in SUMMARY_HTML.items()},
         "participants": {
             str(k): [p.model_dump(mode="json") for p in v] for k, v in PARTICIPANTS.items()
         },
@@ -118,6 +124,7 @@ def load_snapshot() -> bool:
         meetings = {UUID(k): Meeting.model_validate(v) for k, v in raw["meetings"].items()}
         items = {UUID(k): ActionItem.model_validate(v) for k, v in raw["action_items"].items()}
         summaries = {UUID(k): v for k, v in raw["summaries"].items()}
+        summary_html = {UUID(k): v for k, v in raw.get("summary_html", {}).items()}
         participants = {
             UUID(k): [MeetingParticipant.model_validate(p) for p in v]
             for k, v in raw["participants"].items()
@@ -146,6 +153,8 @@ def load_snapshot() -> bool:
     ACTION_ITEMS.update(items)
     SUMMARIES.clear()
     SUMMARIES.update(summaries)
+    SUMMARY_HTML.clear()
+    SUMMARY_HTML.update(summary_html)
     PARTICIPANTS.clear()
     PARTICIPANTS.update(participants)
     TRANSCRIPTS.clear()

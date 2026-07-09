@@ -8,6 +8,7 @@ runnable without either.
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import urllib.request
 from datetime import date
@@ -20,10 +21,23 @@ from app.schemas import ActionItem, ActionItemStatus, Priority, TranscriptSegmen
 CHUNK_WINDOW_MS = 15 * 60 * 1000
 MAX_CHUNK_CONCURRENCY = 3
 
+# Section headers shared by the plain-text and HTML summary renderers. Keeping
+# them in one place means the minutes parsers in the meetings router can rely on
+# the exact wording.
+SUMMARY_SECTIONS: tuple[tuple[str, str], ...] = (
+    ("key_points", "Key discussion"),
+    ("decisions", "Decisions"),
+    ("open_questions", "Open questions"),
+)
+
 
 class SummaryProvider(Protocol):
     async def summarize(self, segments: list[TranscriptSegment]) -> str:
-        """Generate a concise meeting summary from a labelled transcript."""
+        """Generate a concise plain-text meeting summary from a transcript."""
+        ...
+
+    async def summarize_html(self, segments: list[TranscriptSegment]) -> str | None:
+        """Return a rich-text (HTML) summary fragment, or None if unsupported."""
         ...
 
     async def extract_action_items(
@@ -38,6 +52,9 @@ class StubLLMProvider:
 
     async def summarize(self, segments: list[TranscriptSegment]) -> str:
         return "Summary unavailable — configure MN_OPENAI_API_KEY."
+
+    async def summarize_html(self, segments: list[TranscriptSegment]) -> str | None:
+        return None
 
     async def extract_action_items(
         self, meeting_id: UUID, segments: list[TranscriptSegment]
@@ -90,6 +107,70 @@ def _coerce_priority(value: Any) -> Priority:
     return Priority(text if text in {"high", "medium", "low"} else "medium")
 
 
+def _string_list(value: Any) -> list[str]:
+    """Coerce a model-supplied field into a clean list of non-empty strings."""
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _overview_text(insights: dict[str, Any]) -> str:
+    # `summary` kept as a fallback key for older cached/reduced payloads.
+    return str(insights.get("overview") or insights.get("summary") or "").strip()
+
+
+def _compose_plain_summary(insights: dict[str, Any]) -> str:
+    """Render structured insights into a plain-text summary.
+
+    Used for the in-app summary, search index, and the transcript attachment.
+    The section headers match SUMMARY_SECTIONS so the minutes parsers can read
+    decisions and open questions back out.
+    """
+    overview = _overview_text(insights)
+    lines: list[str] = [overview] if overview else []
+    for key, title in SUMMARY_SECTIONS:
+        items = _string_list(insights.get(key))
+        if not items:
+            continue
+        lines.extend(["", title])
+        lines.extend(f"- {item}" for item in items)
+    return "\n".join(lines).strip() or "No summary was generated."
+
+
+# Inline styling only — email clients (notably Outlook) strip <style> blocks.
+_HTML_FONT = "Segoe UI, Arial, sans-serif"
+_HTML_TEXT = "#1f2937"
+_HTML_MUTED = "#4b5563"
+_HTML_HEADING = "#111827"
+
+
+def _render_summary_html(insights: dict[str, Any]) -> str:
+    """Render structured insights into an escaped HTML fragment for email.
+
+    HTML is generated deterministically here (never taken from the model) so the
+    output is consistent and injection-safe.
+    """
+    parts: list[str] = []
+    overview = _overview_text(insights)
+    if overview:
+        parts.append(
+            f'<p style="margin:0 0 16px;font-family:{_HTML_FONT};font-size:14px;'
+            f'line-height:1.6;color:{_HTML_TEXT};">{html.escape(overview)}</p>'
+        )
+    for key, title in SUMMARY_SECTIONS:
+        items = _string_list(insights.get(key))
+        if not items:
+            continue
+        rows = "".join(f'<li style="margin:0 0 6px;">{html.escape(item)}</li>' for item in items)
+        parts.append(
+            f'<h3 style="margin:20px 0 8px;font-family:{_HTML_FONT};font-size:15px;'
+            f'font-weight:600;color:{_HTML_HEADING};">{html.escape(title)}</h3>'
+            f'<ul style="margin:0 0 16px;padding-left:20px;font-family:{_HTML_FONT};'
+            f'font-size:14px;line-height:1.5;color:{_HTML_MUTED};">{rows}</ul>'
+        )
+    return "".join(parts)
+
+
 class OpenAIProvider:
     """Direct OpenAI API provider (api.openai.com).
 
@@ -111,7 +192,13 @@ class OpenAIProvider:
                 "Ensure system audio is being captured and try a longer recording."
             )
         insights = await self._meeting_insights(segments)
-        return str(insights.get("summary") or "No summary was generated.").strip()
+        return _compose_plain_summary(insights)
+
+    async def summarize_html(self, segments: list[TranscriptSegment]) -> str | None:
+        if len(_segments_to_labelled_transcript(segments)) < 80:
+            return None
+        insights = await self._meeting_insights(segments)
+        return _render_summary_html(insights) or None
 
     async def extract_action_items(
         self, meeting_id: UUID, segments: list[TranscriptSegment]
@@ -203,7 +290,10 @@ class OpenAIProvider:
             "today": date.today().isoformat(),
             "chunks": chunk_results,
             "schema": {
-                "summary": "string",
+                "overview": "string",
+                "key_points": ["string"],
+                "decisions": ["string"],
+                "open_questions": ["string"],
                 "action_items": [
                     {
                         "description": "string",
@@ -215,10 +305,14 @@ class OpenAIProvider:
             },
         }
         return await self._complete_json(
-            "Consolidate chunk-level meeting insights into final notes. "
-            "Deduplicate action items, preserve explicit owners only, use exact speaker display names when owner names appear in the chunks, and return valid JSON only.",
+            "Consolidate chunk-level meeting insights into final, client-ready meeting notes. "
+            "Write 'overview' as a concise 2-4 sentence paragraph in a professional tone. "
+            "Populate 'key_points', 'decisions', and 'open_questions' as short, deduplicated bullet strings "
+            "(omit or leave empty when a section has nothing substantive). "
+            "Deduplicate action items, preserve explicit owners only, use exact speaker display names when "
+            "owner names appear in the chunks. Return plain text in every field (no markdown or HTML) and valid JSON only.",
             payload,
-            max_tokens=1600,
+            max_tokens=1800,
         )
 
     async def _complete_json(self, system_prompt: str, user_payload: dict, *, max_tokens: int) -> dict:
@@ -253,6 +347,9 @@ class AzureOpenAIProvider:
     """Default provider once the Azure OpenAI deployment exists."""
 
     async def summarize(self, segments: list[TranscriptSegment]) -> str:
+        raise NotImplementedError("Azure OpenAI wiring requires a provisioned deployment")
+
+    async def summarize_html(self, segments: list[TranscriptSegment]) -> str | None:
         raise NotImplementedError("Azure OpenAI wiring requires a provisioned deployment")
 
     async def extract_action_items(

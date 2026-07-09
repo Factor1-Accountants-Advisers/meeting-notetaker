@@ -30,7 +30,9 @@ class CaptureEmailProvider:
     def __init__(self, sent):
         self.sent = sent
 
-    async def send_meeting_notes(self, recipients, subject, body, attachments=None, access_token=None):
+    async def send_meeting_notes(
+        self, recipients, subject, body, attachments=None, access_token=None, *, content_type="Text"
+    ):
         self.sent.append(
             {
                 "recipients": recipients,
@@ -38,6 +40,7 @@ class CaptureEmailProvider:
                 "body": body,
                 "attachments": attachments or [],
                 "access_token": access_token,
+                "content_type": content_type,
             }
         )
 
@@ -92,6 +95,9 @@ async def test_manual_ad_hoc_emails_recorder_without_finalise():
     assert len(sent) == 1
     assert sent[0]["recipients"] == ["joseph@example.com"]
     assert sent[0]["attachments"], "transcript attachment missing"
+    assert sent[0]["content_type"] == "HTML", sent[0]["content_type"]
+    assert "<h1" in sent[0]["body"], "email body should be rich HTML"
+    assert "Concise meeting summary." in sent[0]["body"]
 
 
 async def test_calendar_recording_emails_graph_attendees_without_finalise():

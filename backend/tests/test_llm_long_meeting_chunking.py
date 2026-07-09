@@ -41,7 +41,10 @@ class FakeChunkedOpenAIProvider(OpenAIProvider):
                 ],
             }
         return {
-            "summary": "Consolidated summary across chunks.",
+            "overview": "Consolidated summary across chunks.",
+            "key_points": ["Reviewed rollout timeline"],
+            "decisions": ["Proceed with the pilot"],
+            "open_questions": ["Who owns the follow-up?"],
             "action_items": [
                 {
                     "description": "Consolidated action",
@@ -76,13 +79,24 @@ class LongMeetingChunkingTests(unittest.IsolatedAsyncioTestCase):
         segments = [seg(i, i * 10, i * 10 + 4) for i in range(10)]
 
         summary = await provider.summarize(segments)
+        summary_html = await provider.summarize_html(segments)
         actions = await provider.extract_action_items(meeting_id, segments)
 
         chunk_calls = [c for c in provider.calls if c["payload"]["task"] == "chunk_insights"]
         reduce_calls = [c for c in provider.calls if c["payload"]["task"] == "reduce_insights"]
         self.assertGreaterEqual(len(chunk_calls), 4)
         self.assertEqual(len(reduce_calls), 1)
-        self.assertEqual(summary, "Consolidated summary across chunks.")
+        # Plain-text summary keeps the overview plus section headers/bullets so the
+        # minutes parsers can read decisions and open questions back out.
+        self.assertIn("Consolidated summary across chunks.", summary)
+        self.assertIn("Decisions", summary)
+        self.assertIn("- Proceed with the pilot", summary)
+        self.assertIn("Open questions", summary)
+        # HTML summary is code-rendered and escaped (never taken from the model).
+        self.assertIsNotNone(summary_html)
+        self.assertIn("Consolidated summary across chunks.", summary_html)
+        self.assertIn("<li", summary_html)
+        self.assertIn("Proceed with the pilot", summary_html)
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0].meeting_id, meeting_id)
         self.assertEqual(actions[0].priority, Priority.medium)
