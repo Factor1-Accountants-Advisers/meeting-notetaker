@@ -75,7 +75,7 @@ export function TopBar({
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
       <span className="select-none text-[13px] font-medium text-content-secondary">
-        Meeting notetaker
+        Meeting Notetaker
       </span>
 
       <div

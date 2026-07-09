@@ -54,7 +54,7 @@ export function LoginScreen({ onSignedIn }: Props): JSX.Element {
         <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-bg-info text-content-info">
           <AudioWaveform size={24} strokeWidth={1.75} />
         </span>
-        <h1 className="text-[22px] font-medium text-content-primary">Meeting notetaker</h1>
+        <h1 className="text-[22px] font-medium text-content-primary">Meeting Notetaker</h1>
         <p className="text-[12px] text-content-tertiary">Factor1 Accountants &amp; Advisers</p>
       </div>
 
