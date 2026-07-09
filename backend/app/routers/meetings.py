@@ -466,22 +466,33 @@ def _normalise_email(email: str | None) -> str | None:
 def _email_recipients(meeting: Meeting, recorder_email: str | None) -> list[str]:
     """Resolve Jira IN-93/IN-94 recipients.
 
-    Calendar-linked recordings use Graph attendee emails. Manual/ad-hoc/upload
-    recordings fall back to the signed-in recorder email supplied by the app.
-    Preserve first-seen order while deduping case-insensitively.
+    Calendar-linked recordings use Graph attendee emails. The organiser (and
+    the signed-in recorder, who is the organiser for auto-recorded meetings)
+    must also receive the transcript: Graph's ``attendees`` array excludes the
+    organiser, so a scheduled meeting would otherwise email everyone *but* the
+    person who recorded it (Jira IN-94/IN-119). Manual/ad-hoc/upload recordings
+    have no attendees and fall back to the recorder alone. Preserve first-seen
+    order while deduping case-insensitively.
     """
     recipients: list[str] = []
 
+    def _add(candidate: str | None) -> None:
+        email = _normalise_email(candidate)
+        if email and email not in recipients:
+            recipients.append(email)
+
     if meeting.graph_metadata and meeting.graph_metadata.attendees:
         for attendee in meeting.graph_metadata.attendees:
-            email = _normalise_email(attendee.email)
-            if email and email not in recipients:
-                recipients.append(email)
+            _add(attendee.email)
 
-    if not recipients:
-        email = _normalise_email(recorder_email)
-        if email:
-            recipients.append(email)
+    # The organiser always receives their own transcript, even when absent
+    # from the attendees array.
+    if meeting.graph_metadata:
+        _add(meeting.graph_metadata.organizer_email)
+
+    # Signed-in recorder: the sole recipient for ad-hoc, and an organiser
+    # safety net for calendar recordings.
+    _add(recorder_email)
 
     return recipients
 
