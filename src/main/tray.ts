@@ -1,6 +1,8 @@
 import { app, Menu, nativeImage, Tray, type MenuItemConstructorOptions } from 'electron'
 import {
+  extendActiveRecordingFromMain,
   getRecordingStateMachine,
+  hasExtendableRecording,
   isRecordingPaused,
   meetingTitleFrom,
   sendTrayRecordingControl
@@ -47,6 +49,9 @@ export function updateTrayMenu(): void {
           isRecordingPaused()
             ? { label: 'Resume recording', click: () => sendTrayRecordingControl('resume') }
             : { label: 'Pause recording', click: () => sendTrayRecordingControl('pause') },
+          ...(hasExtendableRecording()
+            ? [{ label: 'Extend 10 min', click: () => extendActiveRecordingFromMain() }]
+            : []),
           { label: 'Stop recording', click: () => sendTrayRecordingControl('stop') },
           { type: 'separator' }
         ]

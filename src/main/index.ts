@@ -10,6 +10,7 @@ import { initLogger, logger } from './logger'
 import { registerMediaPermissions } from './media-permissions'
 import {
   cleanupRecordingIpc,
+  extendActiveRecordingFromMain,
   extendAutoStop,
   getRecordingStateMachine,
   handleRendererRecordingError,
@@ -86,6 +87,13 @@ function showMainWindow(): void {
 }
 
 app.on('second-instance', (_event, argv) => {
+  // Toast "Extend 10 min" button (IN-124): Windows activates the app with this
+  // argument. Extend in place without stealing focus to the window.
+  if (argv.includes('mn-extend')) {
+    logger().info('[app] extend requested from toast notification')
+    extendActiveRecordingFromMain()
+    return
+  }
   if (argv.includes('--background') || argv.includes('--hidden')) {
     logger().info('[app] background second instance ignored')
     return

@@ -148,7 +148,17 @@ const api = {
   /** Tell the main process the recording pause state so the tray menu can show
    * Pause vs Resume (IN-120). */
   notifyRecordingPausedChanged: (paused: boolean): void =>
-    ipcRenderer.send('recording:paused-changed', paused)
+    ipcRenderer.send('recording:paused-changed', paused),
+
+  /** Listen for extends triggered from the tray menu or toast button (IN-124),
+   * so the on-screen countdown updates. Returns unsubscribe. */
+  onRecordingEndExtended: (
+    callback: (data: { endTimeUtc: string }) => void
+  ): (() => void) => {
+    const handler = (_event: IpcRendererEvent, data: { endTimeUtc: string }) => callback(data)
+    ipcRenderer.on('recording:end-extended', handler)
+    return () => ipcRenderer.removeListener('recording:end-extended', handler)
+  }
 }
 
 export type Api = typeof api

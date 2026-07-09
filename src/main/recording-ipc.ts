@@ -313,20 +313,59 @@ export function extendAutoStop(incrementMs: number = EXTEND_INCREMENT_MS): { end
   return { endTimeUtc }
 }
 
+function xmlEscape(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
 function notifyMeetingEndingSoon(recording: ActiveRecording): void {
   if (!Notification?.isSupported?.()) return
   const title = meetingTitleFrom(recording.metadata)
+  const body = title
+    ? `"${title}" is scheduled to end in 5 minutes.`
+    : 'Recording is scheduled to end in 5 minutes.'
   try {
-    new Notification({
-      title: 'Meeting Notetaker',
-      body: title
-        ? `"${title}" is scheduled to end in 5 minutes — press Extend to keep recording.`
-        : 'Recording is scheduled to end in 5 minutes — press Extend to keep recording.'
-    }).show()
+    if (process.platform === 'win32') {
+      // Windows ignores the cross-platform `actions` array (macOS-only), so an
+      // Extend button requires raw toast XML. The button activates the app with
+      // `mn-extend`, handled by the single-instance hook in index.ts.
+      const toastXml =
+        '<toast activationType="foreground" launch="mn-open">' +
+        '<visual><binding template="ToastGeneric">' +
+        '<text>Meeting Notetaker</text>' +
+        `<text>${xmlEscape(body)}</text>` +
+        '</binding></visual>' +
+        '<actions>' +
+        '<action content="Extend 10 min" activationType="foreground" arguments="mn-extend"/>' +
+        '</actions>' +
+        '</toast>'
+      new Notification({ toastXml }).show()
+    } else {
+      new Notification({ title: 'Meeting Notetaker', body }).show()
+    }
   } catch (err) {
     logger().warn('[recording] could not show ending-soon notification', {
       message: err instanceof Error ? err.message : String(err)
     })
+  }
+}
+
+/** True while an auto-recording with a scheduled end is active (extendable). */
+export function hasExtendableRecording(): boolean {
+  return getRecordingStateMachine().getState() === 'recording' && autoStopEndMs !== null
+}
+
+/**
+ * Extend the active recording from a main-process trigger (tray menu or toast
+ * button) and push the new end time to the renderer so its countdown updates.
+ */
+export function extendActiveRecordingFromMain(): void {
+  const result = extendAutoStop()
+  if (result && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('recording:end-extended', result)
   }
 }
 

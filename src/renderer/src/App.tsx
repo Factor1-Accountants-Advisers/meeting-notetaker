@@ -161,6 +161,17 @@ function App(): JSX.Element {
     })
   }, [])
 
+  // Reflect extends triggered from the tray menu or toast button (IN-124) in
+  // the on-screen countdown.
+  useEffect(() => {
+    if (typeof window.api?.onRecordingEndExtended !== 'function') return
+    return window.api.onRecordingEndExtended((data) => {
+      if (data?.endTimeUtc) {
+        setRecording((s) => (s ? { ...s, scheduledEndUtc: data.endTimeUtc } : s))
+      }
+    })
+  }, [])
+
   // Listen for auto-recording commands from the main process (IN-66).
   useEffect(() => {
     if (!user || currentPerson?.enrollment !== 'enrolled' || typeof window.api?.onAutoStartRequest !== 'function') return
