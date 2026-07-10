@@ -99,6 +99,12 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Tests: `backend/tests/test_email_idempotency.py` (5 tests, written first, 4-of-5 failed pre-fix): exactly-once send on repeated calls with single audit entry, 409 while in flight, resend allowed after failed, replay fields cleared on delivery reset, stale-`emailing` startup reconcile re-opens retry.
   - Verification: backend unittest discover **56 tests OK**, `npm run typecheck`, `npm run build`, `compileall`, `git diff --check` — all passed. Live retest pending: David's machine, ad-hoc recording with SharePoint failing — expect exactly one email and a working "Retry delivery".
 
+- [x] 2026-07-10 — IN-106 gap closure: LLM prompts now carry all AI Summary Instructions rules
+  - Line-by-line comparison of David's "AI Summary instructions" doc (IN-106 attachment) against the build found the minutes template fully implemented but four behavioral rules missing from the prompts: Australian spelling, verb-led action items, disagreement handling ("Unresolved: [A] and [B] had differing views on [X]. To be confirmed."), and Next Meeting extraction (was hardcoded `Date: TBC`).
+  - Fix: chunk/reduce system prompts lifted to module constants (`_CHUNK_SYSTEM_PROMPT`/`_REDUCE_SYSTEM_PROMPT` in `llm.py`) now carrying all IN-106 rules; `next_meeting` added to both insight schemas and `SUMMARY_SECTIONS` (flows into plain summary, HTML email, and search); minutes builder renders the extracted `Date:` line and agenda items with template TBC/"None noted" fallbacks (`meetings.py`, `_extract_next_meeting_from_summary`).
+  - Tests: `backend/tests/test_minutes_template.py` (7 tests) — next-meeting composition/extraction/rendering + fallbacks, and prompt-rule regression guards pinning the Jira-agreed wording.
+  - Verification: backend unittest discover **63 tests OK**, `npm run typecheck`, `npm run build`, `compileall`, `git diff --check` — all passed. Live output check (real OpenAI call producing Australian-spelled, verb-led output) happens with the next build's test meeting.
+
 ## Crossed out / completed
 
 - [x] `IN-65` — Spike: MS Graph meeting detection — subscription vs. polling

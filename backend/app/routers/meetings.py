@@ -720,10 +720,19 @@ def _format_transcript(
         lines.append('None recorded.')
     lines.append('')
 
-    # Next Meeting
+    # Next Meeting — populated from the summary's "Next meeting" section when
+    # the LLM found explicit statements; template TBC placeholders otherwise.
     lines.append('Next Meeting')
-    lines.append('Date: TBC')
-    lines.append('Agenda items flagged for next meeting: None noted')
+    next_meeting_items = _extract_next_meeting_from_summary(summary_text)
+    date_line = next(
+        (item for item in next_meeting_items if item.lower().startswith('date:')), None
+    )
+    agenda_items = [item for item in next_meeting_items if item is not date_line]
+    lines.append(date_line or 'Date: TBC')
+    lines.append(
+        'Agenda items flagged for next meeting: '
+        + ('; '.join(agenda_items) if agenda_items else 'None noted')
+    )
     lines.append('')
 
     lines.append('---')
@@ -803,6 +812,10 @@ def _extract_decisions_from_summary(summary_text: str | None) -> list[str]:
 
 def _extract_questions_from_summary(summary_text: str | None) -> list[str]:
     return _bullets_under_heading(summary_text, ('open question', 'unresolved'))
+
+
+def _extract_next_meeting_from_summary(summary_text: str | None) -> list[str]:
+    return _bullets_under_heading(summary_text, ('next meeting',))
 
 
 @router.post("/{meeting_id}/finalize", response_model=Meeting)

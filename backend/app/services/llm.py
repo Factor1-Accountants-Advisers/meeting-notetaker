@@ -28,6 +28,39 @@ SUMMARY_SECTIONS: tuple[tuple[str, str], ...] = (
     ("key_points", "Key discussion"),
     ("decisions", "Decisions"),
     ("open_questions", "Open questions"),
+    ("next_meeting", "Next meeting"),
+)
+
+# System prompts implementing the IN-106 "AI Summary Instructions" behavioral
+# rules (no invented content, explicit owners only, Australian spelling,
+# verb-led actions, disagreements recorded as unresolved). Module-level so
+# tests can pin the agreed rules against regressions.
+_CHUNK_SYSTEM_PROMPT = (
+    "Extract structured meeting insights from this transcript chunk. "
+    "Use only evidence in the chunk. Do not infer or invent decisions, commitments, or action items "
+    "that are not present, and do not speculate based on the meeting topic. "
+    "Preserve exact speaker display names for owners; never assign an owner who is not explicitly "
+    "associated with the action. "
+    "Record unresolved disagreements between speakers in 'questions' as "
+    "'Unresolved: [name] and [name] had differing views on [topic]. To be confirmed.' "
+    "Capture any statements about when the next meeting will happen or items flagged for its agenda "
+    "in 'next_meeting' verbatim. Return valid JSON only."
+)
+_REDUCE_SYSTEM_PROMPT = (
+    "Consolidate chunk-level meeting insights into final, client-ready meeting notes. "
+    "Write in formal professional English with Australian spelling. "
+    "Write 'overview' as a concise 2-4 sentence paragraph in a professional tone. "
+    "Populate 'key_points', 'decisions', and 'open_questions' as short, deduplicated bullet strings "
+    "(omit or leave empty when a section has nothing substantive). "
+    "Keep decisions distinct from actions: a decision is something resolved; an action is something "
+    "still to be done. Record unresolved disagreements in 'open_questions' as "
+    "'Unresolved: [name] and [name] had differing views on [topic]. To be confirmed.' "
+    "Populate 'next_meeting' only from explicit statements: the agreed date/time as a bullet "
+    "formatted 'Date: ...', plus each agenda item flagged for the next meeting as its own bullet "
+    "(leave empty when nothing was stated). "
+    "Start every action item description with a verb (e.g. 'Submit', 'Review', 'Schedule'). "
+    "Deduplicate action items, preserve explicit owners only, use exact speaker display names when "
+    "owner names appear in the chunks. Return plain text in every field (no markdown or HTML) and valid JSON only."
 )
 
 
@@ -267,6 +300,7 @@ class OpenAIProvider:
                 "decisions": ["string"],
                 "risks": ["string"],
                 "questions": ["string"],
+                "next_meeting": ["string"],
                 "action_items": [
                     {
                         "description": "string",
@@ -278,8 +312,7 @@ class OpenAIProvider:
             },
         }
         return await self._complete_json(
-            "Extract structured meeting insights from this transcript chunk. "
-            "Use only evidence in the chunk, preserve exact speaker display names for owners, and return valid JSON only.",
+            _CHUNK_SYSTEM_PROMPT,
             payload,
             max_tokens=1200,
         )
@@ -294,6 +327,7 @@ class OpenAIProvider:
                 "key_points": ["string"],
                 "decisions": ["string"],
                 "open_questions": ["string"],
+                "next_meeting": ["string"],
                 "action_items": [
                     {
                         "description": "string",
@@ -305,12 +339,7 @@ class OpenAIProvider:
             },
         }
         return await self._complete_json(
-            "Consolidate chunk-level meeting insights into final, client-ready meeting notes. "
-            "Write 'overview' as a concise 2-4 sentence paragraph in a professional tone. "
-            "Populate 'key_points', 'decisions', and 'open_questions' as short, deduplicated bullet strings "
-            "(omit or leave empty when a section has nothing substantive). "
-            "Deduplicate action items, preserve explicit owners only, use exact speaker display names when "
-            "owner names appear in the chunks. Return plain text in every field (no markdown or HTML) and valid JSON only.",
+            _REDUCE_SYSTEM_PROMPT,
             payload,
             max_tokens=1800,
         )
