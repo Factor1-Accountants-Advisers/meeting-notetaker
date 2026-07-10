@@ -311,6 +311,23 @@ async def email_notes(
     require(meeting_id, actor, AccessRole.editor)
     meeting, participants, segments, summary, action_items = _delivery_artifacts(meeting_id)
 
+    # Idempotency guard (Jira IN-94 follow-up: ad-hoc transcripts arrived
+    # twice). delivery_status was recorded but never consulted, so any second
+    # POST — a renderer retry after a SharePoint-only failure, or overlapping
+    # post-capture watchers — sent a second real email. Replay the original
+    # result instead; a genuine resend requires a failed state (or a re-upload,
+    # which resets delivery to not_started).
+    if meeting.delivery_status is DeliveryStatus.emailed:
+        return EmailResult(
+            recipients=meeting.delivery_recipients or _email_recipients(meeting, body.recorder_email),
+            sent_at=meeting.delivery_emailed_at or meeting.pipeline_updated_at or datetime.now(timezone.utc),
+        )
+    if meeting.delivery_status is DeliveryStatus.emailing:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Transcript email is already being sent for this meeting",
+        )
+
     recipients = _email_recipients(meeting, body.recorder_email)
     if not recipients:
         raise HTTPException(status.HTTP_409_CONFLICT, "No email recipients resolved")
@@ -367,7 +384,7 @@ async def email_notes(
         )
 
     sent_at = datetime.now(timezone.utc)
-    set_delivery_state(meeting_id, DeliveryStatus.emailed)
+    set_delivery_state(meeting_id, DeliveryStatus.emailed, recipients=recipients, emailed_at=sent_at)
     store.add_audit(
         actor,
         "meeting.email",

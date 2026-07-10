@@ -127,6 +127,11 @@ class Meeting(BaseModel):
     processing_attempt: int = 0
     delivery_status: DeliveryStatus = DeliveryStatus.not_started
     delivery_error_message: str | None = None
+    # Who the transcript email actually went to and when, kept so a repeated
+    # POST /email can replay the original result instead of sending twice.
+    # Cleared whenever delivery leaves the emailed state (e.g. re-upload).
+    delivery_recipients: list[str] = Field(default_factory=list)
+    delivery_emailed_at: datetime | None = None
     sharepoint_status: SharePointStatus = SharePointStatus.not_started
     sharepoint_error_message: str | None = None
     sharepoint_web_url: str | None = None

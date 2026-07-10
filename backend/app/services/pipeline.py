@@ -136,6 +136,9 @@ def set_delivery_state(
     meeting_id: UUID,
     status: DeliveryStatus,
     error_message: str | None = None,
+    *,
+    recipients: list[str] | None = None,
+    emailed_at: datetime | None = None,
 ) -> None:
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is not None:
@@ -143,6 +146,11 @@ def set_delivery_state(
             update={
                 "delivery_status": status,
                 "delivery_error_message": error_message,
+                # Replay fields only survive while the state is emailed; any
+                # other transition (reset, failure, re-upload) clears them so a
+                # regenerated transcript can be emailed fresh.
+                "delivery_recipients": list(recipients) if status is DeliveryStatus.emailed and recipients else [],
+                "delivery_emailed_at": emailed_at if status is DeliveryStatus.emailed else None,
                 "pipeline_updated_at": _now(),
             }
         )
@@ -166,6 +174,16 @@ def reconcile_interrupted_pipelines() -> int:
     """
     changed = 0
     for meeting_id, meeting in list(store.MEETINGS.items()):
+        # An in-flight email send also only exists as in-process work. A restart
+        # mid-send would otherwise leave delivery_status=emailing forever, and
+        # the idempotency guard would then block every future email attempt.
+        if meeting.delivery_status is DeliveryStatus.emailing:
+            set_delivery_state(
+                meeting_id,
+                DeliveryStatus.failed,
+                "Email delivery was interrupted by a backend restart. Retry email.",
+            )
+            changed += 1
         if meeting.pipeline_status not in (PipelineStatus.queued, PipelineStatus.processing):
             continue
         set_pipeline_state(
