@@ -723,7 +723,7 @@ function App(): JSX.Element {
           <h1 className="m-0 text-[18px] font-medium text-content-primary">Voiceprint required</h1>
           <p className="mx-auto mb-0 mt-2 max-w-[420px] text-[12px] leading-relaxed text-content-tertiary">
             Factor1 staff must enroll a voiceprint after Microsoft sign-in before using
-            Notetaker. This keeps speaker attribution aligned with the Slice 1 Jira scope.
+            Notetaker. This helps identify speakers accurately in meeting transcripts.
           </p>
           {enrollmentLoading && (
             <p className="mb-0 mt-4 flex items-center justify-center gap-2 text-[13px] text-content-secondary">

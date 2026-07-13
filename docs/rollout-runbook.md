@@ -52,9 +52,12 @@ manually — no Intune, no group policy.
    - Confirm the app finishes the voiceprint check without showing the
      enrollment wizard. The test installer intentionally provides a zero-touch
      setup for this group.
-   - The enrollment wizard is reserved for a future unseeded test account; it
-     requires consent and three short voice samples using the same wired or
-     built-in microphone used for recording.
+   - Daniel Vucetic and Gabby Berman are intentionally **not** pre-enrolled.
+     They should complete the enrollment wizard to test consent and the three
+     short voice samples, using the same wired or built-in microphone used for
+     recording. They are also intentionally outside the controlled expansion
+     list, so their enrollment path and speaker attribution can be assessed
+     without special treatment.
 
 4. **Record a test meeting**
    - **Manual**: Click **Record** on the Home screen, speak for ~30

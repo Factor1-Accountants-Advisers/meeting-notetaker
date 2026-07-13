@@ -1,7 +1,7 @@
 {
   "name": "meeting-notetaker",
-  "version": "2.0.3",
-  "description": "Slice 1 — Auto-triggered recording, Pyannote speaker ID, Graph email, UI modernisation",
+  "version": "2.0.4",
+  "description": "Meeting recording, transcription, speaker identification, and transcript delivery",
   "main": "./out/main/index.js",
   "author": "Factor1",
   "private": true,
