@@ -50,6 +50,8 @@ function App(): JSX.Element {
   const [authChecked, setAuthChecked] = useState(Boolean(loadUser()))
   const [currentPerson, setCurrentPerson] = useState<StaffMember | null>(null)
   const [enrollmentLoading, setEnrollmentLoading] = useState(false)
+  // Bumping this re-runs the enrollment gate fetch (Try again after failure).
+  const [enrollmentAttempt, setEnrollmentAttempt] = useState(0)
   const [enrollmentError, setEnrollmentError] = useState<string | null>(null)
   const [view, setView] = useState<View>('home')
   const [recording, setRecording] = useState<RecordingSession | null>(null)
@@ -152,29 +154,48 @@ function App(): JSX.Element {
 
     setEnrollmentLoading(true)
     setEnrollmentError(null)
-    ensureCurrentPerson(user.name, user.email)
-      .then((person) => {
-        if (cancelled) return
-        if (person) {
-          setCurrentPerson(person)
-        } else {
-          setCurrentPerson(null)
-          setEnrollmentError('Could not load your staff enrollment record. Check that the backend is running, then sign in again.')
+
+    // At Windows-boot launch (IN-71) the packaged backend takes up to ~20s to
+    // spawn and pass health checks, so a single fetch races it and strands the
+    // user on the "Voiceprint required" error. Retry with backoff (~50s total)
+    // before surfacing the failure; skip retries when there is no IPC bridge
+    // at all (browser preview) since waiting cannot help there.
+    const retryDelaysMs =
+      typeof window.api?.request === 'function' ? [1000, 2000, 3000, 5000, 5000, 5000, 10000, 10000, 10000] : []
+    const run = async (): Promise<void> => {
+      let lastErrorMessage: string | null = null
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const person = await ensureCurrentPerson(user.name, user.email)
+          if (cancelled) return
+          if (person) {
+            setCurrentPerson(person)
+            setEnrollmentLoading(false)
+            return
+          }
+          lastErrorMessage = null
+        } catch (err) {
+          if (cancelled) return
+          lastErrorMessage = err instanceof Error ? err.message : null
         }
-      })
-      .catch((err) => {
+        const delay = retryDelaysMs[attempt]
+        if (delay === undefined) break
+        await new Promise((resolve) => setTimeout(resolve, delay))
         if (cancelled) return
-        setCurrentPerson(null)
-        setEnrollmentError(err instanceof Error ? err.message : 'Could not load your staff enrollment record.')
-      })
-      .finally(() => {
-        if (!cancelled) setEnrollmentLoading(false)
-      })
+      }
+      setCurrentPerson(null)
+      setEnrollmentError(
+        lastErrorMessage ??
+          'Could not load your staff enrollment record. Check that the backend is running, then try again.'
+      )
+      setEnrollmentLoading(false)
+    }
+    void run()
 
     return () => {
       cancelled = true
     }
-  }, [user])
+  }, [user, enrollmentAttempt])
 
   // Listen for tray-initiated pause/resume/stop controls (IN-120). Registered
   // once; dispatches through the ref so it always hits the current handlers.
@@ -829,13 +850,24 @@ function App(): JSX.Element {
               {enrollmentError}
             </p>
           )}
-          <button
-            type="button"
-            onClick={signOut}
-            className="mt-4 rounded-md border-[0.5px] border-edge-secondary px-3 py-2 text-[13px] text-content-primary hover:bg-bg-secondary"
-          >
-            Sign out
-          </button>
+          <div className="mt-4 flex items-center justify-center gap-2">
+            {enrollmentError && (
+              <button
+                type="button"
+                onClick={() => setEnrollmentAttempt((n) => n + 1)}
+                className="rounded-md border-[0.5px] border-edge-info bg-bg-info px-3 py-2 text-[13px] text-content-info hover:opacity-90"
+              >
+                Try again
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={signOut}
+              className="rounded-md border-[0.5px] border-edge-secondary px-3 py-2 text-[13px] text-content-primary hover:bg-bg-secondary"
+            >
+              Sign out
+            </button>
+          </div>
         </div>
         {currentPerson && currentPerson.enrollment !== 'enrolled' && (
           <EnrollmentModal
