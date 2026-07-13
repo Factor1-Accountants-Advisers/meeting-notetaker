@@ -46,13 +46,15 @@ manually — no Intune, no group policy.
      call and every word appears twice in the transcript.
 
 3. **Voiceprints**
-   - Joseph, David, and Benjamin are **pre-enrolled** — the installer
-     seeds their voiceprints on first launch.  Open **People** and verify
-     all three appear.
-   - **Jose T only**: click **Enroll Voiceprint**, read the displayed
-     sentence aloud for each of the 3 clips, and confirm the success
-     message.  Enroll with the same wired/built-in mic used for
-     recording.
+   - Joseph, David, Benjamin, and Jose T are **pre-enrolled** — the installer
+     seeds their voiceprints on first launch, so they can record immediately
+     after Microsoft sign-in.
+   - Confirm the app finishes the voiceprint check without showing the
+     enrollment wizard. The test installer intentionally provides a zero-touch
+     setup for this group.
+   - The enrollment wizard is reserved for a future unseeded test account; it
+     requires consent and three short voice samples using the same wired or
+     built-in microphone used for recording.
 
 4. **Record a test meeting**
    - **Manual**: Click **Record** on the Home screen, speak for ~30
@@ -73,8 +75,7 @@ manually — no Intune, no group policy.
 - [ ] Tray icon visible; tooltip shows "Idle" (not "Backend unavailable")
 - [ ] No "sample data" notice anywhere in the UI
 - [ ] Microsoft sign-in completes successfully
-- [ ] People screen lists pre-seeded voiceprints (Joseph, David, Benjamin)
-- [ ] Voiceprint enrollment succeeds for Jose T (3 clips)
+- [ ] People/enrollment check completes without a wizard for all four pre-seeded testers (Joseph, David, Benjamin, Jose T)
 - [ ] Manual recording → pipeline completes → transcript visible
 - [ ] Email sends after Graph sign-in
 - [ ] **Live auto-start**: schedule a Teams meeting → app in tray →
