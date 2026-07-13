@@ -160,6 +160,20 @@ const api = {
   extendRecording: (): Promise<{ endTimeUtc: string } | null> =>
     ipcRenderer.invoke('recording:extend'),
 
+  /** Listen for tray Pause/Resume/Stop commands while an automatic recording is active. */
+  onTrayRecordingControl: (
+    callback: (action: 'pause' | 'resume' | 'stop') => void
+  ): (() => void) => {
+    const handler = (_event: IpcRendererEvent, data: { action: 'pause' | 'resume' | 'stop' }) =>
+      callback(data.action)
+    ipcRenderer.on('recording:tray-control', handler)
+    return () => ipcRenderer.removeListener('recording:tray-control', handler)
+  },
+
+  /** Mirror the capture pause state for the next tray-menu refresh. */
+  notifyRecordingPausedChanged: (paused: boolean): void =>
+    ipcRenderer.send('recording:paused-changed', paused),
+
   /** Listen for extends triggered from the tray menu or toast button (IN-124),
    * so the on-screen countdown updates. Returns unsubscribe. */
   onRecordingEndExtended: (

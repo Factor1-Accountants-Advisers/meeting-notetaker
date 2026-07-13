@@ -1,5 +1,12 @@
-import { app, Menu, nativeImage, Tray } from 'electron'
-import { getRecordingStateMachine, meetingTitleFrom } from './recording-ipc'
+import { app, Menu, nativeImage, Tray, type MenuItemConstructorOptions } from 'electron'
+import {
+  extendActiveRecordingFromMain,
+  getRecordingStateMachine,
+  hasExtendableRecording,
+  isRecordingPaused,
+  meetingTitleFrom,
+  sendTrayRecordingControl
+} from './recording-ipc'
 import { logger } from './logger'
 
 let tray: Tray | null = null
@@ -35,12 +42,27 @@ export function updateTrayMenu(): void {
       ? (title ? `Processing: ${title}` : 'Processing…')
       : 'Idle'
 
+  const recordingControls: MenuItemConstructorOptions[] =
+    state === 'recording'
+      ? [
+          isRecordingPaused()
+            ? { label: 'Resume recording', click: () => sendTrayRecordingControl('resume') }
+            : { label: 'Pause recording', click: () => sendTrayRecordingControl('pause') },
+          ...(hasExtendableRecording()
+            ? [{ label: 'Extend 10 min', click: () => extendActiveRecordingFromMain() }]
+            : []),
+          { label: 'Stop recording', click: () => sendTrayRecordingControl('stop') },
+          { type: 'separator' }
+        ]
+      : []
+
   const contextMenu = Menu.buildFromTemplate([
     {
       label: `Status: ${statusLabel}`,
       enabled: false
     },
     { type: 'separator' },
+    ...recordingControls,
     {
       label: 'Show Notetaker',
       click: () => showWindowCallback?.()

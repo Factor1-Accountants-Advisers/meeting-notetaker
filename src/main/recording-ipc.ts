@@ -66,6 +66,26 @@ let autoStartAckTimer: ReturnType<typeof setTimeout> | null = null
 let autoStartAckTimeoutMs = 15_000
 let pendingAutoStart: ActiveRecording | null = null
 let rendererRecordingReady = false
+// Renderer-owned pause state mirrored for the active tray label (IN-120).
+let recordingPaused = false
+
+export function isRecordingPaused(): boolean {
+  return recordingPaused
+}
+
+export function setRecordingPaused(paused: boolean): void {
+  recordingPaused = paused
+}
+
+/** Forward a tray command to the renderer that owns media capture. */
+export function sendTrayRecordingControl(action: 'pause' | 'resume' | 'stop'): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    logger().warn('[recording] cannot send tray control: no main window', { action })
+    return
+  }
+  logger().info('[recording] tray recording control', { action })
+  mainWindow.webContents.send('recording:tray-control', { action })
+}
 
 // IN-117: manual recording extension.
 const EXTEND_INCREMENT_MS = 10 * 60_000
@@ -159,6 +179,7 @@ export function handleRendererRecordingStarted(): void {
     const recording = pendingAutoStart
     pendingAutoStart = null
     clearAutoStartAckTimer()
+    recordingPaused = false
     sm.startAutoRecording(recording)
     blockSleepWhileRecording()
     scheduleAutoStop(recording)
@@ -170,6 +191,7 @@ export function handleRendererRecordingStarted(): void {
 }
 
 export function handleRendererRecordingStopped(): void {
+  recordingPaused = false
   resetAutoStopState()
   unblockSleep()
 
@@ -187,6 +209,7 @@ export function handleRendererRecordingStopped(): void {
 }
 
 export function handleRendererRecordingError(message: string): void {
+  recordingPaused = false
   resetAutoStopState()
   unblockSleep()
   clearAutoStartAckTimer()

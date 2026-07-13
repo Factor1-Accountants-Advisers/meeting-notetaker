@@ -17,6 +17,7 @@ import {
   handleRendererRecordingStarted,
   handleRendererRecordingStopped,
   sendAutoStartRequest,
+  sendTrayRecordingControl,
   setAutoStartAckTimeoutMsForTest,
   setMainWindow
 } from '../src/main/recording-ipc.ts'
@@ -305,6 +306,19 @@ async function main(): Promise<void> {
   assert.equal(getRecordingStateMachine().getState(), 'recording')
   handleRendererRecordingStopped()
 
+  // IN-120: tray commands are forwarded to the active renderer only; the
+  // automatic recording lifecycle retains ownership of start and stop state.
+  cleanupRecordingIpc()
+  const controlWindow = fakeWindow()
+  setMainWindow(controlWindow.window)
+  sendTrayRecordingControl('pause')
+  sendTrayRecordingControl('resume')
+  sendTrayRecordingControl('stop')
+  assert.deepEqual(controlWindow.sent, [
+    { channel: 'recording:tray-control', data: { action: 'pause' } },
+    { channel: 'recording:tray-control', data: { action: 'resume' } },
+    { channel: 'recording:tray-control', data: { action: 'stop' } }
+  ])
   cleanupRecordingIpc()
 
   const runtimeDir = await mkdtemp(join(tmpdir(), 'notetaker-graph-fixtures-'))

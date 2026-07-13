@@ -237,7 +237,10 @@ function App(): JSX.Element {
       }
     })
 
-    const unsubStop = window.api.onAutoStopRequest(async () => {
+    let stopping = false
+    const finishActiveRecording = async (): Promise<void> => {
+      if (stopping) return
+      stopping = true
       try {
         setAutoRecordingState('processing')
         const session = recordingRef.current
@@ -257,10 +260,9 @@ function App(): JSX.Element {
               )
             }
             savedLocally = true
-            // The audio is durable on disk — the crash-spill is now redundant (IN-129).
             capture.discardCompletedSpill()
           } catch {
-            // Local save failed — still try upload
+            // Local save failed — still try upload.
           }
           if (meetingId) {
             const uploadedMeeting = await uploadAudio(
@@ -276,7 +278,6 @@ function App(): JSX.Element {
                   }
                 : null
             )
-            // Upload also makes the audio durable, covering a failed local save.
             if (uploadedMeeting && !savedLocally) capture.discardCompletedSpill()
             watchProcessing(meetingId, session?.title ?? graphMetadata?.title ?? 'Auto-recorded Teams meeting')
           }
@@ -287,7 +288,27 @@ function App(): JSX.Element {
         setAutoRecordingState('idle')
         window.api.notifyRecordingStopped()
       } catch (err) {
+        stopping = false
         window.api.notifyRecordingError(err instanceof Error ? err.message : String(err))
+      }
+    }
+
+    const unsubStop = window.api.onAutoStopRequest(() => void finishActiveRecording())
+    const unsubTrayControl = window.api.onTrayRecordingControl((action) => {
+      if (action === 'pause') {
+        capture.pause()
+        setRecording((session) => (session ? { ...session, pausedAt: Date.now() } : session))
+        window.api.notifyRecordingPausedChanged(true)
+      } else if (action === 'resume') {
+        capture.resume()
+        setRecording((session) =>
+          session && session.pausedAt !== null
+            ? { ...session, pausedAccum: session.pausedAccum + (Date.now() - session.pausedAt), pausedAt: null }
+            : session
+        )
+        window.api.notifyRecordingPausedChanged(false)
+      } else {
+        void finishActiveRecording()
       }
     })
 
@@ -298,6 +319,7 @@ function App(): JSX.Element {
     return () => {
       unsubStart()
       unsubStop()
+      unsubTrayControl()
     }
   }, [user, currentPerson?.enrollment])
 
