@@ -61,6 +61,7 @@ let mainWindow: BrowserWindow | null = null
 let recordingSM: RecordingStateMachine | null = null
 let autoStopTimer: ReturnType<typeof setTimeout> | null = null
 let autoStopReminderTimer: ReturnType<typeof setTimeout> | null = null
+let reminderNotifiedForEndMs: number | null = null
 let autoStopEndMs: number | null = null
 let autoStartAckTimer: ReturnType<typeof setTimeout> | null = null
 let autoStartAckTimeoutMs = 15_000
@@ -90,6 +91,20 @@ export function sendTrayRecordingControl(action: 'pause' | 'resume' | 'stop'): v
 // IN-117: manual recording extension.
 const EXTEND_INCREMENT_MS = 10 * 60_000
 const END_REMINDER_LEAD_MS = 5 * 60_000
+
+export type EndReminderPlan =
+  | { kind: 'scheduled'; delayMs: number }
+  | { kind: 'immediate' }
+  | { kind: 'skip'; reason: 'ended' | 'invalid_end' }
+
+/** Determine how the one-time ending reminder should be delivered. */
+export function getEndReminderPlan(endMs: number, nowMs: number = Date.now()): EndReminderPlan {
+  if (!Number.isFinite(endMs)) return { kind: 'skip', reason: 'invalid_end' }
+  const remainingMs = endMs - nowMs
+  if (remainingMs <= 0) return { kind: 'skip', reason: 'ended' }
+  if (remainingMs <= END_REMINDER_LEAD_MS) return { kind: 'immediate' }
+  return { kind: 'scheduled', delayMs: remainingMs - END_REMINDER_LEAD_MS }
+}
 
 export function getRecordingStateMachine(): RecordingStateMachine {
   if (!recordingSM) recordingSM = createRecordingStateMachine()
@@ -292,13 +307,33 @@ function rescheduleAutoStopTimers(recording: ActiveRecording): void {
     sendAutoStopRequest()
   }, delayMs)
 
-  // Bonus (IN-117): remind the user 5 minutes before the scheduled end.
-  const reminderDelay = autoStopEndMs - END_REMINDER_LEAD_MS - Date.now()
-  if (reminderDelay > 0) {
+  const reminderPlan = getEndReminderPlan(autoStopEndMs)
+  if (reminderPlan.kind === 'scheduled') {
+    const plannedEndMs = autoStopEndMs
+    logger().info('[recording] scheduling ending-soon reminder', {
+      eventId: recording.eventId,
+      delayMs: reminderPlan.delayMs,
+      endTimeUtc: new Date(plannedEndMs).toISOString()
+    })
     autoStopReminderTimer = setTimeout(() => {
       autoStopReminderTimer = null
-      notifyMeetingEndingSoon(recording)
-    }, reminderDelay)
+      if (autoStopEndMs !== plannedEndMs) {
+        logger().info('[recording] ending-soon reminder ignored after reschedule', { eventId: recording.eventId })
+        return
+      }
+      sendEndingSoonReminder(recording, plannedEndMs, 'timer')
+    }, reminderPlan.delayMs)
+  } else if (reminderPlan.kind === 'immediate') {
+    logger().info('[recording] sending ending-soon reminder immediately', {
+      eventId: recording.eventId,
+      endTimeUtc: new Date(autoStopEndMs).toISOString()
+    })
+    sendEndingSoonReminder(recording, autoStopEndMs, 'immediate')
+  } else {
+    logger().info('[recording] ending-soon reminder skipped', {
+      eventId: recording.eventId,
+      reason: reminderPlan.reason
+    })
   }
 }
 
@@ -334,8 +369,32 @@ function xmlEscape(value: string): string {
     .replace(/"/g, '&quot;')
 }
 
+function sendEndingSoonReminder(
+  recording: ActiveRecording,
+  scheduledEndMs: number,
+  trigger: 'timer' | 'immediate'
+): void {
+  if (reminderNotifiedForEndMs === scheduledEndMs) {
+    logger().info('[recording] ending-soon reminder skipped: already sent for scheduled end', {
+      eventId: recording.eventId,
+      trigger
+    })
+    return
+  }
+  reminderNotifiedForEndMs = scheduledEndMs
+  logger().info('[recording] showing ending-soon reminder', {
+    eventId: recording.eventId,
+    trigger,
+    endTimeUtc: new Date(scheduledEndMs).toISOString()
+  })
+  notifyMeetingEndingSoon(recording)
+}
+
 function notifyMeetingEndingSoon(recording: ActiveRecording): void {
-  if (!Notification?.isSupported?.()) return
+  if (!Notification?.isSupported?.()) {
+    logger().warn('[recording] ending-soon notification unsupported by Electron')
+    return
+  }
   const title = meetingTitleFrom(recording.metadata)
   const body = title
     ? `"${title}" is scheduled to end in 5 minutes.`
@@ -356,8 +415,10 @@ function notifyMeetingEndingSoon(recording: ActiveRecording): void {
         '</actions>' +
         '</toast>'
       new Notification({ toastXml }).show()
+      logger().info('[recording] ending-soon Windows toast requested')
     } else {
       new Notification({ title: 'Meeting Notetaker', body }).show()
+      logger().info('[recording] ending-soon notification requested')
     }
   } catch (err) {
     logger().warn('[recording] could not show ending-soon notification', {
@@ -400,6 +461,7 @@ function clearAutoStopReminder(): void {
 function resetAutoStopState(): void {
   clearAutoStopTimer()
   clearAutoStopReminder()
+  reminderNotifiedForEndMs = null
   autoStopEndMs = null
 }
 

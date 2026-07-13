@@ -282,6 +282,7 @@ function App(): JSX.Element {
             watchProcessing(meetingId, session?.title ?? graphMetadata?.title ?? 'Auto-recorded Teams meeting')
           }
         }
+        setView('home')
         setRecording(null)
         autoGraphMetadataRef.current = null
         setCaptureStatus(null)

@@ -12,6 +12,7 @@ import { evaluateHostGate } from '../src/main/graph/host-gate.ts'
 import { createRecordingStateMachine } from '../src/main/recording-state.ts'
 import {
   cleanupRecordingIpc,
+  getEndReminderPlan,
   getRecordingStateMachine,
   handleRendererRecordingReady,
   handleRendererRecordingStarted,
@@ -194,6 +195,16 @@ async function main(): Promise<void> {
 
   assert.equal(getRetryAfterMs('10'), 10_000)
   assert.equal(getRetryAfterMs('not-a-date'), 30_000)
+
+  // IN-124: an ending reminder must not disappear when recording starts inside
+  // its five-minute window. There is exactly one attempt per scheduled end.
+  const reminderNow = Date.parse('2026-07-13T00:00:00.000Z')
+  assert.deepEqual(getEndReminderPlan(reminderNow + 10 * 60_000, reminderNow), {
+    kind: 'scheduled',
+    delayMs: 5 * 60_000
+  })
+  assert.deepEqual(getEndReminderPlan(reminderNow + 2 * 60_000, reminderNow), { kind: 'immediate' })
+  assert.deepEqual(getEndReminderPlan(reminderNow, reminderNow), { kind: 'skip', reason: 'ended' })
 
   const missingMsalConfig = getMsalConfigStatus({})
   assert.equal(missingMsalConfig.configured, false)
