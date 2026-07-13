@@ -205,6 +205,29 @@ export function handleRendererRecordingStarted(): void {
   })
 }
 
+export function registerManualRecording(recording: ActiveRecording & { title?: string }): void {
+  clearAutoStartAckTimer()
+  pendingAutoStart = null
+  recordingPaused = false
+  const sm = getRecordingStateMachine()
+  if (sm.getState() !== 'idle') {
+    logger().warn('[recording] manual recording ignored: another recording is active', {
+      idempotencyKey: recording.idempotencyKey
+    })
+    return
+  }
+  sm.startManualRecording({
+    ...recording,
+    source: 'manual',
+    metadata: recording.title ? { title: recording.title } : recording.metadata
+  })
+  blockSleepWhileRecording()
+  logger().info('[recording] manual recording registered', {
+    eventId: recording.eventId,
+    idempotencyKey: recording.idempotencyKey
+  })
+}
+
 export function handleRendererRecordingStopped(): void {
   recordingPaused = false
   resetAutoStopState()

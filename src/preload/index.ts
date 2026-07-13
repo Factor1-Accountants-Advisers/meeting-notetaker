@@ -149,6 +149,10 @@ const api = {
   /** Notify main process that the renderer started recording successfully. */
   notifyRecordingStarted: (): void => ipcRenderer.send('recording:started'),
 
+  /** Notify main process that a manually initiated recording has started. */
+  notifyManualRecordingStarted: (recording: AutoStartRequest & { title?: string }): void =>
+    ipcRenderer.send('recording:manual-started', recording),
+
   /** Notify main process that recording stopped. */
   notifyRecordingStopped: (): void => ipcRenderer.send('recording:stopped'),
 

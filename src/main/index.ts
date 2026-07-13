@@ -17,6 +17,7 @@ import {
   handleRendererRecordingReady,
   handleRendererRecordingStarted,
   handleRendererRecordingStopped,
+  registerManualRecording,
   sendAutoStartRequest,
   setRecordingPaused
 } from './recording-ipc'
@@ -52,6 +53,10 @@ function registerRecordingIpcHandlers(): void {
   })
   ipcMain.on('recording:started', () => {
     handleRendererRecordingStarted()
+    updateTrayMenu()
+  })
+  ipcMain.on('recording:manual-started', (_event, recording) => {
+    registerManualRecording(recording)
     updateTrayMenu()
   })
   ipcMain.on('recording:stopped', () => {

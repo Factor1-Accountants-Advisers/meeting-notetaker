@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react'
 import { AppShell } from './components/shell/AppShell'
 import { EnrollmentModal } from './components/EnrollmentModal'
 import { HomeScreen } from './screens/HomeScreen'
-import { PeopleScreen } from './screens/PeopleScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
 import { LoginScreen, type User } from './screens/LoginScreen'
 import { RecordingScreen, type RecordingSession } from './screens/RecordingScreen'
@@ -337,6 +336,48 @@ function App(): JSX.Element {
         }}
       />
     )
+  }
+
+  const startManualRecording = async (title: string): Promise<void> => {
+    if (recordingRef.current) return
+    const startedAt = Date.now()
+    const source = 'online' as const
+    const created = await createMeeting(title, null, source)
+    const meetingId = created?.id ?? null
+    const status = await capture.start(source, loadPrefs().micDeviceId, {
+      title,
+      meetingId,
+      graphMetadata: null
+    })
+    setCaptureStatus(status)
+    if (!status.recording) {
+      window.api.debugLog('manual recording could not start', { title, status })
+      return
+    }
+
+    const manualKey = meetingId ?? `manual-${startedAt}`
+    window.api.notifyManualRecordingStarted({
+      eventId: manualKey,
+      idempotencyKey: manualKey,
+      startTimeUtc: new Date(startedAt).toISOString(),
+      // Manual recordings have no scheduled end. This only supplies the state
+      // machine's required shape; no auto-stop timer is armed for this source.
+      endTimeUtc: new Date(startedAt + 8 * 60 * 60 * 1000).toISOString(),
+      source: 'manual',
+      title
+    })
+    autoGraphMetadataRef.current = null
+    setRecording({
+      meetingId,
+      title,
+      source,
+      startedAt,
+      pausedAccum: 0,
+      pausedAt: null,
+      scheduledEndUtc: null
+    })
+    setAutoRecordingState('recording')
+    setView('recording')
   }
 
   const navigate = (id: ScreenId): void => {
@@ -772,6 +813,7 @@ function App(): JSX.Element {
       {view === 'home' && (
         <HomeScreen
           userName={user.name}
+          onStartRecording={(title) => void startManualRecording(title)}
           onUploadRecording={(t, f) => void uploadRecording(t, f)}
           recordingState={shellRecordingState}
           interruptedRecordings={interrupted.map((e) => ({
@@ -787,7 +829,6 @@ function App(): JSX.Element {
           onShowRecording={recording ? () => setView('recording') : undefined}
         />
       )}
-      {view === 'people' && <PeopleScreen />}
       {view === 'settings' && (
         <SettingsScreen
           theme={theme}

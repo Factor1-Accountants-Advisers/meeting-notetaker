@@ -1,6 +1,6 @@
-import { LayoutGrid, Users, Settings, type LucideIcon } from 'lucide-react'
+import { LayoutGrid, Settings, type LucideIcon } from 'lucide-react'
 
-export type ScreenId = 'home' | 'people' | 'settings'
+export type ScreenId = 'home' | 'settings'
 
 export interface NavEntry {
   id: ScreenId
@@ -12,6 +12,5 @@ export interface NavEntry {
 
 export const NAV_ENTRIES: NavEntry[] = [
   { id: 'home', label: 'Home', icon: LayoutGrid },
-  { id: 'people', label: 'People', icon: Users },
   { id: 'settings', label: 'Settings', icon: Settings, pinBottom: true }
 ]

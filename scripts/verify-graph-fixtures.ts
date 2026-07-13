@@ -17,6 +17,7 @@ import {
   handleRendererRecordingReady,
   handleRendererRecordingStarted,
   handleRendererRecordingStopped,
+  registerManualRecording,
   sendAutoStartRequest,
   sendTrayRecordingControl,
   setAutoStartAckTimeoutMsForTest,
@@ -251,6 +252,22 @@ async function main(): Promise<void> {
   sm.completeProcessing()
   assert.equal(sm.getState(), 'idle')
 
+  // IN-126: a manual Home recording is tracked in the same state machine so
+  // tray Pause/Resume/Stop controls work and Graph cannot start over it.
+  sm.startManualRecording({
+    eventId: 'manual-event',
+    idempotencyKey: 'manual-key',
+    startTimeUtc: '2026-06-26T02:00:00.000Z',
+    endTimeUtc: '2026-06-26T10:00:00.000Z',
+    source: 'manual'
+  })
+  assert.equal(sm.getState(), 'recording')
+  assert.equal(sm.getActiveRecording()?.source, 'manual')
+  assert.equal(sm.canStartAutoRecording('key-after-manual'), false)
+  sm.stopRecording()
+  sm.completeProcessing()
+  assert.equal(sm.getState(), 'idle')
+
   // Cannot re-record the same key
   assert.equal(sm.canStartAutoRecording('key-1'), false)
   assert.equal(sm.canStartAutoRecording('key-2'), true)
@@ -315,6 +332,24 @@ async function main(): Promise<void> {
   assert.equal(replayWindow.sent.length, 1)
   handleRendererRecordingStarted()
   assert.equal(getRecordingStateMachine().getState(), 'recording')
+  handleRendererRecordingStopped()
+
+  // IN-126: manual Home starts register through the IPC state machine, making
+  // the tray controls available while keeping Graph auto-starts blocked.
+  cleanupRecordingIpc()
+  const manualWindow = fakeWindow()
+  setMainWindow(manualWindow.window)
+  registerManualRecording({
+    eventId: 'manual-ipc-event',
+    idempotencyKey: 'manual-ipc-key',
+    startTimeUtc: '2026-06-26T02:00:00.000Z',
+    endTimeUtc: '2026-06-26T10:00:00.000Z',
+    source: 'manual',
+    title: 'Manual client meeting'
+  })
+  assert.equal(getRecordingStateMachine().getActiveRecording()?.source, 'manual')
+  assert.deepEqual(getRecordingStateMachine().getActiveRecording()?.metadata, { title: 'Manual client meeting' })
+  assert.equal(getRecordingStateMachine().canStartAutoRecording('auto-during-manual'), false)
   handleRendererRecordingStopped()
 
   // IN-120: tray commands are forwarded to the active renderer only; the

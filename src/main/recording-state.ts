@@ -2,7 +2,8 @@
  * Auto-recording state machine (IN-66).
  *
  * Owns the lifecycle of automated recording sessions triggered by Graph meeting
- * detection.
+ * detection. Manual recordings are tracked through the same lifecycle so tray
+ * controls and Graph-start arbitration remain consistent.
  */
 
 export type RecordingState = 'idle' | 'recording' | 'processing'
@@ -12,7 +13,7 @@ export interface ActiveRecording {
   idempotencyKey: string
   startTimeUtc: string
   endTimeUtc: string
-  source: 'auto'
+  source: 'auto' | 'manual'
   metadata?: unknown
 }
 
@@ -21,6 +22,7 @@ export interface RecordingStateMachine {
   getActiveRecording(): ActiveRecording | null
   canStartAutoRecording(idempotencyKey: string): boolean
   startAutoRecording(recording: ActiveRecording): void
+  startManualRecording(recording: ActiveRecording): void
   stopRecording(): ActiveRecording | null
   completeProcessing(): void
 }
@@ -45,6 +47,13 @@ export function createRecordingStateMachine(): RecordingStateMachine {
     startAutoRecording(recording: ActiveRecording): void {
       if (state !== 'idle') return
       recording.source = 'auto'
+      active = recording
+      state = 'recording'
+    },
+
+    startManualRecording(recording: ActiveRecording): void {
+      if (state !== 'idle') return
+      recording.source = 'manual'
       active = recording
       state = 'recording'
     },
