@@ -90,6 +90,17 @@ class AccessRole(str, Enum):
     viewer = "viewer"
 
 
+class PossibleSpeakerDetection(BaseModel):
+    """Suppressed voiceprint evidence retained for a future human review flow."""
+
+    display_name: str
+    confidence: float | None = None
+    source: str = "non_attendee_expansion"
+    evidence_duration_ms: int
+    repeated_matches: int
+    strong_evidence: bool = False
+
+
 class TranscriptSegment(BaseModel):
     speaker: str  # display name, or "Unknown N" until manually named
     speaker_known: bool
@@ -103,6 +114,7 @@ class TranscriptSegment(BaseModel):
     speaker_evidence_end_ms: int | None = None
     speaker_evidence_job_id: str | None = None
     unknown_reason: str | None = None
+    possible_detection: PossibleSpeakerDetection | None = None
 
 
 class Meeting(BaseModel):

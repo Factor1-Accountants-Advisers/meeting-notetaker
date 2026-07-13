@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable, Protocol
 
 from app.config import Settings, get_settings
-from app.schemas import Meeting, MeetingParticipant, TranscriptSegment
+from app.schemas import Meeting, MeetingParticipant, PossibleSpeakerDetection, TranscriptSegment
 from app.services.pyannote_client import PyannoteAIClient, PyannoteAIError, PyannotePollConfig
 from app.services.voiceprints import Voiceprint, get_voiceprint_repository
 
@@ -26,6 +26,9 @@ DEFAULT_MIN_CONFIDENCE = 0.62
 # cluster's speech before its label is propagated to the cluster's unmatched
 # segments (IN-86: guards against mislabeling under-separated blended chunks).
 CLUSTER_PROPAGATE_MIN_FRACTION = 0.5
+NON_ATTENDEE_STRONG_MIN_CONFIDENCE = 0.95
+NON_ATTENDEE_STRONG_MIN_DURATION_MS = 3_000
+NON_ATTENDEE_STRONG_MIN_REPEATED_MATCHES = 2
 
 
 class SpeakerMatcher(Protocol):
@@ -53,6 +56,12 @@ class UnknownOnlySpeakerMatcher:
 
 
 @dataclass(frozen=True)
+class CandidateLabel:
+    display_name: str
+    expected_participant: bool
+
+
+@dataclass(frozen=True)
 class IdentityRange:
     start_ms: int
     end_ms: int
@@ -61,6 +70,7 @@ class IdentityRange:
     confidence: float | None = None
     source_label: str | None = None
     provider_job_id: str | None = None
+    expected_participant: bool = True
 
 
 class PyannoteAIVoiceprintMatcher:
@@ -121,6 +131,7 @@ class PyannoteAIVoiceprintMatcher:
             audio_path,
             settings,
             matching_threshold=_threshold_percent(settings.voiceprint_expansion_min_confidence),
+            expected_candidate_ids=set(_candidate_ids(base_candidates)),
         )
         if not expansion_ranges:
             return base_result
@@ -142,9 +153,10 @@ class PyannoteAIVoiceprintMatcher:
         settings: Settings,
         *,
         matching_threshold: float,
+        expected_candidate_ids: set[str] | None = None,
     ) -> list[IdentityRange]:
-        label_to_name: dict[str, str] = {}
-        payload = _build_voiceprint_payload(candidates, label_to_name)
+        label_to_candidate: dict[str, CandidateLabel] = {}
+        payload = _build_voiceprint_payload(candidates, label_to_candidate, expected_candidate_ids)
         if not payload:
             return []
 
@@ -171,7 +183,7 @@ class PyannoteAIVoiceprintMatcher:
 
         try:
             result = await asyncio.to_thread(identify)
-            return _identity_ranges_from_result(result, label_to_name)
+            return _identity_ranges_from_result(result, label_to_candidate)
         except PyannoteAIError:
             logger.exception("pyannoteAI identify failed for meeting %s", meeting.id)
             return []
@@ -203,7 +215,11 @@ def _merge_expansion_matches(
     # text/timestamps for all but the last matched segment.
     def _key(seg: TranscriptSegment) -> tuple[str | None, int, int, str]:
         return (seg.raw_speaker, seg.start_ms, seg.end_ms, seg.text)
-    expanded_by_key = {_key(seg): seg for seg in expanded_unknowns if seg.speaker_known}
+    expanded_by_key = {
+        _key(seg): seg
+        for seg in expanded_unknowns
+        if seg.speaker_known or seg.possible_detection is not None
+    }
     merged = [expanded_by_key.get(_key(seg), seg) for seg in base_matched]
 
     participant_known: dict[str, bool] = {}
@@ -278,17 +294,24 @@ def _candidate_voiceprints_for_meeting(
 
 
 def _build_voiceprint_payload(
-    records: list[Voiceprint], label_to_name: dict[str, str]
+    records: list[Voiceprint],
+    label_to_candidate: dict[str, CandidateLabel],
+    expected_candidate_ids: set[str] | None = None,
 ) -> list[dict[str, str]]:
     payload: list[dict[str, str]] = []
     for record in records:
+        expected_participant = (
+            True
+            if expected_candidate_ids is None
+            else record.employee_id.strip().lower() in expected_candidate_ids
+        )
         for idx, value in enumerate(record.voiceprints):
             if not isinstance(value, str) or not value:
                 continue
             # Labels must not start with SPEAKER_ and must be <=100 chars. Keep
             # them unique so multiple samples from one person can be submitted.
             label = f"{record.display_name} #{idx + 1}"[:100]
-            label_to_name[label] = record.display_name
+            label_to_candidate[label] = CandidateLabel(record.display_name, expected_participant)
             payload.append({"label": label, "voiceprint": value})
     return payload[:50]
 
@@ -320,7 +343,7 @@ def _provider_job_id(result: dict[str, Any]) -> str | None:
 
 
 def _identity_ranges_from_result(
-    result: dict[str, Any], label_to_name: dict[str, str]
+    result: dict[str, Any], label_to_candidate: dict[str, CandidateLabel]
 ) -> list[IdentityRange]:
     output = _output(result)
     provider_job_id = _provider_job_id(result)
@@ -347,8 +370,8 @@ def _identity_ranges_from_result(
         if not isinstance(item, dict):
             continue
         label = str(item.get("match") or item.get("speaker") or "").strip()
-        display_name = label_to_name.get(label)
-        if not display_name:
+        candidate = label_to_candidate.get(label)
+        if not candidate:
             continue
         try:
             start_ms = int(float(item.get("start", 0) or 0) * 1000)
@@ -371,13 +394,45 @@ def _identity_ranges_from_result(
                 start_ms=max(0, start_ms),
                 end_ms=max(0, end_ms),
                 raw_speaker=raw,
-                display_name=display_name,
+                display_name=candidate.display_name,
                 confidence=_normalise_confidence(float(confidence)) if isinstance(confidence, (int, float)) else None,
                 source_label=label,
                 provider_job_id=provider_job_id,
+                expected_participant=candidate.expected_participant,
             )
         )
     return ranges
+
+
+def _non_attendee_evidence(
+    ranges: list[IdentityRange],
+) -> dict[tuple[str, str], PossibleSpeakerDetection]:
+    """Aggregate suppressed IN-80 evidence without exposing a non-attendee name."""
+    grouped: dict[tuple[str, str], list[IdentityRange]] = {}
+    for item in ranges:
+        if not item.expected_participant:
+            grouped.setdefault((item.raw_speaker, item.display_name), []).append(item)
+
+    diagnostics: dict[tuple[str, str], PossibleSpeakerDetection] = {}
+    for key, matches in grouped.items():
+        duration_ms = sum(max(0, item.end_ms - item.start_ms) for item in matches)
+        confidences = [item.confidence for item in matches if item.confidence is not None]
+        confidence = max(confidences) if confidences else None
+        repeated_matches = len(matches)
+        strong_evidence = (
+            duration_ms >= NON_ATTENDEE_STRONG_MIN_DURATION_MS
+            and repeated_matches >= NON_ATTENDEE_STRONG_MIN_REPEATED_MATCHES
+            and confidence is not None
+            and confidence >= NON_ATTENDEE_STRONG_MIN_CONFIDENCE
+        )
+        diagnostics[key] = PossibleSpeakerDetection(
+            display_name=key[1],
+            confidence=confidence,
+            evidence_duration_ms=duration_ms,
+            repeated_matches=repeated_matches,
+            strong_evidence=strong_evidence,
+        )
+    return diagnostics
 
 
 def _apply_identity_ranges(
@@ -392,6 +447,7 @@ def _apply_identity_ranges(
     unknown_reasons: dict[str, str] = {}
     participant_known: dict[str, bool] = {}
     matched: list[TranscriptSegment] = []
+    non_attendee_evidence = _non_attendee_evidence(ranges)
 
     for seg in segments:
         best, reason = _best_range_for_segment(
@@ -401,7 +457,7 @@ def _apply_identity_ranges(
             min_overlap_ms=min_overlap_ms,
         )
         raw_speaker = seg.raw_speaker or seg.speaker
-        if best is not None:
+        if best is not None and best.expected_participant:
             matched.append(
                 seg.model_copy(
                     update={
@@ -414,6 +470,7 @@ def _apply_identity_ranges(
                         "speaker_evidence_end_ms": best.end_ms,
                         "speaker_evidence_job_id": best.provider_job_id,
                         "unknown_reason": None,
+                        "possible_detection": None,
                     }
                 )
             )
@@ -421,7 +478,14 @@ def _apply_identity_ranges(
             continue
 
         unknown = unknown_names.setdefault(raw_speaker, f"Speaker {len(unknown_names) + 1}")
-        unknown_reason = unknown_reasons.setdefault(raw_speaker, reason)
+        diagnostic = (
+            non_attendee_evidence.get((raw_speaker, best.display_name))
+            if best is not None and not best.expected_participant
+            else None
+        )
+        unknown_reason = "non_attendee" if diagnostic else unknown_reasons.setdefault(raw_speaker, reason)
+        if diagnostic:
+            unknown_reasons[raw_speaker] = unknown_reason
         matched.append(
             seg.model_copy(
                 update={
@@ -434,6 +498,7 @@ def _apply_identity_ranges(
                     "speaker_evidence_end_ms": None,
                     "speaker_evidence_job_id": None,
                     "unknown_reason": unknown_reason,
+                    "possible_detection": diagnostic,
                 }
             )
         )

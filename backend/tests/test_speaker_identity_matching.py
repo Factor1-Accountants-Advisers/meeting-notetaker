@@ -1,10 +1,18 @@
 import unittest
 
-from app.schemas import GraphMeetingAttendeeMetadata, GraphMeetingMetadata, Meeting, MeetingSource, TranscriptSegment
+from app.schemas import (
+    GraphMeetingAttendeeMetadata,
+    GraphMeetingMetadata,
+    Meeting,
+    MeetingSource,
+    PossibleSpeakerDetection,
+    TranscriptSegment,
+)
 from app.config import Settings
 from app.services.speaker_matching import (
     IdentityRange,
     _apply_identity_ranges,
+    _build_voiceprint_payload,
     _candidate_voiceprints_for_meeting,
     _controlled_expansion_ids_from_settings,
     _merge_expansion_matches,
@@ -101,6 +109,20 @@ class SpeakerIdentityMatchingTests(unittest.TestCase):
             [item.employee_id for item in ordered],
             ["benjamin@factor1.com.au", "david@factor1.com.au", "df@factor1.com.au", "tc@factor1.com.au"],
         )
+
+    def test_expansion_payload_marks_only_base_candidates_as_expected(self):
+        labels = {}
+        _build_voiceprint_payload(
+            [
+                vp("benjamin@factor1.com.au", "Benjamin Bryant"),
+                vp("df@factor1.com.au", "David F"),
+            ],
+            labels,
+            expected_candidate_ids={"benjamin@factor1.com.au"},
+        )
+
+        self.assertTrue(labels["Benjamin Bryant #1"].expected_participant)
+        self.assertFalse(labels["David F #1"].expected_participant)
 
     def test_controlled_expansion_ids_are_loaded_from_config(self):
         settings = Settings(
@@ -229,6 +251,76 @@ class SpeakerIdentityMatchingTests(unittest.TestCase):
         self.assertEqual(unknown_count, 1)
         self.assertEqual(participants[0].name, "Speaker 1")
         self.assertEqual(matched[0].unknown_reason, "insufficient_overlap")
+
+    def test_non_attendee_match_is_suppressed_but_retains_diagnostic_evidence(self):
+        segments = [segment("SPEAKER_00", 0, 5000)]
+        ranges = [
+            IdentityRange(
+                start_ms=0,
+                end_ms=5000,
+                raw_speaker="SPEAKER_00",
+                display_name="David F",
+                confidence=0.99,
+                source_label="David F #1",
+                expected_participant=False,
+            )
+        ]
+
+        matched, participants, unknown_count = _apply_identity_ranges(segments, ranges)
+
+        self.assertEqual(unknown_count, 1)
+        self.assertEqual([(p.name, p.known) for p in participants], [("Speaker 1", False)])
+        self.assertFalse(matched[0].speaker_known)
+        self.assertEqual(matched[0].speaker, "Speaker 1")
+        self.assertEqual(matched[0].unknown_reason, "non_attendee")
+        self.assertIsNotNone(matched[0].possible_detection)
+        self.assertEqual(matched[0].possible_detection.display_name, "David F")
+        self.assertEqual(matched[0].possible_detection.evidence_duration_ms, 5000)
+        self.assertFalse(matched[0].possible_detection.strong_evidence)
+
+    def test_repeated_high_confidence_non_attendee_remains_suppressed_but_is_strong_diagnostic(self):
+        segments = [
+            segment("SPEAKER_00", 0, 2000),
+            segment("SPEAKER_00", 2200, 4200),
+        ]
+        ranges = [
+            IdentityRange(0, 2000, "SPEAKER_00", "David F", confidence=0.99, expected_participant=False),
+            IdentityRange(2200, 4200, "SPEAKER_00", "David F", confidence=0.99, expected_participant=False),
+        ]
+
+        matched, participants, unknown_count = _apply_identity_ranges(segments, ranges)
+
+        self.assertEqual(unknown_count, 1)
+        self.assertEqual([(p.name, p.known) for p in participants], [("Speaker 1", False)])
+        self.assertTrue(all(not item.speaker_known for item in matched))
+        self.assertTrue(all(item.possible_detection and item.possible_detection.strong_evidence for item in matched))
+        self.assertTrue(all(item.possible_detection and item.possible_detection.repeated_matches == 2 for item in matched))
+
+    def test_expansion_diagnostic_survives_merge(self):
+        base = [segment("SPEAKER_00", 0, 5000)]
+        base[0].raw_speaker = "SPEAKER_00"
+        expanded = [
+            base[0].model_copy(
+                update={
+                    "speaker": "Speaker 1",
+                    "speaker_known": False,
+                    "unknown_reason": "non_attendee",
+                    "possible_detection": PossibleSpeakerDetection(
+                        display_name="David F",
+                        confidence=0.99,
+                        evidence_duration_ms=5000,
+                        repeated_matches=1,
+                    ),
+                }
+            )
+        ]
+
+        merged, participants, unknown_count = _merge_expansion_matches(base, expanded)
+
+        self.assertEqual(unknown_count, 1)
+        self.assertEqual([(p.name, p.known) for p in participants], [("Speaker 1", False)])
+        self.assertIsNotNone(merged[0].possible_detection)
+        self.assertEqual(merged[0].possible_detection.display_name, "David F")
 
     def test_expansion_merge_preserves_distinct_segments_in_same_cluster(self):
         """Regression: IN-79 expansion merge must not collapse a cluster to one segment."""
