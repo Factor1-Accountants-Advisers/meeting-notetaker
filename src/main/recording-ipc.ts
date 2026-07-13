@@ -66,27 +66,6 @@ let autoStartAckTimer: ReturnType<typeof setTimeout> | null = null
 let autoStartAckTimeoutMs = 15_000
 let pendingAutoStart: ActiveRecording | null = null
 let rendererRecordingReady = false
-// Renderer-owned pause state, mirrored here so the tray menu (main process)
-// can show Pause vs Resume (IN-120).
-let recordingPaused = false
-
-export function isRecordingPaused(): boolean {
-  return recordingPaused
-}
-
-export function setRecordingPaused(paused: boolean): void {
-  recordingPaused = paused
-}
-
-/** Send a tray-initiated recording control to the renderer (IN-120). */
-export function sendTrayRecordingControl(action: 'pause' | 'resume' | 'stop'): void {
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    logger().warn('[recording] cannot send tray control: no main window', { action })
-    return
-  }
-  logger().info('[recording] tray recording control', { action })
-  mainWindow.webContents.send('recording:tray-control', { action })
-}
 
 // IN-117: manual recording extension.
 const EXTEND_INCREMENT_MS = 10 * 60_000
@@ -180,7 +159,6 @@ export function handleRendererRecordingStarted(): void {
     const recording = pendingAutoStart
     pendingAutoStart = null
     clearAutoStartAckTimer()
-    recordingPaused = false
     sm.startAutoRecording(recording)
     blockSleepWhileRecording()
     scheduleAutoStop(recording)
@@ -191,30 +169,7 @@ export function handleRendererRecordingStarted(): void {
   })
 }
 
-export function registerManualRecording(recording: ActiveRecording & { title?: string }): void {
-  clearAutoStartAckTimer()
-  pendingAutoStart = null
-  recordingPaused = false
-  // A superseded auto session must not leave its auto-stop timer armed — it
-  // would chop the manual recording off at the old meeting's end time (IN-130).
-  resetAutoStopState()
-  blockSleepWhileRecording()
-  const sm = getRecordingStateMachine()
-  // Carry the user-entered title so the tray tooltip reads "Recording: [title]"
-  // for manual recordings too (IN-77).
-  sm.startManualRecording({
-    ...recording,
-    source: 'manual',
-    metadata: recording.title ? { title: recording.title } : recording.metadata
-  })
-  logger().info('[recording] manual recording registered', {
-    eventId: recording.eventId,
-    idempotencyKey: recording.idempotencyKey
-  })
-}
-
 export function handleRendererRecordingStopped(): void {
-  recordingPaused = false
   resetAutoStopState()
   unblockSleep()
 
@@ -232,7 +187,6 @@ export function handleRendererRecordingStopped(): void {
 }
 
 export function handleRendererRecordingError(message: string): void {
-  recordingPaused = false
   resetAutoStopState()
   unblockSleep()
   clearAutoStartAckTimer()

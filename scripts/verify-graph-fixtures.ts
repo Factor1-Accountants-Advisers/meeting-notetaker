@@ -16,7 +16,6 @@ import {
   handleRendererRecordingReady,
   handleRendererRecordingStarted,
   handleRendererRecordingStopped,
-  registerManualRecording,
   sendAutoStartRequest,
   setAutoStartAckTimeoutMsForTest,
   setMainWindow
@@ -231,20 +230,9 @@ async function main(): Promise<void> {
   // Cannot start another auto while recording
   assert.equal(sm.canStartAutoRecording('key-2'), false)
 
-  // Manual recording wins over auto
-  sm.startManualRecording({
-    eventId: 'event-2',
-    idempotencyKey: 'key-2',
-    startTimeUtc: '2026-06-26T03:00:00.000Z',
-    endTimeUtc: '2026-06-26T04:00:00.000Z',
-    source: 'manual'
-  })
-  assert.equal(sm.getState(), 'recording')
-  assert.equal(sm.getActiveRecording()?.source, 'manual')
-
   // Stop transitions to processing
   const finished = sm.stopRecording()
-  assert.equal(finished?.eventId, 'event-2')
+  assert.equal(finished?.eventId, 'event-1')
   assert.equal(sm.getState(), 'processing')
 
   // Complete processing returns to idle
@@ -253,7 +241,7 @@ async function main(): Promise<void> {
 
   // Cannot re-record the same key
   assert.equal(sm.canStartAutoRecording('key-1'), false)
-  assert.equal(sm.canStartAutoRecording('key-2'), false)
+  assert.equal(sm.canStartAutoRecording('key-2'), true)
   assert.equal(sm.canStartAutoRecording('key-3'), true)
 
   // Auto-start IPC must not move to recording until the renderer acknowledges capture start.
@@ -317,27 +305,6 @@ async function main(): Promise<void> {
   assert.equal(getRecordingStateMachine().getState(), 'recording')
   handleRendererRecordingStopped()
 
-  // Manual recordings are registered in the main-process state machine and block auto-start.
-  cleanupRecordingIpc()
-  const manualWindow = fakeWindow()
-  setMainWindow(manualWindow.window)
-  registerManualRecording({
-    eventId: 'manual-event',
-    idempotencyKey: 'manual-key',
-    startTimeUtc: '2026-06-26T01:00:00.000Z',
-    endTimeUtc: '2026-06-26T02:00:00.000Z',
-    source: 'manual'
-  })
-  assert.equal(getRecordingStateMachine().getActiveRecording()?.source, 'manual')
-  sendAutoStartRequest({
-    eventId: 'blocked-auto-event',
-    idempotencyKey: 'blocked-auto-key',
-    startTimeUtc: '2026-06-26T01:00:00.000Z',
-    endTimeUtc: '2026-06-26T02:00:00.000Z',
-    source: 'auto'
-  })
-  assert.equal(manualWindow.sent.length, 0)
-  handleRendererRecordingStopped()
   cleanupRecordingIpc()
 
   const runtimeDir = await mkdtemp(join(tmpdir(), 'notetaker-graph-fixtures-'))

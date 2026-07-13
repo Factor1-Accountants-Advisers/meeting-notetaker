@@ -58,16 +58,8 @@ function App(): JSX.Element {
   const [extending, setExtending] = useState(false)
   const recordingRef = useRef<RecordingSession | null>(null)
   const autoGraphMetadataRef = useRef<GraphMeetingMetadata | null>(null)
-  // Latest pause/resume/stop handlers for the tray-control listener (IN-120),
-  // so the once-registered listener never calls a stale closure.
-  const controlHandlersRef = useRef<{ pause: () => void; resume: () => void; stop: () => void }>({
-    pause: () => {},
-    resume: () => {},
-    stop: () => {}
-  })
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null)
   const [autoRecordingState, setAutoRecordingState] = useState<'idle' | 'recording' | 'processing'>('idle')
-  const [submitting, setSubmitting] = useState(false)
   const [postCaptureNotice, setPostCaptureNotice] = useState<PostCaptureNotice>(null)
   const [interrupted, setInterrupted] = useState<SpillEntry[]>([])
   const { theme, toggle } = useTheme()
@@ -196,15 +188,6 @@ function App(): JSX.Element {
       cancelled = true
     }
   }, [user, enrollmentAttempt])
-
-  // Listen for tray-initiated pause/resume/stop controls (IN-120). Registered
-  // once; dispatches through the ref so it always hits the current handlers.
-  useEffect(() => {
-    if (typeof window.api?.onTrayRecordingControl !== 'function') return
-    return window.api.onTrayRecordingControl((action) => {
-      controlHandlersRef.current[action]?.()
-    })
-  }, [])
 
   // Reflect extends triggered from the tray menu or toast button (IN-124) in
   // the on-screen countdown.
@@ -643,167 +626,6 @@ function App(): JSX.Element {
     }
   }
 
-  const startCapture = async (title: string, link: string | null): Promise<void> => {
-    // IN-130: the Home controls are disabled while recording, but guard here too —
-    // capture.start() would silently discard the active session's audio.
-    if (recordingRef.current) {
-      window.api.notifyRecordingError('Recording already in progress. Stop it before starting a new one.')
-      return
-    }
-    // Always capture both mic and system audio — every meeting has system audio.
-    const source = 'online' as const
-    window.api.debugLog('manual start requested', { title, source })
-    const created = await createMeeting(title, link)
-    window.api.debugLog('manual meeting create finished', { meetingId: created?.id ?? null })
-    const status = await capture.start(source, loadPrefs().micDeviceId, {
-      title,
-      meetingId: created?.id ?? null
-    })
-    const startedAt = Date.now()
-    const manualKey = created?.id ?? `manual-${startedAt}`
-    if (typeof window.api.notifyManualRecordingStarted === 'function') {
-      window.api.notifyManualRecordingStarted({
-        eventId: manualKey,
-        idempotencyKey: manualKey,
-        startTimeUtc: new Date(startedAt).toISOString(),
-        endTimeUtc: new Date(startedAt + 8 * 60 * 60 * 1000).toISOString(),
-        source: 'manual',
-        title
-      })
-    }
-    window.api.debugLog('manual capture start finished', { status })
-    setCaptureStatus(status)
-    setRecording({
-      meetingId: created?.id ?? null,
-      title,
-      source,
-      startedAt,
-      pausedAccum: 0,
-      pausedAt: null
-    })
-    setView('recording')
-  }
-
-  const stopRecording = async (): Promise<void> => {
-    const session = recording
-    const meetingId = session?.meetingId ?? null
-    const durationSeconds = session ? Math.round(elapsedMs(session) / 1000) : null
-    window.api.debugLog('manual stop requested', { meetingId, durationSeconds })
-    setSubmitting(true)
-    let result: Awaited<ReturnType<typeof capture.stop>> = null
-    try {
-      result = await capture.stop(session ? elapsedMs(session) : undefined)
-      window.api.debugLog('capture stop resolved', {
-        hasBlob: Boolean(result?.blob),
-        size: result?.blob.size ?? 0,
-        type: result?.blob.type ?? null,
-        hasSystemBlob: Boolean(result?.systemBlob),
-        systemSize: result?.systemBlob?.size ?? 0,
-        systemType: result?.systemBlob?.type ?? null
-      })
-    } catch (err) {
-      window.api.debugLog('capture stop failed', {
-        message: err instanceof Error ? err.message : String(err)
-      })
-      // Free the main-process state machine or every future auto-start is refused.
-      window.api.notifyRecordingError('Manual capture stop failed')
-      setSubmitting(false)
-      return
-    }
-    if (result) {
-      // Local copy first (survives backend outages), then queue the pipeline.
-      let savedLocally = false
-      const name = `${meetingId ?? `local-${Date.now()}`}.webm`
-      try {
-        const { path } = await window.api.saveRecording(name, await result.blob.arrayBuffer())
-        console.info(`Recording saved: ${path} (${Math.round(result.blob.size / 1024)} KB)`)
-        if (result.systemBlob) {
-          const systemPath = await window.api.saveRecording(
-            name.replace(/\.webm$/i, '.system.webm'),
-            await result.systemBlob.arrayBuffer()
-          )
-          console.info(
-            `System audio saved: ${systemPath.path} (${Math.round(result.systemBlob.size / 1024)} KB)`
-          )
-        }
-        savedLocally = true
-        // The audio is durable on disk — the crash-spill is now redundant (IN-129).
-        capture.discardCompletedSpill()
-      } catch (err) {
-        console.error('Failed to save recording', err)
-      }
-      if (meetingId) {
-        window.api.debugLog('audio upload starting', {
-          meetingId,
-          size: result.blob.size,
-          systemSize: result.systemBlob?.size ?? 0
-        })
-        const uploaded = await uploadAudio(
-          meetingId,
-          await blobToBase64(result.blob),
-          result.blob.type || 'audio/webm',
-          durationSeconds,
-          null,
-          result.systemBlob
-            ? {
-                audioB64: await blobToBase64(result.systemBlob),
-                mimeType: result.systemBlob.type || 'audio/webm'
-              }
-            : null
-        )
-        window.api.debugLog('audio upload finished', { meetingId, ok: Boolean(uploaded) })
-        if (!uploaded) console.warn('Audio upload failed — backend unreachable')
-        // Upload also makes the audio durable, covering a failed local save.
-        if (uploaded && !savedLocally) capture.discardCompletedSpill()
-        if (uploaded) watchProcessing(meetingId, session?.title ?? 'Recording')
-        else {
-          setPostCaptureNotice({
-            state: 'upload_failed',
-            meetingId,
-            title: session?.title ?? 'Recording',
-            message: 'Recording saved locally, but upload failed. Retry upload once the backend is reachable.'
-          })
-        }
-      }
-    } else {
-      window.api.debugLog('capture stop returned no blob', { meetingId })
-    }
-    // Manual counterpart of the auto path's stop notification (sent after the
-    // upload, matching that ordering): without it the main-process state
-    // machine stays in 'recording' forever and refuses every future auto-start.
-    window.api.notifyRecordingStopped()
-    // A manually stopped auto session would otherwise leave the shell stuck on
-    // 'recording' — the auto-stop timer that used to reset it is now cleared.
-    setAutoRecordingState('idle')
-    setRecording(null)
-    setCaptureStatus(null)
-    setView('home')
-    setSubmitting(false)
-  }
-
-  const pauseRecording = (): void => {
-    capture.pause()
-    setRecording((s) => (s ? { ...s, pausedAt: Date.now() } : s))
-    window.api.notifyRecordingPausedChanged?.(true)
-  }
-
-  const resumeRecording = (): void => {
-    capture.resume()
-    setRecording((s) =>
-      s && s.pausedAt !== null
-        ? { ...s, pausedAccum: s.pausedAccum + (Date.now() - s.pausedAt), pausedAt: null }
-        : s
-    )
-    window.api.notifyRecordingPausedChanged?.(false)
-  }
-
-  // Keep the tray-control ref pointing at the current handlers each render.
-  controlHandlersRef.current = {
-    pause: pauseRecording,
-    resume: resumeRecording,
-    stop: () => void stopRecording()
-  }
-
   const uploadRecording = async (title: string, file: File): Promise<void> => {
     const created = await createMeeting(title, null, 'upload')
     if (!created) {
@@ -906,9 +728,6 @@ function App(): JSX.Element {
         <RecordingScreen
           session={recording}
           captureStatus={captureStatus}
-          onPause={pauseRecording}
-          onResume={resumeRecording}
-          onStop={() => void stopRecording()}
           onExtend={
             recording.scheduledEndUtc && typeof window.api?.extendRecording === 'function'
               ? () => {
@@ -925,13 +744,11 @@ function App(): JSX.Element {
               : undefined
           }
           extending={extending}
-          saving={submitting}
         />
       )}
       {view === 'home' && (
         <HomeScreen
           userName={user.name}
-          onStartCapture={(t, l) => void startCapture(t, l)}
           onUploadRecording={(t, f) => void uploadRecording(t, f)}
           recordingState={shellRecordingState}
           interruptedRecordings={interrupted.map((e) => ({

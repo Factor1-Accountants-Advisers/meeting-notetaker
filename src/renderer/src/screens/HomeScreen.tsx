@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { AlertTriangle, CheckCircle2, Loader2, Mic, Plus, Upload, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Loader2, Plus, Upload, XCircle } from 'lucide-react'
 import { Card, SectionHeader } from '@renderer/components/ui/Card'
 
 /** A recording interrupted by sleep/crash, recoverable from its spill file (IN-129). */
@@ -11,7 +11,6 @@ export interface InterruptedRecording {
 
 interface HomeProps {
   userName: string
-  onStartCapture: (title: string, link: string | null) => void
   onUploadRecording: (title: string, file: File) => void
   recordingState?: 'idle' | 'recording' | 'processing'
   interruptedRecordings?: InterruptedRecording[]
@@ -30,7 +29,6 @@ interface HomeProps {
 
 export function HomeScreen({
   userName,
-  onStartCapture,
   onUploadRecording,
   recordingState,
   interruptedRecordings,
@@ -75,7 +73,6 @@ export function HomeScreen({
         />
       )}
       <CaptureCard
-        onStart={onStartCapture}
         onUpload={onUploadRecording}
         recordingActive={recordingState === 'recording'}
       />
@@ -225,18 +222,16 @@ function Greeting({ userName }: { userName: string }): JSX.Element {
 }
 
 function CaptureCard({
-  onStart,
   onUpload,
   recordingActive = false
 }: {
-  onStart: (title: string, link: string | null) => void
   onUpload: (title: string, file: File) => void
-  /** IN-130: while a recording runs, title/start/upload are disabled until it stops. */
+  /** Upload is disabled while an automatic recording is in progress. */
   recordingActive?: boolean
 }): JSX.Element {
   const [title, setTitle] = useState('')
   const hasTitle = title.trim().length > 0
-  const canStart = hasTitle && !recordingActive
+  const canUpload = hasTitle && !recordingActive
 
   return (
     <Card>
@@ -250,23 +245,13 @@ function CaptureCard({
         className="mb-3 h-9 w-full rounded-md border-[0.5px] border-edge-tertiary bg-bg-primary px-3 text-[14px] text-content-primary placeholder:text-content-tertiary focus:border-brand-blue focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
       />
       <div className="flex gap-2.5">
-        <button
-          type="button"
-          disabled={!canStart}
-          onClick={() => onStart(title.trim(), null)}
-          title={recordingActive ? 'Stop the current recording first' : undefined}
-          className="flex flex-1 items-center justify-center gap-1.5 rounded-md border-[0.5px] border-edge-info bg-bg-info py-2.5 text-[14px] text-content-info transition-colors hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-45"
-        >
-          <Mic size={16} strokeWidth={1.75} />
-          Start Recording
-        </button>
         <label
           className={`flex items-center justify-center gap-1.5 rounded-md border-[0.5px] border-edge-secondary px-4 py-2.5 text-[14px] text-content-primary ${
-            canStart ? 'cursor-pointer hover:bg-bg-secondary' : 'cursor-not-allowed opacity-45'
+            canUpload ? 'cursor-pointer hover:bg-bg-secondary' : 'cursor-not-allowed opacity-45'
           }`}
           title={
             recordingActive
-              ? 'Stop the current recording first'
+              ? 'Upload is unavailable while an automatic recording is in progress'
               : hasTitle
                 ? 'Upload an existing recording'
                 : 'Enter a meeting name first'
@@ -278,7 +263,7 @@ function CaptureCard({
             type="file"
             accept="audio/*,video/webm"
             className="hidden"
-            disabled={!canStart}
+            disabled={!canUpload}
             onChange={(e) => {
               const file = e.target.files?.[0]
               if (file) onUpload(title.trim(), file)

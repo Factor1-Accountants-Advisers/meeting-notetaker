@@ -30,15 +30,6 @@ export interface AutoStopRequest {
   idempotencyKey: string
 }
 
-export interface ManualRecordingNotification {
-  eventId: string
-  idempotencyKey: string
-  startTimeUtc: string
-  endTimeUtc: string
-  source: 'manual'
-  title?: string
-}
-
 // Crash-safe capture spill (IN-129).
 export type SpillStream = 'mic' | 'sys'
 
@@ -155,10 +146,6 @@ const api = {
   /** Notify main process that the auto-recording listeners are mounted and eligible. */
   notifyRecordingReady: (): void => ipcRenderer.send('recording:ready'),
 
-  /** Notify main process that a manual recording has started and should block auto-start. */
-  notifyManualRecordingStarted: (recording: ManualRecordingNotification): void =>
-    ipcRenderer.send('recording:manual-started', recording),
-
   /** Notify main process that the renderer started recording successfully. */
   notifyRecordingStarted: (): void => ipcRenderer.send('recording:started'),
 
@@ -172,21 +159,6 @@ const api = {
    * scheduled end time, or null if there is no active auto-recording. */
   extendRecording: (): Promise<{ endTimeUtc: string } | null> =>
     ipcRenderer.invoke('recording:extend'),
-
-  /** Listen for tray-initiated recording controls (IN-120). Returns unsubscribe. */
-  onTrayRecordingControl: (
-    callback: (action: 'pause' | 'resume' | 'stop') => void
-  ): (() => void) => {
-    const handler = (_event: IpcRendererEvent, data: { action: 'pause' | 'resume' | 'stop' }) =>
-      callback(data.action)
-    ipcRenderer.on('recording:tray-control', handler)
-    return () => ipcRenderer.removeListener('recording:tray-control', handler)
-  },
-
-  /** Tell the main process the recording pause state so the tray menu can show
-   * Pause vs Resume (IN-120). */
-  notifyRecordingPausedChanged: (paused: boolean): void =>
-    ipcRenderer.send('recording:paused-changed', paused),
 
   /** Listen for extends triggered from the tray menu or toast button (IN-124),
    * so the on-screen countdown updates. Returns unsubscribe. */
