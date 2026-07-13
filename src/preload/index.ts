@@ -39,6 +39,25 @@ export interface ManualRecordingNotification {
   title?: string
 }
 
+// Crash-safe capture spill (IN-129).
+export type SpillStream = 'mic' | 'sys'
+
+export interface SpillMeta {
+  title: string
+  meetingId: string | null
+  source: 'online' | 'in_person'
+  mimeType: string
+  startedAtUtc: string
+  graphMetadata?: unknown
+}
+
+export interface SpillEntry extends SpillMeta {
+  key: string
+  micBytes: number
+  sysBytes: number
+  endedAtUtc: string
+}
+
 // Single funnel to the FastAPI backend via the main process. The renderer
 // never touches the network or any credentials directly.
 const api = {
@@ -55,6 +74,25 @@ const api = {
   /** Load a saved capture for retry after backend/upload failures. */
   readRecording: (name: string): Promise<{ exists: boolean; data?: ArrayBuffer }> =>
     ipcRenderer.invoke('recording:read', name),
+
+  /** Open a crash-safe spill session before capture starts (IN-129). */
+  spillOpen: (key: string, meta: SpillMeta): Promise<void> =>
+    ipcRenderer.invoke('recording:spill-open', key, meta),
+
+  /** Append one MediaRecorder timeslice chunk to the spill file. */
+  spillChunk: (key: string, stream: SpillStream, data: ArrayBuffer): Promise<void> =>
+    ipcRenderer.invoke('recording:spill-chunk', key, stream, data),
+
+  /** Delete a spill session after a clean stop or user discard. */
+  spillDiscard: (key: string): Promise<void> =>
+    ipcRenderer.invoke('recording:spill-discard', key),
+
+  /** List interrupted recordings recoverable from spill files. */
+  spillList: (): Promise<SpillEntry[]> => ipcRenderer.invoke('recording:spill-list'),
+
+  /** Read a spill part file for recovery upload. */
+  spillRead: (key: string, stream: SpillStream): Promise<{ exists: boolean; data?: ArrayBuffer }> =>
+    ipcRenderer.invoke('recording:spill-read', key, stream),
 
   /** Renderer diagnostics mirrored into the main log for live desktop debugging. */
   debugLog: (message: string, details?: unknown): void =>

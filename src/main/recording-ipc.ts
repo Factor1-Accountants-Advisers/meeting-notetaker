@@ -1,6 +1,35 @@
-import { BrowserWindow, Notification } from 'electron'
+import { BrowserWindow, Notification, powerSaveBlocker } from 'electron'
 import { createRecordingStateMachine, type ActiveRecording, type RecordingStateMachine } from './recording-state'
 import { logger } from './logger'
+
+// IN-129: while recording, hold the system awake so an idle timeout can't
+// sleep the machine mid-meeting. (Lid-close sleep is OS power policy and
+// cannot be blocked from Electron — the chunk spill covers that case.)
+let sleepBlockerId: number | null = null
+
+function blockSleepWhileRecording(): void {
+  if (sleepBlockerId !== null && powerSaveBlocker.isStarted(sleepBlockerId)) return
+  try {
+    sleepBlockerId = powerSaveBlocker.start('prevent-app-suspension')
+    logger().info('[recording] sleep blocker started', { id: sleepBlockerId })
+  } catch (err) {
+    // powerSaveBlocker is undefined outside Electron (verify:graph harness).
+    logger().warn('[recording] sleep blocker unavailable', {
+      message: err instanceof Error ? err.message : String(err)
+    })
+  }
+}
+
+function unblockSleep(): void {
+  if (sleepBlockerId === null) return
+  try {
+    if (powerSaveBlocker.isStarted(sleepBlockerId)) powerSaveBlocker.stop(sleepBlockerId)
+    logger().info('[recording] sleep blocker stopped', { id: sleepBlockerId })
+  } catch {
+    // Same non-Electron guard as above.
+  }
+  sleepBlockerId = null
+}
 
 export function meetingTitleFrom(metadata: unknown): string | null {
   if (metadata && typeof metadata === 'object' && 'title' in metadata) {
@@ -153,6 +182,7 @@ export function handleRendererRecordingStarted(): void {
     clearAutoStartAckTimer()
     recordingPaused = false
     sm.startAutoRecording(recording)
+    blockSleepWhileRecording()
     scheduleAutoStop(recording)
     notifyAutoRecordingStarted(recording)
   }
@@ -165,6 +195,10 @@ export function registerManualRecording(recording: ActiveRecording & { title?: s
   clearAutoStartAckTimer()
   pendingAutoStart = null
   recordingPaused = false
+  // A superseded auto session must not leave its auto-stop timer armed — it
+  // would chop the manual recording off at the old meeting's end time (IN-130).
+  resetAutoStopState()
+  blockSleepWhileRecording()
   const sm = getRecordingStateMachine()
   // Carry the user-entered title so the tray tooltip reads "Recording: [title]"
   // for manual recordings too (IN-77).
@@ -182,6 +216,7 @@ export function registerManualRecording(recording: ActiveRecording & { title?: s
 export function handleRendererRecordingStopped(): void {
   recordingPaused = false
   resetAutoStopState()
+  unblockSleep()
 
   const sm = getRecordingStateMachine()
   const finished = sm.stopRecording()
@@ -199,6 +234,7 @@ export function handleRendererRecordingStopped(): void {
 export function handleRendererRecordingError(message: string): void {
   recordingPaused = false
   resetAutoStopState()
+  unblockSleep()
   clearAutoStartAckTimer()
   pendingAutoStart = null
 
@@ -392,6 +428,7 @@ function resetAutoStopState(): void {
 
 export function cleanupRecordingIpc(): void {
   resetAutoStopState()
+  unblockSleep()
   clearAutoStartAckTimer()
   pendingAutoStart = null
   rendererRecordingReady = false

@@ -46,6 +46,13 @@ export interface CaptureResult {
 
 const IDLE: CaptureStatus = { mic: 'off', loopback: 'off', recording: false }
 
+/** Session details persisted alongside the spill so an interrupted recording is recoverable (IN-129). */
+export interface SpillSessionMeta {
+  title: string
+  meetingId: string | null
+  graphMetadata?: unknown
+}
+
 class CaptureController {
   private micRecorder: MediaRecorder | null = null
   private systemRecorder: MediaRecorder | null = null
@@ -57,6 +64,18 @@ class CaptureController {
   private monitorTimer: ReturnType<typeof setInterval> | null = null
   private silentSeconds = 0
   private statusListener: ((status: CaptureStatus) => void) | null = null
+  private spillKey: string | null = null
+  // Chunks must reach the main process in emission order or the spilled WebM
+  // stream corrupts; blob→ArrayBuffer conversion is async, so chain per stream.
+  private spillChains: Record<'mic' | 'sys', Promise<void>> = {
+    mic: Promise.resolve(),
+    sys: Promise.resolve()
+  }
+  // Spill of the last completed stop(), kept until the caller confirms the
+  // audio is safe (saved locally or uploaded) — the in-memory blob is not
+  // durable, so discarding at stop() would reopen the IN-129 loss window.
+  private completedSpill: { key: string; chains: Record<'mic' | 'sys', Promise<void>> } | null =
+    null
 
   getStatus(): CaptureStatus {
     return this.status
@@ -67,17 +86,22 @@ class CaptureController {
     this.statusListener = listener
   }
 
-  async start(source: 'online' | 'in_person', micDeviceId = ''): Promise<CaptureStatus> {
+  async start(
+    source: 'online' | 'in_person',
+    micDeviceId = '',
+    spillMeta?: SpillSessionMeta
+  ): Promise<CaptureStatus> {
     this.releaseAll()
 
     const status: CaptureStatus = { mic: 'off', loopback: 'off', recording: false }
+    this.openSpillSession(source, spillMeta)
 
     try {
       const mic = await navigator.mediaDevices.getUserMedia({
         audio: micDeviceId ? { deviceId: { ideal: micDeviceId } } : true
       })
       this.streams.push(mic)
-      this.micRecorder = this.createRecorder(new MediaStream(mic.getAudioTracks()), this.micChunks)
+      this.micRecorder = this.createRecorder(new MediaStream(mic.getAudioTracks()), this.micChunks, 'mic')
       this.micRecorder.start(1000)
       status.mic = 'active'
       this.startMicSilenceMonitor(mic)
@@ -123,7 +147,7 @@ class CaptureController {
 
         // Keep the original display stream alive, including its video track.
         this.streams.push(sys)
-        this.systemRecorder = this.createRecorder(new MediaStream(sysAudioTracks), this.systemChunks)
+        this.systemRecorder = this.createRecorder(new MediaStream(sysAudioTracks), this.systemChunks, 'sys')
         this.systemRecorder.start(1000)
         status.loopback = 'active'
       } catch {
@@ -149,10 +173,17 @@ class CaptureController {
   }
 
   async stop(durationMs?: number): Promise<CaptureResult | null> {
+    // Detach the spill from the live session: it must survive stop() until the
+    // caller confirms the audio is safe (discardCompletedSpill), or be dropped
+    // right away when there is no audio worth keeping.
+    const spill = this.spillKey ? { key: this.spillKey, chains: this.spillChains } : null
+    this.spillKey = null
+
     const micRecorder = this.micRecorder
     const systemRecorder = this.systemRecorder
     if ((!micRecorder || micRecorder.state === 'inactive') && (!systemRecorder || systemRecorder.state === 'inactive')) {
       this.releaseAll()
+      if (spill) this.discardSpill(spill)
       return null
     }
 
@@ -163,21 +194,85 @@ class CaptureController {
     this.releaseAll()
 
     const primaryBlob = micBlob ?? systemBlob
-    if (!primaryBlob || primaryBlob.size === 0) return null
+    if (!primaryBlob || primaryBlob.size === 0) {
+      if (spill) this.discardSpill(spill)
+      return null
+    }
+    this.completedSpill = spill
     const result: CaptureResult = { blob: primaryBlob }
     if (systemBlob && systemBlob.size > 0 && micBlob) result.systemBlob = systemBlob
     return result
   }
 
-  private createRecorder(stream: MediaStream, chunks: BlobPart[]): MediaRecorder {
+  /**
+   * Drop the spill of the last stop() once its audio is durable elsewhere
+   * (saved locally or uploaded). If never called, the spill stays on disk and
+   * is offered for recovery on the next launch — never silently lost.
+   */
+  discardCompletedSpill(): void {
+    const spill = this.completedSpill
+    this.completedSpill = null
+    if (spill) this.discardSpill(spill)
+  }
+
+  private createRecorder(
+    stream: MediaStream,
+    chunks: BlobPart[],
+    spillStream: 'mic' | 'sys'
+  ): MediaRecorder {
     const mime = ['audio/webm;codecs=opus', 'audio/webm'].find((m) =>
       MediaRecorder.isTypeSupported(m)
     )
     const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined)
     recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunks.push(e.data)
+      if (e.data.size > 0) {
+        chunks.push(e.data)
+        this.spillChunk(spillStream, e.data)
+      }
     }
     return recorder
+  }
+
+  /** Open a crash-safe spill session so an interrupted capture is recoverable (IN-129). */
+  private openSpillSession(source: 'online' | 'in_person', meta?: SpillSessionMeta): void {
+    if (typeof window.api?.spillOpen !== 'function') return
+    const key = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    this.spillKey = key
+    this.spillChains = { mic: Promise.resolve(), sys: Promise.resolve() }
+    void window.api
+      .spillOpen(key, {
+        title: meta?.title ?? 'Recovered recording',
+        meetingId: meta?.meetingId ?? null,
+        source,
+        mimeType: 'audio/webm',
+        startedAtUtc: new Date().toISOString(),
+        graphMetadata: meta?.graphMetadata
+      })
+      .catch(() => {
+        // Spill is a safety net; capture must work without it.
+        this.spillKey = null
+      })
+  }
+
+  private spillChunk(stream: 'mic' | 'sys', data: Blob): void {
+    const key = this.spillKey
+    if (!key || typeof window.api?.spillChunk !== 'function') return
+    this.spillChains[stream] = this.spillChains[stream]
+      .then(async () => {
+        if (this.spillKey !== key) return // session ended while queued
+        await window.api.spillChunk(key, stream, await data.arrayBuffer())
+      })
+      .catch(() => {
+        // Best-effort: a failed append must never break the live capture.
+      })
+  }
+
+  private discardSpill(spill: { key: string; chains: Record<'mic' | 'sys', Promise<void>> }): void {
+    if (typeof window.api?.spillDiscard !== 'function') return
+    // Let queued appends settle first so the discard isn't resurrected by a late chunk.
+    void Promise.allSettled([spill.chains.mic, spill.chains.sys]).then(() =>
+      window.api.spillDiscard(spill.key).catch(() => {})
+    )
   }
 
   private async stopRecorder(
@@ -254,6 +349,8 @@ class CaptureController {
   }
 
   private releaseAll(): void {
+    // Deliberately leaves any spill untouched: an abandoned session's spill
+    // must survive to the next-launch recovery prompt, never be deleted here.
     this.stopMicSilenceMonitor()
     this.micRecorder = null
     this.systemRecorder = null

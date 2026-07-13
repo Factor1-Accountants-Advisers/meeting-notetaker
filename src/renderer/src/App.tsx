@@ -29,6 +29,13 @@ function loadUser(): User | null {
 
 type View = ScreenId | 'recording'
 
+// IN-129: interrupted-recording spill entries surfaced for recovery on launch.
+type SpillEntry = Awaited<ReturnType<Window['api']['spillList']>>[number]
+
+// Distinguishes spills orphaned by a previous run from any session started in
+// this one — only pre-boot sessions are offered for recovery.
+const APP_BOOT_MS = Date.now()
+
 type PostCaptureState = 'processing' | 'emailing' | 'ready' | 'upload_failed' | 'processing_failed' | 'email_failed'
 
 type PostCaptureNotice = {
@@ -60,6 +67,7 @@ function App(): JSX.Element {
   const [autoRecordingState, setAutoRecordingState] = useState<'idle' | 'recording' | 'processing'>('idle')
   const [submitting, setSubmitting] = useState(false)
   const [postCaptureNotice, setPostCaptureNotice] = useState<PostCaptureNotice>(null)
+  const [interrupted, setInterrupted] = useState<SpillEntry[]>([])
   const { theme, toggle } = useTheme()
   const { items: notifications, unread, markAllRead } = useNotifications(user !== null)
 
@@ -108,6 +116,22 @@ function App(): JSX.Element {
   // Keep the main process informed so backend calls carry the audit actor.
   useEffect(() => {
     if (typeof window.api?.setUser === 'function') window.api.setUser(user?.name ?? '')
+  }, [user])
+
+  // IN-129: surface recordings interrupted by sleep/crash for recovery.
+  useEffect(() => {
+    if (!user || typeof window.api?.spillList !== 'function') return
+    let cancelled = false
+    window.api
+      .spillList()
+      .then((entries) => {
+        const orphans = entries.filter((e) => Date.parse(e.startedAtUtc) < APP_BOOT_MS)
+        if (!cancelled && orphans.length) setInterrupted(orphans)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
   }, [user])
 
   // Mid-capture status changes (e.g. mic falls silent) must reach the UI live.
@@ -186,7 +210,11 @@ function App(): JSX.Element {
         autoGraphMetadataRef.current = graphMetadata
         const title = graphMetadata?.title?.trim() || 'Auto-recorded Teams meeting'
         const created = await createMeeting(title, graphMetadata?.joinWebUrl ?? null, 'online', graphMetadata)
-        const status = await capture.start('online', loadPrefs().micDeviceId)
+        const status = await capture.start('online', loadPrefs().micDeviceId, {
+          title,
+          meetingId: created?.id ?? null,
+          graphMetadata
+        })
         setCaptureStatus(status)
         setRecording({
           meetingId: created?.id ?? null,
@@ -214,6 +242,7 @@ function App(): JSX.Element {
         const durationSeconds = session ? Math.round(elapsedMs(session) / 1000) : null
         const result = await capture.stop(session ? elapsedMs(session) : undefined)
         if (result) {
+          let savedLocally = false
           const name = `${meetingId ?? `auto-${Date.now()}`}.webm`
           try {
             await window.api.saveRecording(name, await result.blob.arrayBuffer())
@@ -223,11 +252,14 @@ function App(): JSX.Element {
                 await result.systemBlob.arrayBuffer()
               )
             }
+            savedLocally = true
+            // The audio is durable on disk — the crash-spill is now redundant (IN-129).
+            capture.discardCompletedSpill()
           } catch {
             // Local save failed — still try upload
           }
           if (meetingId) {
-            await uploadAudio(
+            const uploadedMeeting = await uploadAudio(
               meetingId,
               await blobToBase64(result.blob),
               result.blob.type || 'audio/webm',
@@ -240,6 +272,8 @@ function App(): JSX.Element {
                   }
                 : null
             )
+            // Upload also makes the audio durable, covering a failed local save.
+            if (uploadedMeeting && !savedLocally) capture.discardCompletedSpill()
             watchProcessing(meetingId, session?.title ?? graphMetadata?.title ?? 'Auto-recorded Teams meeting')
           }
         }
@@ -501,13 +535,109 @@ function App(): JSX.Element {
     }
   }
 
+  // IN-129: upload a spilled (interrupted) recording through the normal pipeline.
+  const recoverInterrupted = async (key: string): Promise<void> => {
+    const entry = interrupted.find((e) => e.key === key)
+    if (!entry) return
+    setInterrupted((list) => list.filter((e) => e.key !== key))
+    try {
+      const [mic, sys] = await Promise.all([
+        window.api.spillRead(key, 'mic'),
+        window.api.spillRead(key, 'sys')
+      ])
+      const micData = mic.exists && mic.data?.byteLength ? mic.data : null
+      const sysData = sys.exists && sys.data?.byteLength ? sys.data : null
+      const primary = micData ?? sysData
+      if (!primary) {
+        await window.api.spillDiscard(key)
+        return
+      }
+
+      const graphMetadata = (entry.graphMetadata as GraphMeetingMetadata | undefined) ?? null
+      let meetingId = entry.meetingId
+      if (!meetingId) {
+        const created = await createMeeting(entry.title, null, entry.source, graphMetadata)
+        meetingId = created?.id ?? null
+      }
+      if (!meetingId) {
+        // Backend unreachable — keep the entry so the user can retry later.
+        setInterrupted((list) => [entry, ...list])
+        return
+      }
+
+      const name = `${meetingId}.webm`
+      let savedLocally = false
+      try {
+        await window.api.saveRecording(name, primary)
+        if (micData && sysData) {
+          await window.api.saveRecording(name.replace(/\.webm$/i, '.system.webm'), sysData)
+        }
+        savedLocally = true
+      } catch {
+        // Local save failed — still try upload; keep the spill as the only copy.
+      }
+
+      const durationSeconds =
+        Math.round((Date.parse(entry.endedAtUtc) - Date.parse(entry.startedAtUtc)) / 1000) || null
+      const mimeType = entry.mimeType || 'audio/webm'
+      const uploaded = await uploadAudio(
+        meetingId,
+        await blobToBase64(new Blob([primary])),
+        mimeType,
+        durationSeconds,
+        graphMetadata,
+        micData && sysData
+          ? { audioB64: await blobToBase64(new Blob([sysData])), mimeType }
+          : null
+      )
+      if (uploaded || savedLocally) await window.api.spillDiscard(key)
+      if (uploaded) {
+        watchProcessing(meetingId, entry.title)
+      } else {
+        setPostCaptureNotice({
+          state: 'upload_failed',
+          meetingId,
+          title: entry.title,
+          message: savedLocally
+            ? 'Recovered recording saved locally, but upload failed. Retry once the backend is reachable.'
+            : 'Upload failed. The recovered audio is kept; retry once the backend is reachable.'
+        })
+        if (!savedLocally) setInterrupted((list) => [entry, ...list])
+      }
+    } catch (err) {
+      window.api.debugLog('interrupted recording recovery failed', {
+        key,
+        message: err instanceof Error ? err.message : String(err)
+      })
+      setInterrupted((list) => [entry, ...list])
+    }
+  }
+
+  const discardInterrupted = async (key: string): Promise<void> => {
+    setInterrupted((list) => list.filter((e) => e.key !== key))
+    try {
+      await window.api.spillDiscard(key)
+    } catch {
+      // Already gone or locked — the startup sweep will retry next launch.
+    }
+  }
+
   const startCapture = async (title: string, link: string | null): Promise<void> => {
+    // IN-130: the Home controls are disabled while recording, but guard here too —
+    // capture.start() would silently discard the active session's audio.
+    if (recordingRef.current) {
+      window.api.notifyRecordingError('Recording already in progress. Stop it before starting a new one.')
+      return
+    }
     // Always capture both mic and system audio — every meeting has system audio.
     const source = 'online' as const
     window.api.debugLog('manual start requested', { title, source })
     const created = await createMeeting(title, link)
     window.api.debugLog('manual meeting create finished', { meetingId: created?.id ?? null })
-    const status = await capture.start(source, loadPrefs().micDeviceId)
+    const status = await capture.start(source, loadPrefs().micDeviceId, {
+      title,
+      meetingId: created?.id ?? null
+    })
     const startedAt = Date.now()
     const manualKey = created?.id ?? `manual-${startedAt}`
     if (typeof window.api.notifyManualRecordingStarted === 'function') {
@@ -561,6 +691,7 @@ function App(): JSX.Element {
     }
     if (result) {
       // Local copy first (survives backend outages), then queue the pipeline.
+      let savedLocally = false
       const name = `${meetingId ?? `local-${Date.now()}`}.webm`
       try {
         const { path } = await window.api.saveRecording(name, await result.blob.arrayBuffer())
@@ -574,6 +705,9 @@ function App(): JSX.Element {
             `System audio saved: ${systemPath.path} (${Math.round(result.systemBlob.size / 1024)} KB)`
           )
         }
+        savedLocally = true
+        // The audio is durable on disk — the crash-spill is now redundant (IN-129).
+        capture.discardCompletedSpill()
       } catch (err) {
         console.error('Failed to save recording', err)
       }
@@ -598,6 +732,8 @@ function App(): JSX.Element {
         )
         window.api.debugLog('audio upload finished', { meetingId, ok: Boolean(uploaded) })
         if (!uploaded) console.warn('Audio upload failed — backend unreachable')
+        // Upload also makes the audio durable, covering a failed local save.
+        if (uploaded && !savedLocally) capture.discardCompletedSpill()
         if (uploaded) watchProcessing(meetingId, session?.title ?? 'Recording')
         else {
           setPostCaptureNotice({
@@ -765,7 +901,14 @@ function App(): JSX.Element {
           userName={user.name}
           onStartCapture={(t, l) => void startCapture(t, l)}
           onUploadRecording={(t, f) => void uploadRecording(t, f)}
-          recordingState={autoRecordingState}
+          recordingState={shellRecordingState}
+          interruptedRecordings={interrupted.map((e) => ({
+            key: e.key,
+            title: e.title,
+            interruptedAtUtc: e.endedAtUtc
+          }))}
+          onRecoverInterrupted={(key) => void recoverInterrupted(key)}
+          onDiscardInterrupted={(key) => void discardInterrupted(key)}
           postCaptureNotice={postCaptureNotice}
           onDismissPostCaptureNotice={() => setPostCaptureNotice(null)}
           onRetryPostCapture={(meetingId, title) => void retryPostCapture(meetingId, title)}

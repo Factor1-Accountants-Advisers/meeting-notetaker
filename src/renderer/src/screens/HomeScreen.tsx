@@ -1,12 +1,22 @@
 import { useState } from 'react'
-import { CheckCircle2, Loader2, Mic, Plus, Upload, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Loader2, Mic, Plus, Upload, XCircle } from 'lucide-react'
 import { Card, SectionHeader } from '@renderer/components/ui/Card'
+
+/** A recording interrupted by sleep/crash, recoverable from its spill file (IN-129). */
+export interface InterruptedRecording {
+  key: string
+  title: string
+  interruptedAtUtc: string
+}
 
 interface HomeProps {
   userName: string
   onStartCapture: (title: string, link: string | null) => void
   onUploadRecording: (title: string, file: File) => void
   recordingState?: 'idle' | 'recording' | 'processing'
+  interruptedRecordings?: InterruptedRecording[]
+  onRecoverInterrupted?: (key: string) => void
+  onDiscardInterrupted?: (key: string) => void
   postCaptureNotice?: {
     state: 'processing' | 'emailing' | 'ready' | 'upload_failed' | 'processing_failed' | 'email_failed'
     meetingId: string
@@ -23,6 +33,9 @@ export function HomeScreen({
   onStartCapture,
   onUploadRecording,
   recordingState,
+  interruptedRecordings,
+  onRecoverInterrupted,
+  onDiscardInterrupted,
   postCaptureNotice,
   onDismissPostCaptureNotice,
   onRetryPostCapture,
@@ -31,10 +44,18 @@ export function HomeScreen({
   return (
     <div className="flex flex-col gap-4">
       <Greeting userName={userName} />
+      {interruptedRecordings?.map((entry) => (
+        <InterruptedRecordingNotice
+          key={entry.key}
+          entry={entry}
+          onRecover={onRecoverInterrupted}
+          onDiscard={onDiscardInterrupted}
+        />
+      ))}
       {recordingState && recordingState !== 'idle' && (
         <div className="flex items-center gap-2 rounded-md border-[0.5px] border-edge-info bg-bg-info px-3 py-2 text-[13px] text-content-info">
           <span className={`h-2 w-2 rounded-full ${recordingState === 'recording' ? 'animate-pulse bg-edge-danger' : 'bg-edge-info'}`} />
-          {recordingState === 'recording' ? 'Auto-recording in progress' : 'Processing recording…'}
+          {recordingState === 'recording' ? 'Recording in progress' : 'Processing recording…'}
           {recordingState === 'recording' && onShowRecording && (
             <button
               type="button"
@@ -53,7 +74,68 @@ export function HomeScreen({
           onRetry={onRetryPostCapture}
         />
       )}
-      <CaptureCard onStart={onStartCapture} onUpload={onUploadRecording} />
+      <CaptureCard
+        onStart={onStartCapture}
+        onUpload={onUploadRecording}
+        recordingActive={recordingState === 'recording'}
+      />
+    </div>
+  )
+}
+
+/** Offer recovery of a recording interrupted by lid-close/sleep/crash (IN-129). */
+function InterruptedRecordingNotice({
+  entry,
+  onRecover,
+  onDiscard
+}: {
+  entry: InterruptedRecording
+  onRecover?: (key: string) => void
+  onDiscard?: (key: string) => void
+}): JSX.Element {
+  const interruptedAt = new Date(entry.interruptedAtUtc)
+  const when = Number.isNaN(interruptedAt.getTime())
+    ? null
+    : interruptedAt.toLocaleString('en-GB', {
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit'
+      })
+
+  return (
+    <div className="rounded-md border-[0.5px] border-edge-secondary bg-bg-warning px-3 py-2.5 text-content-warning">
+      <div className="flex items-start gap-2">
+        <AlertTriangle className="mt-0.5 shrink-0" size={16} strokeWidth={1.75} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[13px] font-medium">{entry.title}</div>
+          <div className="mt-0.5 text-[12px] opacity-90">
+            This recording was interrupted{when ? ` around ${when}` : ''} — likely by sleep or a
+            closed laptop. The captured audio was saved and can still be transcribed.
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {onRecover && (
+            <button
+              type="button"
+              className="rounded-sm border-[0.5px] border-current px-2 py-1 text-[12px] opacity-85 hover:opacity-100"
+              onClick={() => onRecover(entry.key)}
+            >
+              Upload for transcription
+            </button>
+          )}
+          {onDiscard && (
+            <button
+              type="button"
+              className="text-[12px] opacity-80 hover:opacity-100"
+              onClick={() => onDiscard(entry.key)}
+            >
+              Discard
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
@@ -144,13 +226,17 @@ function Greeting({ userName }: { userName: string }): JSX.Element {
 
 function CaptureCard({
   onStart,
-  onUpload
+  onUpload,
+  recordingActive = false
 }: {
   onStart: (title: string, link: string | null) => void
   onUpload: (title: string, file: File) => void
+  /** IN-130: while a recording runs, title/start/upload are disabled until it stops. */
+  recordingActive?: boolean
 }): JSX.Element {
   const [title, setTitle] = useState('')
   const hasTitle = title.trim().length > 0
+  const canStart = hasTitle && !recordingActive
 
   return (
     <Card>
@@ -158,15 +244,17 @@ function CaptureCard({
       <input
         type="text"
         value={title}
+        disabled={recordingActive}
         onChange={(e) => setTitle(e.target.value)}
         placeholder="e.g. Tax compliance — Henderson & Co"
-        className="mb-3 h-9 w-full rounded-md border-[0.5px] border-edge-tertiary bg-bg-primary px-3 text-[14px] text-content-primary placeholder:text-content-tertiary focus:border-brand-blue focus:outline-none"
+        className="mb-3 h-9 w-full rounded-md border-[0.5px] border-edge-tertiary bg-bg-primary px-3 text-[14px] text-content-primary placeholder:text-content-tertiary focus:border-brand-blue focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
       />
       <div className="flex gap-2.5">
         <button
           type="button"
-          disabled={!hasTitle}
+          disabled={!canStart}
           onClick={() => onStart(title.trim(), null)}
+          title={recordingActive ? 'Stop the current recording first' : undefined}
           className="flex flex-1 items-center justify-center gap-1.5 rounded-md border-[0.5px] border-edge-info bg-bg-info py-2.5 text-[14px] text-content-info transition-colors hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-45"
         >
           <Mic size={16} strokeWidth={1.75} />
@@ -174,9 +262,15 @@ function CaptureCard({
         </button>
         <label
           className={`flex items-center justify-center gap-1.5 rounded-md border-[0.5px] border-edge-secondary px-4 py-2.5 text-[14px] text-content-primary ${
-            hasTitle ? 'cursor-pointer hover:bg-bg-secondary' : 'cursor-not-allowed opacity-45'
+            canStart ? 'cursor-pointer hover:bg-bg-secondary' : 'cursor-not-allowed opacity-45'
           }`}
-          title={hasTitle ? 'Upload an existing recording' : 'Enter a meeting name first'}
+          title={
+            recordingActive
+              ? 'Stop the current recording first'
+              : hasTitle
+                ? 'Upload an existing recording'
+                : 'Enter a meeting name first'
+          }
         >
           <Upload size={16} strokeWidth={1.75} />
           Upload recording
@@ -184,7 +278,7 @@ function CaptureCard({
             type="file"
             accept="audio/*,video/webm"
             className="hidden"
-            disabled={!hasTitle}
+            disabled={!canStart}
             onChange={(e) => {
               const file = e.target.files?.[0]
               if (file) onUpload(title.trim(), file)
