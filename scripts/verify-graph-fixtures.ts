@@ -91,6 +91,15 @@ async function wait(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+async function waitUntil(label: string, predicate: () => boolean, timeoutMs = 500): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return
+    await wait(10)
+  }
+  assert.fail(`${label} did not complete within ${timeoutMs}ms`)
+}
+
 async function main(): Promise<void> {
   expectReason('cancelled Teams meeting', baseEvent({ id: 'cancelled', isCancelled: true }), 'cancelled')
   expectReason('all-day event', baseEvent({ id: 'all-day', isAllDay: true }), 'all_day')
@@ -456,8 +465,9 @@ async function main(): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 30))
     resumeRuntime.stopPolling()
     resumeRuntime.scheduleResumeSync()
-    // Wait for the debounced resume sync to fire (debounce is 0ms)
-    await new Promise((resolve) => setTimeout(resolve, 30))
+    // Wait for the debounced resume sync to finish. Poll the observable
+    // condition instead of assuming a fixed 30ms scheduler window.
+    await waitUntil('resume sync', () => resumeSynced)
     resumeRuntime.stopPolling()
     assert.equal(resumeSynced, true)
   } finally {
