@@ -104,6 +104,15 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Tests: `backend/tests/test_minutes_template.py` (7 tests) — next-meeting composition/extraction/rendering + fallbacks, and prompt-rule regression guards pinning the Jira-agreed wording.
   - Verification: backend unittest discover **63 tests OK**, `npm run typecheck`, `npm run build`, `compileall`, `git diff --check` — all passed. Live output check (real OpenAI call producing Australian-spelled, verb-led output) happens with the next build's test meeting.
 
+- [x] 2026-07-15 — IN-131: recording controls restored; long two-track preparation hardened
+  - Jira conflict: IN-88 was corrected on 10 July to say tray and ad-hoc recording should not contain manual Start/Stop, leading to removal in `ab06ba2`; IN-120 then restored tray controls only. IN-131 is newer and takes precedence, restoring Pause/Resume/Stop on the active recording screen for manual and scheduled recordings.
+  - Screen controls, tray commands, and scheduled automatic stop now invoke one guarded controller. Duplicate Stop is ignored, and the screen switches immediately to an explicit saving/uploading state with no active controls.
+  - The reported 77-minute mic and system files were saved locally in full, while synchronous ffmpeg work blocked unrelated backend reads. Audio preparation now runs off FastAPI's event loop and uses a duration-scaled timeout.
+  - The merge records input/output byte and duration boundaries. A merged file materially shorter than the client-measured capture duration is rejected before transcription, while the original local and backend track files remain available for retry.
+  - Regression coverage: `scripts/verify-recording-controls.tsx` covers active, paused, scheduled, and saving states; `backend/tests/test_long_audio_preparation.py` covers ffmpeg duration parsing, timeout scaling, short-merge rejection, and event-loop responsiveness.
+  - Limitation: the exact 13 July source files are not present on this development machine, so provider-side truncation after a complete merge cannot be replayed from the Jira attachment metadata alone.
+  - Verification: Graph fixtures, recording-control fixtures, TypeScript typechecks, Electron production build, **69 backend tests**, Python compileall, and `git diff --check` all passed.
+
 ## Crossed out / completed
 
 - [x] `IN-65` — Spike: MS Graph meeting detection — subscription vs. polling

@@ -1,6 +1,8 @@
+import asyncio
 import base64
 import binascii
 import logging
+import re
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -159,7 +161,53 @@ def _decode_audio_b64(value: str, label: str) -> bytes:
     return audio
 
 
-def _merge_mic_and_system_audio(meeting_id: UUID, mic_audio: bytes, system_audio: bytes) -> Path:
+def _parse_ffmpeg_output_seconds(stderr: str) -> float | None:
+    matches = re.findall(r"time=(\d+):(\d{2}):(\d{2}(?:\.\d+)?)", stderr)
+    if not matches:
+        return None
+    hours, minutes, seconds = matches[-1]
+    return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+
+def _merge_timeout_seconds(expected_seconds: int | None) -> int:
+    if not expected_seconds or expected_seconds <= 0:
+        return 120
+    # ffmpeg normally runs much faster than real time, but long recordings on
+    # constrained laptops need more than the old fixed 60-second ceiling.
+    return max(120, min(1800, int(expected_seconds * 0.25)))
+
+
+def _validate_merged_duration(
+    meeting_id: UUID,
+    *,
+    expected_seconds: int | None,
+    actual_seconds: float | None,
+) -> None:
+    if not expected_seconds or actual_seconds is None:
+        return
+    tolerance_seconds = max(5.0, expected_seconds * 0.02)
+    if actual_seconds >= expected_seconds - tolerance_seconds:
+        return
+    logger.error(
+        "Merged recording is materially shorter than the captured duration",
+        extra={
+            "meeting_id": str(meeting_id),
+            "expected_seconds": expected_seconds,
+            "merged_seconds": round(actual_seconds, 2),
+        },
+    )
+    raise HTTPException(
+        status.HTTP_500_INTERNAL_SERVER_ERROR,
+        "Merged recording is shorter than the captured audio; the original recording was kept for retry",
+    )
+
+
+def _merge_mic_and_system_audio(
+    meeting_id: UUID,
+    mic_audio: bytes,
+    system_audio: bytes,
+    expected_seconds: int | None = None,
+) -> Path:
     ffmpeg = find_ffmpeg()
     if ffmpeg is None:
         raise HTTPException(
@@ -188,7 +236,22 @@ def _merge_mic_and_system_audio(meeting_id: UUID, mic_audio: bytes, system_audio
         "libopus",
         str(merged_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    timeout_seconds = _merge_timeout_seconds(expected_seconds)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        logger.error(
+            "Timed out merging mic + system audio",
+            extra={
+                "meeting_id": str(meeting_id),
+                "timeout_seconds": timeout_seconds,
+                "expected_seconds": expected_seconds,
+            },
+        )
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "Captured audio took too long to prepare; the original recording was kept for retry",
+        ) from exc
     if result.returncode != 0 or not merged_path.exists() or merged_path.stat().st_size < 1_000:
         logger.error(
             "Failed to merge mic + system audio",
@@ -203,6 +266,12 @@ def _merge_mic_and_system_audio(meeting_id: UUID, mic_audio: bytes, system_audio
             "Captured mic and system audio, but failed to merge them for transcription",
         )
 
+    merged_seconds = _parse_ffmpeg_output_seconds(result.stderr)
+    _validate_merged_duration(
+        meeting_id,
+        expected_seconds=expected_seconds,
+        actual_seconds=merged_seconds,
+    )
     logger.info(
         "Merged mic + system audio",
         extra={
@@ -210,9 +279,33 @@ def _merge_mic_and_system_audio(meeting_id: UUID, mic_audio: bytes, system_audio
             "mic_bytes": len(mic_audio),
             "system_bytes": len(system_audio),
             "merged_bytes": merged_path.stat().st_size,
+            "expected_seconds": expected_seconds,
+            "merged_seconds": round(merged_seconds, 2) if merged_seconds is not None else None,
+            "timeout_seconds": timeout_seconds,
         },
     )
     return merged_path
+
+
+async def _prepare_uploaded_audio(
+    meeting_id: UUID,
+    audio: bytes,
+    system_audio: bytes | None,
+    mime_type: str,
+    expected_seconds: int | None,
+) -> Path:
+    await asyncio.to_thread(audio_dir().mkdir, parents=True, exist_ok=True)
+    if system_audio is not None:
+        return await asyncio.to_thread(
+            _merge_mic_and_system_audio,
+            meeting_id,
+            audio,
+            system_audio,
+            expected_seconds,
+        )
+    path = audio_path_for(meeting_id, mime_type)
+    await asyncio.to_thread(path.write_bytes, audio)
+    return path
 
 
 @router.post("/{meeting_id}/audio", response_model=Meeting)
@@ -236,12 +329,13 @@ async def upload_audio(
         else None
     )
 
-    audio_dir().mkdir(parents=True, exist_ok=True)
-    if system_audio is not None:
-        path = _merge_mic_and_system_audio(meeting_id, audio, system_audio)
-    else:
-        path = audio_path_for(meeting_id, body.mime_type)
-        path.write_bytes(audio)
+    path = await _prepare_uploaded_audio(
+        meeting_id,
+        audio,
+        system_audio,
+        body.mime_type,
+        body.duration_seconds,
+    )
 
     # Fresh audio invalidates any earlier silence verdict; the pipeline
     # re-measures in the background (full-file decode is too slow for this

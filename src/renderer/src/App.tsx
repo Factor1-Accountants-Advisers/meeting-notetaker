@@ -57,6 +57,11 @@ function App(): JSX.Element {
   const [extending, setExtending] = useState(false)
   const recordingRef = useRef<RecordingSession | null>(null)
   const autoGraphMetadataRef = useRef<GraphMeetingMetadata | null>(null)
+  const controlHandlersRef = useRef<{ pause: () => void; resume: () => void; stop: () => void }>({
+    pause: () => {},
+    resume: () => {},
+    stop: () => {}
+  })
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null)
   const [autoRecordingState, setAutoRecordingState] = useState<'idle' | 'recording' | 'processing'>('idle')
   const [postCaptureNotice, setPostCaptureNotice] = useState<PostCaptureNotice>(null)
@@ -246,7 +251,15 @@ function App(): JSX.Element {
         const meetingId = session?.meetingId ?? null
         const graphMetadata = autoGraphMetadataRef.current
         const durationSeconds = session ? Math.round(elapsedMs(session) / 1000) : null
+        window.api.debugLog('recording stop requested', { meetingId, durationSeconds })
         const result = await capture.stop(session ? elapsedMs(session) : undefined)
+        window.api.debugLog('capture stop resolved', {
+          hasBlob: Boolean(result?.blob),
+          size: result?.blob.size ?? 0,
+          hasSystemBlob: Boolean(result?.systemBlob),
+          systemSize: result?.systemBlob?.size ?? 0,
+          durationSeconds
+        })
         if (result) {
           let savedLocally = false
           const name = `${meetingId ?? `auto-${Date.now()}`}.webm`
@@ -264,6 +277,12 @@ function App(): JSX.Element {
             // Local save failed — still try upload.
           }
           if (meetingId) {
+            window.api.debugLog('audio upload starting', {
+              meetingId,
+              size: result.blob.size,
+              systemSize: result.systemBlob?.size ?? 0,
+              durationSeconds
+            })
             const uploadedMeeting = await uploadAudio(
               meetingId,
               await blobToBase64(result.blob),
@@ -277,11 +296,26 @@ function App(): JSX.Element {
                   }
                 : null
             )
+            window.api.debugLog('audio upload finished', {
+              meetingId,
+              ok: Boolean(uploadedMeeting),
+              durationSeconds
+            })
             if (uploadedMeeting && !savedLocally) capture.discardCompletedSpill()
-            watchProcessing(meetingId, session?.title ?? graphMetadata?.title ?? 'Auto-recorded Teams meeting')
+            if (uploadedMeeting) {
+              watchProcessing(meetingId, session?.title ?? graphMetadata?.title ?? 'Recording')
+            } else {
+              setPostCaptureNotice({
+                state: 'upload_failed',
+                meetingId,
+                title: session?.title ?? graphMetadata?.title ?? 'Recording',
+                message: 'Recording saved locally, but upload failed. Retry once the backend is reachable.'
+              })
+            }
           }
         }
         setView('home')
+        recordingRef.current = null
         setRecording(null)
         autoGraphMetadataRef.current = null
         setCaptureStatus(null)
@@ -289,27 +323,46 @@ function App(): JSX.Element {
         window.api.notifyRecordingStopped()
       } catch (err) {
         stopping = false
+        setAutoRecordingState(recordingRef.current ? 'recording' : 'idle')
         window.api.notifyRecordingError(err instanceof Error ? err.message : String(err))
       }
     }
 
-    const unsubStop = window.api.onAutoStopRequest(() => void finishActiveRecording())
-    const unsubTrayControl = window.api.onTrayRecordingControl((action) => {
-      if (action === 'pause') {
-        capture.pause()
-        setRecording((session) => (session ? { ...session, pausedAt: Date.now() } : session))
-        window.api.notifyRecordingPausedChanged(true)
-      } else if (action === 'resume') {
-        capture.resume()
-        setRecording((session) =>
-          session && session.pausedAt !== null
-            ? { ...session, pausedAccum: session.pausedAccum + (Date.now() - session.pausedAt), pausedAt: null }
-            : session
-        )
-        window.api.notifyRecordingPausedChanged(false)
-      } else {
-        void finishActiveRecording()
+    const pauseActiveRecording = (): void => {
+      const session = recordingRef.current
+      if (stopping || !session || session.pausedAt !== null) return
+      const pausedAt = Date.now()
+      capture.pause()
+      const next = { ...session, pausedAt }
+      recordingRef.current = next
+      setRecording(next)
+      window.api.notifyRecordingPausedChanged(true)
+    }
+
+    const resumeActiveRecording = (): void => {
+      const session = recordingRef.current
+      if (stopping || !session || session.pausedAt === null) return
+      capture.resume()
+      const next = {
+        ...session,
+        pausedAccum: session.pausedAccum + (Date.now() - session.pausedAt),
+        pausedAt: null
       }
+      recordingRef.current = next
+      setRecording(next)
+      window.api.notifyRecordingPausedChanged(false)
+    }
+
+    const controls = {
+      pause: pauseActiveRecording,
+      resume: resumeActiveRecording,
+      stop: () => void finishActiveRecording()
+    }
+    controlHandlersRef.current = controls
+
+    const unsubStop = window.api.onAutoStopRequest(controls.stop)
+    const unsubTrayControl = window.api.onTrayRecordingControl((action) => {
+      controls[action]()
     })
 
     if (typeof window.api.notifyRecordingReady === 'function') {
@@ -320,6 +373,9 @@ function App(): JSX.Element {
       unsubStart()
       unsubStop()
       unsubTrayControl()
+      if (controlHandlersRef.current === controls) {
+        controlHandlersRef.current = { pause: () => {}, resume: () => {}, stop: () => {} }
+      }
     }
   }, [user, currentPerson?.enrollment])
 
@@ -792,6 +848,10 @@ function App(): JSX.Element {
         <RecordingScreen
           session={recording}
           captureStatus={captureStatus}
+          onPause={() => controlHandlersRef.current.pause()}
+          onResume={() => controlHandlersRef.current.resume()}
+          onStop={() => controlHandlersRef.current.stop()}
+          saving={autoRecordingState === 'processing'}
           onExtend={
             recording.scheduledEndUtc && typeof window.api?.extendRecording === 'function'
               ? () => {
