@@ -1,6 +1,6 @@
 {
   "name": "meeting-notetaker",
-  "version": "2.0.4",
+  "version": "2.0.5",
   "description": "Meeting recording, transcription, speaker identification, and transcript delivery",
   "main": "./out/main/index.js",
   "author": "Factor1",

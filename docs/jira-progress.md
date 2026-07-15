@@ -112,6 +112,7 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Regression coverage: `scripts/verify-recording-controls.tsx` covers active, paused, scheduled, and saving states; `backend/tests/test_long_audio_preparation.py` covers ffmpeg duration parsing, timeout scaling, short-merge rejection, and event-loop responsiveness.
   - Limitation: the exact 13 July source files are not present on this development machine, so provider-side truncation after a complete merge cannot be replayed from the Jira attachment metadata alone.
   - Verification: Graph fixtures, recording-control fixtures, TypeScript typechecks, Electron production build, **69 backend tests**, Python compileall, and `git diff --check` all passed.
+  - Installer verification: rebuilt the Windows backend bundle, passed `smoke-backend-bundle.ps1` (health, upload, ready pipeline, bundled ffmpeg), and produced unsigned local test installer `Meeting Notetaker-2.0.5-setup.exe`. SHA-256: `A37C42DF96B66BB04C292AA3773C959FBA50098AFAE11FB6C37F100B2B383C5D`; packaged backend hash matched the smoke-tested bundle.
 
 ## Crossed out / completed
 
