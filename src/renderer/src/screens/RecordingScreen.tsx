@@ -228,6 +228,13 @@ export function RecordingScreen({
               System-audio loopback failed — remote participants are not being captured.
             </span>
           )}
+          {session.source === 'online' && captureStatus?.loopback === 'silent' && (
+            <span className="flex items-center gap-1.5 text-content-danger">
+              <AlertTriangle size={13} strokeWidth={1.75} />
+              System audio has been silent for over a minute — meeting audio may not be
+              captured. Check your audio output device (a headset switch is a common cause).
+            </span>
+          )}
           {captureStatus !== null && !captureStatus.recording && (
             <span className="flex items-center gap-1.5 text-content-danger">
               <AlertTriangle size={13} strokeWidth={1.75} />

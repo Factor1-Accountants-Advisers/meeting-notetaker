@@ -47,7 +47,7 @@ class AsyncAudioPreparationTests(unittest.IsolatedAsyncioTestCase):
                     meetings._prepare_uploaded_audio(
                         meeting_id,
                         b"m" * 1_000,
-                        b"s" * 1_000,
+                        [(b"s" * 1_000, 0)],
                         "audio/webm",
                         77 * 60,
                     )

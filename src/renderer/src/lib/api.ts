@@ -261,21 +261,33 @@ export async function createMeeting(
   })
 }
 
+/** One system-audio capture segment; offsetMs places it on the merge timeline (IN-468). */
+export interface SystemAudioSegmentUpload {
+  audioB64: string
+  mimeType: string
+  offsetMs: number
+}
+
 export async function uploadAudio(
   meetingId: string,
   audioB64: string,
   mimeType: string,
   durationSeconds: number | null,
   graphMetadata?: GraphMeetingMetadata | null,
-  systemAudio?: { audioB64: string; mimeType: string } | null
+  systemSegments?: SystemAudioSegmentUpload[] | null
 ): Promise<MeetingDto | null> {
   return call<MeetingDto>('POST', `/meetings/${meetingId}/audio`, {
     audio_b64: audioB64,
     mime_type: mimeType,
     duration_seconds: durationSeconds,
     graph_metadata: graphMetadata ? toGraphMetadataDto(graphMetadata) : null,
-    system_audio_b64: systemAudio?.audioB64 ?? null,
-    system_mime_type: systemAudio?.mimeType ?? null
+    system_segments: systemSegments?.length
+      ? systemSegments.map((segment) => ({
+          audio_b64: segment.audioB64,
+          mime_type: segment.mimeType,
+          offset_ms: segment.offsetMs
+        }))
+      : null
   })
 }
 

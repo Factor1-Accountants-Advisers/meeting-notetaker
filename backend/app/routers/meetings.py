@@ -202,10 +202,50 @@ def _validate_merged_duration(
     )
 
 
+def _build_segment_merge_filter(offsets_ms: list[int]) -> str:
+    """amix filtergraph placing each system segment at its timeline offset.
+
+    Input 0 is the mic track; inputs 1..N are system segments. Each segment is
+    shifted with adelay so a device-switch restart (IN-468) cannot collapse
+    later audio onto the start of the mix.
+    """
+    if not offsets_ms:
+        raise ValueError("At least one system segment is required")
+    if any(offset < 0 for offset in offsets_ms):
+        raise ValueError("Segment offsets must be non-negative")
+
+    delays = "".join(
+        f"[{i + 1}:a]adelay=delays={offset}:all=1[s{i}];"
+        for i, offset in enumerate(offsets_ms)
+    )
+    labels = "".join(f"[s{i}]" for i in range(len(offsets_ms)))
+    return (
+        f"{delays}[0:a]{labels}"
+        f"amix=inputs={len(offsets_ms) + 1}:duration=longest:dropout_transition=0:normalize=0[a]"
+    )
+
+
+def _decode_system_segments(body: "UploadAudioRequest") -> list[tuple[bytes, int]]:
+    """System capture as (bytes, offset_ms) segments, sorted by offset.
+
+    Prefers the segmented form (IN-468); falls back to the legacy single-blob
+    field as one segment at offset 0. Empty list when no system audio was sent.
+    """
+    if body.system_segments:
+        segments = [
+            (_decode_audio_b64(seg.audio_b64, f"System audio segment {i}"), seg.offset_ms)
+            for i, seg in enumerate(body.system_segments)
+        ]
+        return sorted(segments, key=lambda pair: pair[1])
+    if body.system_audio_b64:
+        return [(_decode_audio_b64(body.system_audio_b64, "System audio"), 0)]
+    return []
+
+
 def _merge_mic_and_system_audio(
     meeting_id: UUID,
     mic_audio: bytes,
-    system_audio: bytes,
+    system_segments: list[tuple[bytes, int]],
     expected_seconds: int | None = None,
 ) -> Path:
     ffmpeg = find_ffmpeg()
@@ -216,20 +256,24 @@ def _merge_mic_and_system_audio(
         )
 
     mic_path = mic_track_path(meeting_id)
-    system_path = audio_dir() / f"{meeting_id}.system.webm"
     merged_path = audio_dir() / f"{meeting_id}.webm"
     mic_path.write_bytes(mic_audio)
-    system_path.write_bytes(system_audio)
 
-    cmd = [
-        ffmpeg,
-        "-y",
-        "-i",
-        str(mic_path),
-        "-i",
-        str(system_path),
+    segment_paths: list[Path] = []
+    offsets: list[int] = []
+    for index, (segment_audio, offset_ms) in enumerate(system_segments):
+        suffix = "" if index == 0 else f".{offset_ms}"
+        segment_path = audio_dir() / f"{meeting_id}.system{suffix}.webm"
+        segment_path.write_bytes(segment_audio)
+        segment_paths.append(segment_path)
+        offsets.append(offset_ms)
+
+    cmd = [ffmpeg, "-y", "-i", str(mic_path)]
+    for segment_path in segment_paths:
+        cmd += ["-i", str(segment_path)]
+    cmd += [
         "-filter_complex",
-        "[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[a]",
+        _build_segment_merge_filter(offsets),
         "-map",
         "[a]",
         "-c:a",
@@ -277,7 +321,9 @@ def _merge_mic_and_system_audio(
         extra={
             "meeting_id": str(meeting_id),
             "mic_bytes": len(mic_audio),
-            "system_bytes": len(system_audio),
+            "system_bytes": sum(len(audio) for audio, _ in system_segments),
+            "system_segments": len(system_segments),
+            "segment_offsets_ms": [offset for _, offset in system_segments],
             "merged_bytes": merged_path.stat().st_size,
             "expected_seconds": expected_seconds,
             "merged_seconds": round(merged_seconds, 2) if merged_seconds is not None else None,
@@ -290,17 +336,17 @@ def _merge_mic_and_system_audio(
 async def _prepare_uploaded_audio(
     meeting_id: UUID,
     audio: bytes,
-    system_audio: bytes | None,
+    system_segments: list[tuple[bytes, int]],
     mime_type: str,
     expected_seconds: int | None,
 ) -> Path:
     await asyncio.to_thread(audio_dir().mkdir, parents=True, exist_ok=True)
-    if system_audio is not None:
+    if system_segments:
         return await asyncio.to_thread(
             _merge_mic_and_system_audio,
             meeting_id,
             audio,
-            system_audio,
+            system_segments,
             expected_seconds,
         )
     path = audio_path_for(meeting_id, mime_type)
@@ -323,16 +369,12 @@ async def upload_audio(
         raise HTTPException(status.HTTP_409_CONFLICT, "Audio is already being processed")
 
     audio = _decode_audio_b64(body.audio_b64, "Audio")
-    system_audio = (
-        _decode_audio_b64(body.system_audio_b64, "System audio")
-        if body.system_audio_b64
-        else None
-    )
+    system_segments = _decode_system_segments(body)
 
     path = await _prepare_uploaded_audio(
         meeting_id,
         audio,
-        system_audio,
+        system_segments,
         body.mime_type,
         body.duration_seconds,
     )

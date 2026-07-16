@@ -228,6 +228,19 @@ class EmailResult(BaseModel):
     sent_at: datetime
 
 
+class SystemAudioSegment(BaseModel):
+    """One contiguous WASAPI/system-audio capture segment.
+
+    A default-output-device switch mid-recording (IN-468) forces the renderer
+    to restart its loopback MediaRecorder, so system audio can arrive as
+    several webm files; offset_ms places each on the recording timeline.
+    """
+
+    audio_b64: str = Field(min_length=1)
+    offset_ms: int = Field(ge=0)
+    mime_type: str = "audio/webm"
+
+
 class UploadAudioRequest(BaseModel):
     """Recorded or uploaded meeting audio, base64-encoded.
 
@@ -242,6 +255,9 @@ class UploadAudioRequest(BaseModel):
     # second audio track from a multi-track MediaRecorder stream.
     system_audio_b64: str | None = None
     system_mime_type: str | None = None
+    # Segmented system capture (IN-468). Takes precedence over system_audio_b64
+    # when present; each segment lands at its offset in the merged timeline.
+    system_segments: list[SystemAudioSegment] | None = None
     duration_seconds: int | None = None  # client-measured; refined later
     graph_metadata: GraphMeetingMetadata | None = None
 

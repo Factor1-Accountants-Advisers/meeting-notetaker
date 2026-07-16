@@ -5,8 +5,8 @@ import { HomeScreen } from './screens/HomeScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
 import { LoginScreen, type User } from './screens/LoginScreen'
 import { RecordingScreen, type RecordingSession } from './screens/RecordingScreen'
-import { createMeeting, emailNotes, ensureCurrentPerson, fetchMeetingReview, retryPipeline, saveTranscriptToSharePoint, uploadAudio, type GraphMeetingMetadata } from './lib/api'
-import { capture, type CaptureStatus } from './lib/capture'
+import { createMeeting, emailNotes, ensureCurrentPerson, fetchMeetingReview, retryPipeline, saveTranscriptToSharePoint, uploadAudio, type GraphMeetingMetadata, type SystemAudioSegmentUpload } from './lib/api'
+import { capture, type CaptureStatus, type SystemSegment } from './lib/capture'
 import { loadPrefs } from './lib/prefs'
 import { useNotifications } from './lib/useNotifications'
 import { audioDurationSeconds, blobToBase64 } from './lib/recorder'
@@ -34,6 +34,23 @@ type SpillEntry = Awaited<ReturnType<Window['api']['spillList']>>[number]
 // Distinguishes spills orphaned by a previous run from any session started in
 // this one — only pre-boot sessions are offered for recovery.
 const APP_BOOT_MS = Date.now()
+
+// IN-468: a device switch mid-recording splits system audio into segments;
+// each is saved/uploaded with its timeline offset so the backend can stitch.
+const systemSegmentFileName = (base: string, offsetMs: number): string =>
+  offsetMs === 0 ? `${base}.system.webm` : `${base}.system.${offsetMs}.webm`
+
+const systemSegmentManifestName = (base: string): string => `${base}.system.segments.json`
+
+async function toSegmentUploads(segments: SystemSegment[]): Promise<SystemAudioSegmentUpload[]> {
+  return Promise.all(
+    segments.map(async (segment) => ({
+      audioB64: await blobToBase64(segment.blob),
+      mimeType: segment.blob.type || 'audio/webm',
+      offsetMs: segment.offsetMs
+    }))
+  )
+}
 
 type PostCaptureState = 'processing' | 'emailing' | 'ready' | 'upload_failed' | 'processing_failed' | 'email_failed'
 
@@ -253,22 +270,40 @@ function App(): JSX.Element {
         const durationSeconds = session ? Math.round(elapsedMs(session) / 1000) : null
         window.api.debugLog('recording stop requested', { meetingId, durationSeconds })
         const result = await capture.stop(session ? elapsedMs(session) : undefined)
+        const systemSegments =
+          result?.systemSegments ??
+          (result?.systemBlob ? [{ blob: result.systemBlob, offsetMs: 0 }] : [])
         window.api.debugLog('capture stop resolved', {
           hasBlob: Boolean(result?.blob),
           size: result?.blob.size ?? 0,
           hasSystemBlob: Boolean(result?.systemBlob),
           systemSize: result?.systemBlob?.size ?? 0,
+          systemSegments: systemSegments.length,
+          segmentOffsetsMs: systemSegments.map((s) => s.offsetMs),
           durationSeconds
         })
         if (result) {
           let savedLocally = false
           const name = `${meetingId ?? `auto-${Date.now()}`}.webm`
+          const base = name.replace(/\.webm$/i, '')
           try {
             await window.api.saveRecording(name, await result.blob.arrayBuffer())
-            if (result.systemBlob) {
+            for (const segment of systemSegments) {
               await window.api.saveRecording(
-                name.replace(/\.webm$/i, '.system.webm'),
-                await result.systemBlob.arrayBuffer()
+                systemSegmentFileName(base, segment.offsetMs),
+                await segment.blob.arrayBuffer()
+              )
+            }
+            if (systemSegments.length > 1) {
+              // Manifest lets the retry-from-local path rebuild the timeline.
+              const manifest = systemSegments.map((segment) => ({
+                file: systemSegmentFileName(base, segment.offsetMs),
+                offsetMs: segment.offsetMs
+              }))
+              const encoded = new TextEncoder().encode(JSON.stringify(manifest))
+              await window.api.saveRecording(
+                systemSegmentManifestName(base),
+                encoded.buffer.slice(0, encoded.byteLength) as ArrayBuffer
               )
             }
             savedLocally = true
@@ -281,6 +316,7 @@ function App(): JSX.Element {
               meetingId,
               size: result.blob.size,
               systemSize: result.systemBlob?.size ?? 0,
+              systemSegments: systemSegments.length,
               durationSeconds
             })
             const uploadedMeeting = await uploadAudio(
@@ -289,12 +325,7 @@ function App(): JSX.Element {
               result.blob.type || 'audio/webm',
               durationSeconds,
               graphMetadata,
-              result.systemBlob
-                ? {
-                    audioB64: await blobToBase64(result.systemBlob),
-                    mimeType: result.systemBlob.type || 'audio/webm'
-                  }
-                : null
+              systemSegments.length > 0 ? await toSegmentUploads(systemSegments) : null
             )
             window.api.debugLog('audio upload finished', {
               meetingId,
@@ -601,19 +632,56 @@ function App(): JSX.Element {
       return
     }
 
-    const system = await window.api.readRecording(`${meetingId}.system.webm`)
+    // Segmented capture (IN-468): a manifest sidecar lists every system-audio
+    // segment file with its timeline offset; fall back to the single legacy file.
+    let systemSegments: SystemAudioSegmentUpload[] | null = null
+    const manifest = await window.api.readRecording(systemSegmentManifestName(meetingId))
+    if (manifest.exists && manifest.data) {
+      try {
+        const entries = JSON.parse(new TextDecoder().decode(manifest.data)) as {
+          file: string
+          offsetMs: number
+        }[]
+        const parts = await Promise.all(
+          entries.map(async (entry) => {
+            const segment = await window.api.readRecording(entry.file)
+            if (!segment.exists || !segment.data) return null
+            return {
+              audioB64: await blobToBase64(
+                new Blob([segment.data], { type: 'audio/webm;codecs=opus' })
+              ),
+              mimeType: 'audio/webm;codecs=opus',
+              offsetMs: entry.offsetMs
+            }
+          })
+        )
+        const present = parts.filter((p): p is SystemAudioSegmentUpload => p !== null)
+        if (present.length > 0) systemSegments = present
+      } catch {
+        // Unreadable manifest — fall back to the single legacy system file.
+      }
+    }
+    if (!systemSegments) {
+      const system = await window.api.readRecording(`${meetingId}.system.webm`)
+      if (system.exists && system.data) {
+        systemSegments = [
+          {
+            audioB64: await blobToBase64(
+              new Blob([system.data], { type: 'audio/webm;codecs=opus' })
+            ),
+            mimeType: 'audio/webm;codecs=opus',
+            offsetMs: 0
+          }
+        ]
+      }
+    }
     const uploaded = await uploadAudio(
       meetingId,
       await blobToBase64(new Blob([mic.data], { type: 'audio/webm;codecs=opus' })),
       'audio/webm;codecs=opus',
       null,
       null,
-      system.exists && system.data
-        ? {
-            audioB64: await blobToBase64(new Blob([system.data], { type: 'audio/webm;codecs=opus' })),
-            mimeType: 'audio/webm;codecs=opus'
-          }
-        : null
+      systemSegments
     )
 
     window.api.debugLog('retry saved upload finished', { meetingId, ok: Boolean(uploaded) })
@@ -711,7 +779,7 @@ function App(): JSX.Element {
         durationSeconds,
         graphMetadata,
         micData && sysData
-          ? { audioB64: await blobToBase64(new Blob([sysData])), mimeType }
+          ? [{ audioB64: await blobToBase64(new Blob([sysData])), mimeType, offsetMs: 0 }]
           : null
       )
       if (uploaded || savedLocally) await window.api.spillDiscard(key)
