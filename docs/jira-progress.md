@@ -114,6 +114,15 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Verification: Graph fixtures, recording-control fixtures, TypeScript typechecks, Electron production build, **69 backend tests**, Python compileall, and `git diff --check` all passed.
   - Installer verification: rebuilt the Windows backend bundle, passed `smoke-backend-bundle.ps1` (health, upload, ready pipeline, bundled ffmpeg), and produced unsigned local test installer `Meeting Notetaker-2.0.5-setup.exe`. SHA-256: `A37C42DF96B66BB04C292AA3773C959FBA50098AFAE11FB6C37F100B2B383C5D`; packaged backend hash matched the smoke-tested bundle.
 
+- [x] 2026-07-16 — IN-468: mid-recording audio device switch no longer silences system capture (`afd105d`)
+  - Root cause (live incident, 30-Minute AI Lunch & Learn 16 Jul): WASAPI loopback stays attached to the output device that was default at capture start; AirPods connecting ~2 min in moved Teams audio to the headset and the capture recorded 34 minutes of digital silence with no track `ended`/`muted` event. Pipeline completed "ready" — pyannote correctly transcribed the only ~80 s of real audio.
+  - Fix: `capture.ts` re-acquires `getDisplayMedia` on debounced `devicechange` (main-process handler grants loopback without a picker) and records system audio as offset-stamped segments (`SegmentTimeline`, pause-aware); a failed re-acquire keeps the existing capture. Backend accepts `system_segments [{audio_b64, offset_ms}]` and stitches with per-segment `adelay` + `amix` (`_build_segment_merge_filter`). Segment manifest sidecar keeps retry-from-local full-fidelity.
+  - Watchdog: RMS silence monitor on a CLONE of the loopback track (recorded track never touches Web Audio per capture.ts header rule); loopback status `silent` + recording-screen warning after 60 s.
+  - Regression coverage: `backend/tests/test_system_segment_merge.py` (9 tests incl. real-ffmpeg offset merge: segment at 8 s offset → 10 s output) and `scripts/verify-capture-segments.tsx` (`npm run verify:capture`: pause-aware offset math, silent-loopback warning render).
+  - Verification: backend unittest discover **78 tests OK**, `npm run verify:capture`, `npm run verify:recording-controls`, `npm run typecheck`, `npm run build`, `git diff --check` — all passed.
+  - Live retest needed with the 2.0.6 build: (1) connect a Bluetooth headset mid-recording → expect `loopback re-acquired after device change` in the log and a full-length transcript; (2) confirm the cloned-track watchdog does not disturb the live capture.
+  - Installer verification: rebuilt the Windows backend bundle, passed `smoke-backend-bundle.ps1` (health, upload, ready pipeline, bundled ffmpeg), and produced unsigned local test installer `Meeting Notetaker-2.0.6-setup.exe`. SHA-256: `92C903892DB8B67B569AAC39730F34007347C6378CA8AEA3E72A0F232947BAF3`; packaged backend hash matched the smoke-tested bundle. Delivered exe + zip to the SharePoint Installer-Test folder.
+
 ## Crossed out / completed
 
 - [x] `IN-65` — Spike: MS Graph meeting detection — subscription vs. polling
