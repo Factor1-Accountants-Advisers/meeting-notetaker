@@ -1,6 +1,6 @@
 {
   "name": "meeting-notetaker",
-  "version": "2.0.6",
+  "version": "2.0.7",
   "description": "Meeting recording, transcription, speaker identification, and transcript delivery",
   "main": "./out/main/index.js",
   "author": "Factor1",
@@ -17,6 +17,7 @@
     "verify:graph": "esbuild scripts/verify-graph-fixtures.ts --bundle --platform=node --format=cjs --outfile=out/verify-graph-fixtures.cjs --log-level=error --external:electron && node out/verify-graph-fixtures.cjs",
     "verify:recording-controls": "esbuild scripts/verify-recording-controls.tsx --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-recording-controls.cjs --log-level=error && node out/verify-recording-controls.cjs",
     "verify:capture": "esbuild scripts/verify-capture-segments.tsx --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-capture-segments.cjs --log-level=error && node out/verify-capture-segments.cjs",
+    "verify:backend-supervisor": "esbuild scripts/verify-backend-supervisor.ts --bundle --platform=node --format=cjs --outfile=out/verify-backend-supervisor.cjs --log-level=error && node out/verify-backend-supervisor.cjs",
     "package": "electron-vite build && electron-builder",
     "package:dir": "electron-vite build && electron-builder --dir",
     "package:win": "node scripts/prepackage.cjs && electron-vite build && electron-builder --win"

@@ -123,6 +123,14 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Live retest needed with the 2.0.6 build: (1) connect a Bluetooth headset mid-recording → expect `loopback re-acquired after device change` in the log and a full-length transcript; (2) confirm the cloned-track watchdog does not disturb the live capture.
   - Installer verification: rebuilt the Windows backend bundle, passed `smoke-backend-bundle.ps1` (health, upload, ready pipeline, bundled ffmpeg), and produced unsigned local test installer `Meeting Notetaker-2.0.6-setup.exe`. SHA-256: `92C903892DB8B67B569AAC39730F34007347C6378CA8AEA3E72A0F232947BAF3`; packaged backend hash matched the smoke-tested bundle. Delivered exe + zip to the SharePoint Installer-Test folder.
 
+- [x] 2026-07-20 — Packaged backend startup and crash recovery (`2.0.7`)
+  - Live failure: Microsoft sign-in succeeded and Joseph's persisted staff record remained enrolled, but the UI displayed the voiceprint gate because no backend owned port 8787. The 2.0.5 main log stopped at `[supervisor] starting` and never reached backend spawn; its initial `fetch` health probe remained pending despite an AbortController timeout.
+  - Fix: replaced the Electron main-process `fetch` probe with a Node HTTP request that is forcibly destroyed at a wall-clock deadline. Added explicit recovery when a previously healthy supervised backend exits unexpectedly; intentional app shutdown and startup failures retain their separate paths.
+  - Regression verification: `npm run verify:backend-supervisor` proves a healthy 200 response, a server that accepts but never responds is released by the hard deadline, unexpected healthy exits request restart, and intentional shutdown does not.
+  - Full verification: Electron typecheck/build, Graph fixtures, recording controls, capture segments, backend supervisor fixtures, and 78 backend tests passed. The bundled backend smoke passed health, upload, ready-pipeline, ffmpeg execution, and cleanup.
+  - Installed-app verification: installed 2.0.7 over 2.0.5 with existing AppData preserved. The supervisor spawned the backend, the app's own `/api/v1/people/me` request returned 200, and Joseph's record returned `enrolled: true`. After forcibly terminating the supervised backend process tree, the app logged the unexpected exit, restarted it, reached healthy, and resumed successful meeting API calls.
+  - Installer: `Meeting Notetaker-2.0.7-setup.exe`; SHA-256: `39B1FF412568E4512C90A3BCEA59948E89C6769752552D6F4B0BDF8E4DD79C81`.
+
 ## Crossed out / completed
 
 - [x] `IN-65` — Spike: MS Graph meeting detection — subscription vs. polling

@@ -4,6 +4,7 @@ import { existsSync, readFileSync, copyFileSync, mkdirSync, writeFileSync, unlin
 import { join } from 'path'
 import { getLogInfo, logger } from './logger'
 import { setTrayAlert } from './tray'
+import { probeHttpHealth, shouldRestartAfterBackendExit } from './backend-health'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -24,6 +25,8 @@ let child: ChildProcess | null = null
 let adoptedPid: number | null = null
 let restartTimestamps: number[] = []
 let supervisorStarted = false
+let stopRequested = false
+let backendHealthy = false
 
 function pidFilePath(): string {
   return join(app.getPath('userData'), 'backend-data', 'backend.pid')
@@ -37,13 +40,20 @@ function pidFilePath(): string {
 export async function startBackendSupervisor(): Promise<void> {
   if (!app.isPackaged || supervisorStarted) return
   supervisorStarted = true
+  stopRequested = false
 
   const logInfo = getLogInfo()
   logger().info('[supervisor] starting', { backendLog: logInfo.backendLog })
 
   // If 8787 is already healthy (e.g. an orphan from a prior crash), adopt it
   // — and remember its PID (from our own pid file) so quit can still stop it.
+  const probeStartedAt = Date.now()
+  logger().info('[supervisor] probing existing backend')
   const alreadyHealthy = await healthProbe()
+  logger().info('[supervisor] existing backend probe complete', {
+    healthy: alreadyHealthy,
+    elapsedMs: Date.now() - probeStartedAt,
+  })
   if (alreadyHealthy) {
     adoptedPid = readPidFile()
     logger().info('[supervisor] port 8787 already healthy — adopting existing backend', {
@@ -83,6 +93,8 @@ export function forceKillBackendChild(): void {
 
 /** Stop the backend child process (called from before-quit). */
 export function stopBackendSupervisor(): void {
+  stopRequested = true
+  backendHealthy = false
   const proc = child
   if (!proc) {
     // Adopted (not spawned) backend: we still own it via our pid file —
@@ -126,15 +138,7 @@ export function stopBackendSupervisor(): void {
 // ---------------------------------------------------------------------------
 
 async function healthProbe(): Promise<boolean> {
-  try {
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 2_000)
-    const resp = await fetch(HEALTH_URL, { signal: controller.signal })
-    clearTimeout(timeout)
-    return resp.ok
-  } catch {
-    return false
-  }
+  return probeHttpHealth(HEALTH_URL, 2_000)
 }
 
 // ---------------------------------------------------------------------------
@@ -147,6 +151,7 @@ async function spawnAndWait(): Promise<void> {
 
   const started = await pollHealth()
   if (started) {
+    backendHealthy = true
     logger().info('[supervisor] backend healthy after spawn')
     return
   }
@@ -156,6 +161,7 @@ async function spawnAndWait(): Promise<void> {
 }
 
 function spawnChild(): void {
+  backendHealthy = false
   const exePath = join(process.resourcesPath, 'backend', 'notetaker-backend.exe')
   if (!existsSync(exePath)) {
     logger().error('[supervisor] backend executable not found', { path: exePath })
@@ -199,13 +205,31 @@ function spawnChild(): void {
 
   proc.on('error', (err: Error) => {
     logger().error('[supervisor] backend spawn error', { message: err.message })
-    child = null
+    if (child === proc) {
+      child = null
+      backendHealthy = false
+      clearPidFile()
+    }
   })
 
   proc.on('exit', (code: number | null, signal: string | null) => {
+    const wasCurrentChild = child === proc
+    const wasHealthy = wasCurrentChild && backendHealthy
     logger().info('[supervisor] backend child exited', { code, signal })
-    child = null
-    clearPidFile()
+    if (wasCurrentChild) {
+      child = null
+      backendHealthy = false
+      clearPidFile()
+    }
+
+    if (shouldRestartAfterBackendExit({ stopRequested, wasHealthy })) {
+      logger().warn('[supervisor] healthy backend exited unexpectedly; scheduling restart')
+      void restartWithBackoff().catch((err) => {
+        logger().error('[supervisor] unexpected-exit restart failed', {
+          message: err instanceof Error ? err.message : String(err),
+        })
+      })
+    }
   })
 }
 
