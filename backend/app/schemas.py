@@ -286,6 +286,14 @@ class CurrentUserRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
 
 
+class EnrolmentStatus(BaseModel):
+    """Gate source of truth (IN-379): GET /people/me/enrolment-status."""
+
+    enrolled_locally: bool
+    centrally_enrolled: bool
+    central_required: bool
+
+
 class EnrollRequest(BaseModel):
     """Three short clips of natural speech (~5–20 s each), base64-encoded.
 

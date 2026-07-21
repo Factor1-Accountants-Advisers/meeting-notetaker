@@ -7,7 +7,7 @@ from fastapi import APIRouter, Header, HTTPException, status
 
 from app import store
 from app.config import get_settings
-from app.schemas import CurrentUserRequest, EnrollRequest, PersonEnrollment
+from app.schemas import CurrentUserRequest, EnrollRequest, EnrolmentStatus, PersonEnrollment
 from app.services.pyannote_client import PyannoteAIClient, PyannoteAIError, PyannotePollConfig
 from app.services.storage_api import (
     CentralEnrolment,
@@ -110,6 +110,29 @@ async def ensure_current_staff(body: CurrentUserRequest, actor: str = Actor) -> 
     store.PEOPLE.append(person)
     store.add_audit(actor, "person.create", name, before=None, after=email)
     return person
+
+
+@router.get("/me/enrolment-status", response_model=EnrolmentStatus)
+async def enrolment_status(
+    user_email: str | None = Header(None, alias="X-MN-User-Email"),
+    storage_token: str | None = Header(None, alias="X-MN-Storage-Token"),
+) -> EnrolmentStatus:
+    """Gate source of truth (IN-379). Identity comes from the authenticated
+    main process, never the renderer; a missing header fails closed."""
+    required = central_enrolment_required()
+    if not user_email:
+        return EnrolmentStatus(enrolled_locally=False, centrally_enrolled=False, central_required=required)
+    email = user_email.strip().lower()
+    _sync_people_with_voiceprint_registry()
+    person = next((p for p in store.PEOPLE if p.employee_id == email), None)
+    enrolled_locally = bool(person and person.enrolled)
+    centrally = False
+    if required:
+        try:
+            centrally = get_storage_api_client().get_enrolment(email, access_token=storage_token) is not None
+        except StorageApiError:
+            centrally = False  # unreachable store fails closed; wizard offers retry
+    return EnrolmentStatus(enrolled_locally=enrolled_locally, centrally_enrolled=centrally, central_required=required)
 
 
 @router.post("/{employee_id}/enroll", response_model=PersonEnrollment)
