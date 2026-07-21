@@ -120,16 +120,17 @@ async def enrolment_status(
     """Gate source of truth (IN-379). Identity comes from the authenticated
     main process, never the renderer; a missing header fails closed."""
     required = central_enrolment_required()
-    if not user_email:
+    email = (user_email or "").strip().lower()
+    if not email:
         return EnrolmentStatus(enrolled_locally=False, centrally_enrolled=False, central_required=required)
-    email = user_email.strip().lower()
     _sync_people_with_voiceprint_registry()
     person = next((p for p in store.PEOPLE if p.employee_id == email), None)
     enrolled_locally = bool(person and person.enrolled)
     centrally = False
     if required:
         try:
-            centrally = get_storage_api_client().get_enrolment(email, access_token=storage_token) is not None
+            record = get_storage_api_client().get_enrolment(email, access_token=storage_token)
+            centrally = record is not None and record.status == "active"
         except StorageApiError:
             centrally = False  # unreachable store fails closed; wizard offers retry
     return EnrolmentStatus(enrolled_locally=enrolled_locally, centrally_enrolled=centrally, central_required=required)
@@ -142,6 +143,11 @@ async def enroll(
     actor: str = Actor,
     storage_token: str | None = Header(None, alias="X-MN-Storage-Token"),
 ) -> PersonEnrollment:
+    # Only /people/me lowercases at creation today; normalize here too so the
+    # central person_id and local registry key stay consistently lowercase
+    # and a mixed-case path param does not 404 against the lowercase-keyed
+    # local registry (IN-379 review).
+    employee_id = employee_id.strip().lower()
     person = next((p for p in store.PEOPLE if p.employee_id == employee_id), None)
     if person is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Employee not found")

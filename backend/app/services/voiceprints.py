@@ -112,3 +112,10 @@ def get_voiceprint_repository() -> VoiceprintRepository:
     if _voiceprint_repo is None:
         _voiceprint_repo = JsonVoiceprintRepository()
     return _voiceprint_repo
+
+
+def reset_repository_for_tests() -> None:
+    """Clear the cached repository singleton and its backing file."""
+    global _voiceprint_repo
+    _voiceprint_repo = None
+    voiceprint_path().unlink(missing_ok=True)

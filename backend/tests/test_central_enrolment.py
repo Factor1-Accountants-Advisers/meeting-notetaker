@@ -1,5 +1,6 @@
 """IN-379: central voiceprint enrolment through the Storage API seam."""
 
+import json
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -9,13 +10,13 @@ from fastapi import HTTPException
 
 from app import store
 from app.config import get_settings
-from app.paths import voiceprint_path
 from app.routers.people import enroll, enrolment_status
 from app.schemas import EnrollRequest, EnrolmentStatus, PersonEnrollment
 from app.services import storage_api
 from app.services import voiceprints as voiceprints_service
 from app.services.storage_api import (
     CentralEnrolment,
+    RestStorageApiClient,
     StorageApiError,
     StubStorageApiClient,
     get_storage_api_client,
@@ -70,6 +71,51 @@ class StorageApiSeamTests(unittest.TestCase):
             client.register_voiceprint(enrolment, None)
 
 
+class _FakeHttpResponse:
+    """Minimal stand-in for the context manager `urlopen` returns."""
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> "_FakeHttpResponse":
+        return self
+
+    def __exit__(self, *exc_info) -> bool:
+        return False
+
+
+class RestStorageApiClientMalformedRecordTests(unittest.TestCase):
+    """IN-379 review: the REST seam must never leak a raw ValidationError —
+    every seam failure must stay inside the StorageApiError contract so the
+    status endpoint's fail-closed catch holds."""
+
+    def _fake_opener_returning(self, payload: dict):
+        def opener(req, timeout=30):
+            return _FakeHttpResponse(json.dumps(payload).encode("utf-8"))
+
+        return opener
+
+    def test_get_enrolment_wraps_malformed_record_in_storage_api_error(self):
+        # Missing required fields (display_name, voiceprints, sample_sources,
+        # consent_recorded_at) — CentralEnrolment.model_validate raises
+        # pydantic.ValidationError today, which must not escape the seam.
+        client = RestStorageApiClient(
+            "http://x", opener=self._fake_opener_returning({"person_id": "x"})
+        )
+        with self.assertRaises(StorageApiError):
+            client.get_enrolment("x", access_token="tok")
+
+    def test_register_voiceprint_wraps_malformed_record_in_storage_api_error(self):
+        client = RestStorageApiClient(
+            "http://x", opener=self._fake_opener_returning({"person_id": "x"})
+        )
+        with self.assertRaises(StorageApiError):
+            client.register_voiceprint(_enrolment(), access_token="tok")
+
+
 class ConsentEnforcementTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self._people_backup = list(store.PEOPLE)
@@ -115,6 +161,7 @@ class CentralRegistrationTests(unittest.IsolatedAsyncioTestCase):
         self._people_backup = list(store.PEOPLE)
         self._audit_backup = list(store.AUDIT_LOG)
         storage_api.reset_stub_for_tests()
+        voiceprints_service.reset_repository_for_tests()
         store.PEOPLE.append(
             PersonEnrollment(
                 employee_id="joseph@factor1.com.au",
@@ -128,7 +175,7 @@ class CentralRegistrationTests(unittest.IsolatedAsyncioTestCase):
         store.PEOPLE[:] = self._people_backup
         store.AUDIT_LOG[:] = self._audit_backup
         storage_api.reset_stub_for_tests()
-        voiceprint_path().unlink(missing_ok=True)
+        voiceprints_service.reset_repository_for_tests()
 
     def _patched_settings(self):
         return get_settings().model_copy(update={"pyannote_api_key": "test-key"})
@@ -220,6 +267,31 @@ class CentralRegistrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(person.enrolled)
         self.assertIsNotNone(person.consent_recorded_at)
 
+    async def test_enroll_normalizes_mixed_case_employee_id(self):
+        """Only /people/me lowercases at creation today, so a mixed-case path
+        param 404s against the lowercase-keyed local registry. Normalizing in
+        enroll() keeps the central person_id and local registry key
+        consistently lowercase (IN-379 review)."""
+        with patch("app.routers.people.PyannoteAIClient") as mock_client_cls, \
+                patch("app.routers.people.get_settings") as mock_get_settings, \
+                patch("app.routers.people.central_enrolment_required", return_value=True):
+            mock_get_settings.return_value = self._patched_settings()
+            mock_client_cls.return_value.extract_voiceprint_from_audio.return_value = "vp-test"
+
+            person = await enroll(
+                "Joseph@Factor1.com.au",
+                self._valid_body(),
+                actor="Joseph",
+                storage_token="tok",
+            )
+
+        self.assertEqual(person.employee_id, "joseph@factor1.com.au")
+        enrolment = get_storage_api_client().get_enrolment(
+            "joseph@factor1.com.au", access_token=None
+        )
+        self.assertIsNotNone(enrolment)
+        self.assertEqual(enrolment.person_id, "joseph@factor1.com.au")
+
 
 class EnrolmentStatusTests(unittest.IsolatedAsyncioTestCase):
     """Gate source of truth (IN-379): GET /people/me/enrolment-status."""
@@ -229,20 +301,19 @@ class EnrolmentStatusTests(unittest.IsolatedAsyncioTestCase):
         self._audit_backup = list(store.AUDIT_LOG)
         storage_api.reset_stub_for_tests()
         # The voiceprint repository is a process-wide singleton (see
-        # app.services.voiceprints.get_voiceprint_repository); deleting its
-        # backing file (below) does not clear its in-memory cache, so a
-        # prior test's local enrolment (e.g. CentralRegistrationTests, same
+        # app.services.voiceprints.get_voiceprint_repository); clearing just
+        # its backing file does not clear its in-memory cache, so a prior
+        # test's local enrolment (e.g. CentralRegistrationTests, same
         # "joseph@factor1.com.au" id) would otherwise leak into
         # _sync_people_with_voiceprint_registry() here and flip
         # enrolled_locally regardless of what this test seeds.
-        voiceprints_service._voiceprint_repo = None
+        voiceprints_service.reset_repository_for_tests()
 
     def tearDown(self):
         store.PEOPLE[:] = self._people_backup
         store.AUDIT_LOG[:] = self._audit_backup
         storage_api.reset_stub_for_tests()
-        voiceprint_path().unlink(missing_ok=True)
-        voiceprints_service._voiceprint_repo = None
+        voiceprints_service.reset_repository_for_tests()
 
     def _seed_person(self, enrolled: bool) -> None:
         store.PEOPLE.append(
@@ -296,6 +367,57 @@ class EnrolmentStatusTests(unittest.IsolatedAsyncioTestCase):
         with patch("app.routers.people.central_enrolment_required", return_value=True):
             result = await enrolment_status(user_email=None, storage_token=None)
         self.assertFalse(result.enrolled_locally)
+        self.assertFalse(result.centrally_enrolled)
+        self.assertTrue(result.central_required)
+
+    async def test_whitespace_only_user_email_header_fails_closed(self):
+        """A header of only whitespace must be treated the same as a missing
+        header — normalize before the guard, not after (IN-379 review)."""
+        self._seed_person(enrolled=True)
+        get_storage_api_client().register_voiceprint(_enrolment(), access_token=None)
+        with patch("app.routers.people.central_enrolment_required", return_value=True):
+            result = await enrolment_status(user_email="   ", storage_token=None)
+        self.assertFalse(result.enrolled_locally)
+        self.assertFalse(result.centrally_enrolled)
+        self.assertTrue(result.central_required)
+
+    async def test_disabled_central_record_does_not_satisfy_gate(self):
+        """The gate must count only active central records — a disabled
+        record (e.g. offboarded staff) must not satisfy central_required
+        (IN-379 review)."""
+        self._seed_person(enrolled=True)
+        disabled = _enrolment().model_copy(update={"status": "disabled"})
+        get_storage_api_client().register_voiceprint(disabled, access_token=None)
+        with patch("app.routers.people.central_enrolment_required", return_value=True):
+            result = await enrolment_status(user_email="joseph@factor1.com.au", storage_token=None)
+        self.assertTrue(result.enrolled_locally)
+        self.assertFalse(result.centrally_enrolled)
+        self.assertTrue(result.central_required)
+
+    async def test_central_only_enrolment_satisfies_gate_fields(self):
+        """Headline cutover scenario: enrolled centrally on another machine,
+        no local voiceprint on this one — the gate must still open."""
+        self._seed_person(enrolled=False)
+        get_storage_api_client().register_voiceprint(_enrolment(), access_token=None)
+        with patch("app.routers.people.central_enrolment_required", return_value=True):
+            result = await enrolment_status(user_email="joseph@factor1.com.au", storage_token=None)
+        self.assertFalse(result.enrolled_locally)
+        self.assertTrue(result.centrally_enrolled)
+        self.assertTrue(result.central_required)
+
+    async def test_storage_error_during_status_fails_closed(self):
+        """A raised StorageApiError from the storage client must never escape
+        the status endpoint — it must fail closed instead."""
+        self._seed_person(enrolled=True)
+
+        class _BoomStorageApiClient:
+            def get_enrolment(self, person_id, access_token=None):
+                raise StorageApiError("boom")
+
+        with patch("app.routers.people.central_enrolment_required", return_value=True), \
+                patch("app.routers.people.get_storage_api_client", return_value=_BoomStorageApiClient()):
+            result = await enrolment_status(user_email="joseph@factor1.com.au", storage_token=None)
+        self.assertTrue(result.enrolled_locally)
         self.assertFalse(result.centrally_enrolled)
         self.assertTrue(result.central_required)
 

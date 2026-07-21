@@ -17,6 +17,7 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Literal, Protocol
 
+import pydantic
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
@@ -119,11 +120,21 @@ class RestStorageApiClient:
 
     def register_voiceprint(self, enrolment: CentralEnrolment, access_token: str | None) -> CentralEnrolment:
         raw = self._request("PUT", f"/api/v1/voiceprints/{urllib.parse.quote(enrolment.person_id)}", access_token, enrolment.model_dump(mode="json"))
-        return CentralEnrolment.model_validate(raw) if raw else enrolment
+        if not raw:
+            return enrolment
+        try:
+            return CentralEnrolment.model_validate(raw)
+        except pydantic.ValidationError as exc:
+            raise StorageApiError("storage API returned a malformed record: registration response failed validation") from exc
 
     def get_enrolment(self, person_id: str, access_token: str | None) -> CentralEnrolment | None:
         raw = self._request("GET", f"/api/v1/voiceprints/{urllib.parse.quote(person_id)}", access_token)
-        return CentralEnrolment.model_validate(raw) if raw is not None else None
+        if raw is None:
+            return None
+        try:
+            return CentralEnrolment.model_validate(raw)
+        except pydantic.ValidationError as exc:
+            raise StorageApiError("storage API returned a malformed record: enrolment lookup response failed validation") from exc
 
 
 _STUB = StubStorageApiClient()
