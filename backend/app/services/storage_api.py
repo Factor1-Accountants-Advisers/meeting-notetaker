@@ -96,7 +96,7 @@ class RestStorageApiClient:
 
     def _request(self, method: str, path: str, access_token: str | None, payload: dict | None = None):
         if not access_token:
-            raise StorageApiError("central enrolment requires a signed-in user token")
+            raise StorageApiError("sign in required for central enrolment — no user token was available")
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
         req = urllib.request.Request(
             f"{self._base}{path}",

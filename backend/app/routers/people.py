@@ -125,7 +125,11 @@ async def enrolment_status(
         return EnrolmentStatus(enrolled_locally=False, centrally_enrolled=False, central_required=required)
     _sync_people_with_voiceprint_registry()
     person = next((p for p in store.PEOPLE if p.employee_id == email), None)
-    enrolled_locally = bool(person and person.enrolled)
+    # A person flagged for re-enrolment must not pass the gate on stale local
+    # enrolment. Whether a flag should also invalidate an existing central
+    # record is a separate question, deliberately deferred to IN-382
+    # offboarding scope.
+    enrolled_locally = bool(person and person.enrolled and not person.reenrollment_required)
     centrally = False
     if required:
         try:

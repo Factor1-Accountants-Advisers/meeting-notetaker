@@ -362,6 +362,26 @@ class EnrolmentStatusTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.centrally_enrolled)
         self.assertFalse(result.central_required)
 
+    async def test_reenrollment_flagged_person_is_not_locally_enrolled(self):
+        """IN-379 final review: a person flagged for re-enrolment (IN-76
+        flag-reenrollment) must not pass the pre-cutover gate even though
+        `enrolled` is still True — otherwise a flagged person keeps sailing
+        through on stale local enrolment."""
+        store.PEOPLE.append(
+            PersonEnrollment(
+                employee_id="joseph@factor1.com.au",
+                display_name="Joseph Guerrero",
+                role="Factor1 staff",
+                enrolled=True,
+                reenrollment_required=True,
+            )
+        )
+        with patch("app.routers.people.central_enrolment_required", return_value=False):
+            result = await enrolment_status(user_email="joseph@factor1.com.au", storage_token=None)
+        self.assertFalse(result.enrolled_locally)
+        self.assertFalse(result.centrally_enrolled)
+        self.assertFalse(result.central_required)
+
     async def test_not_required_and_not_locally_enrolled(self):
         self._seed_person(enrolled=False)
         with patch("app.routers.people.central_enrolment_required", return_value=False):

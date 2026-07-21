@@ -118,7 +118,10 @@ satisfies the gate: `disabled`/`deleted` records (offboarding, IN-382)
 fail closed. (Added 21 Jul after Task 4 code review.) After cutover, Slice 1 local records remain only for
 the agreed rollback window and are invisible to the gate. Stub central data
 is dev-only and does not migrate to the real store (same rule as local
-voiceprints).
+voiceprints). A person flagged for re-enrolment (`reenrollment_required`)
+does not count as locally enrolled for the gate; whether a flag should also
+invalidate a central record is deferred to IN-382 (offboarding). (Added 21
+Jul, final review.)
 
 ## Error handling
 
