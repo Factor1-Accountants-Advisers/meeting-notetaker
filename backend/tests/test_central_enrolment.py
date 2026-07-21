@@ -10,7 +10,7 @@ from fastapi import HTTPException
 
 from app import store
 from app.config import get_settings
-from app.routers.people import enroll, enrolment_status
+from app.routers.people import enroll, enrolment_status, flag_reenrollment
 from app.schemas import EnrollRequest, EnrolmentStatus, PersonEnrollment
 from app.services import storage_api
 from app.services import voiceprints as voiceprints_service
@@ -291,6 +291,34 @@ class CentralRegistrationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNotNone(enrolment)
         self.assertEqual(enrolment.person_id, "joseph@factor1.com.au")
+
+
+class FlagReenrollmentNormalizationTests(unittest.IsolatedAsyncioTestCase):
+    """IN-379: flag_reenrollment was the only person-keyed endpoint that
+    still matched employee_id case-sensitively after Task 4 normalized
+    enroll() — a mixed-case path param 404s against the lowercase-keyed
+    local registry."""
+
+    def setUp(self):
+        self._people_backup = list(store.PEOPLE)
+        self._audit_backup = list(store.AUDIT_LOG)
+        store.PEOPLE.append(
+            PersonEnrollment(
+                employee_id="joseph@factor1.com.au",
+                display_name="Joseph Guerrero",
+                role="Factor1 staff",
+                enrolled=True,
+            )
+        )
+
+    def tearDown(self):
+        store.PEOPLE[:] = self._people_backup
+        store.AUDIT_LOG[:] = self._audit_backup
+
+    async def test_flag_reenrollment_normalizes_mixed_case_employee_id(self):
+        person = await flag_reenrollment("Joseph@Factor1.com.au", actor="Joseph")
+        self.assertEqual(person.employee_id, "joseph@factor1.com.au")
+        self.assertTrue(person.reenrollment_required)
 
 
 class EnrolmentStatusTests(unittest.IsolatedAsyncioTestCase):

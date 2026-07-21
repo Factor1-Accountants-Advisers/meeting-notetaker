@@ -292,6 +292,7 @@ async def flag_reenrollment(
 ) -> PersonEnrollment:
     """Flag a person for re-enrollment. Used when voiceprint quality degrades
     or the model version changes (IN-76 re-enrollment support)."""
+    employee_id = employee_id.strip().lower()
     person = next((p for p in store.PEOPLE if p.employee_id == employee_id), None)
     if person is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Employee not found")
