@@ -105,7 +105,9 @@ header; absence of the scope config sends no header.
 ## Cutover semantics
 
 Local voiceprints can never set `centrally_enrolled` — the rule is
-structural, not policy. After cutover, Slice 1 local records remain only for
+structural, not policy. Only a central record with `status == "active"`
+satisfies the gate: `disabled`/`deleted` records (offboarding, IN-382)
+fail closed. (Added 21 Jul after Task 4 code review.) After cutover, Slice 1 local records remain only for
 the agreed rollback window and are invisible to the gate. Stub central data
 is dev-only and does not migrate to the real store (same rule as local
 voiceprints).
@@ -119,6 +121,7 @@ voiceprints).
 | Central registration failure | 502 retryable; wizard keeps accepted clips in memory and offers retry; local write already done (harmless, rollback-aligned) |
 | Re-enrolment / retry | upsert by `person_id`; replaces prior central record |
 | Missing token when central required | 502 with explicit "sign-in required for central enrolment" message |
+| Malformed record from the real API | wrapped in `StorageApiError` inside the seam (never a raw ValidationError/500), so the status endpoint's fail-closed catch always holds — a 500 there would let Task 6's renderer fallback revert the gate to local enrolment post-cutover (added 21 Jul after Task 4 review) |
 
 **Central-store** audit events are not written by desktop or backend — the
 Function writes them server-side (brief §5, IN-381), so the stub no-ops with
