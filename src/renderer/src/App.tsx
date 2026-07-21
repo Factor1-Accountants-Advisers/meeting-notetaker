@@ -5,7 +5,7 @@ import { HomeScreen } from './screens/HomeScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
 import { LoginScreen, type User } from './screens/LoginScreen'
 import { RecordingScreen, type RecordingSession } from './screens/RecordingScreen'
-import { createMeeting, emailNotes, ensureCurrentPerson, fetchMeetingReview, retryPipeline, saveTranscriptToSharePoint, uploadAudio, type GraphMeetingMetadata, type SystemAudioSegmentUpload } from './lib/api'
+import { createMeeting, emailNotes, ensureCurrentPerson, fetchEnrolmentStatus, fetchMeetingReview, retryPipeline, saveTranscriptToSharePoint, uploadAudio, type EnrolmentStatus, type GraphMeetingMetadata, type SystemAudioSegmentUpload } from './lib/api'
 import { capture, type CaptureStatus, type SystemSegment } from './lib/capture'
 import { loadPrefs } from './lib/prefs'
 import { useNotifications } from './lib/useNotifications'
@@ -65,10 +65,23 @@ function App(): JSX.Element {
   const [user, setUser] = useState<User | null>(loadUser)
   const [authChecked, setAuthChecked] = useState(Boolean(loadUser()))
   const [currentPerson, setCurrentPerson] = useState<StaffMember | null>(null)
+  const [enrolmentStatus, setEnrolmentStatus] = useState<EnrolmentStatus | null>(null)
   const [enrollmentLoading, setEnrollmentLoading] = useState(false)
   // Bumping this re-runs the enrollment gate fetch (Try again after failure).
   const [enrollmentAttempt, setEnrollmentAttempt] = useState(0)
   const [enrollmentError, setEnrollmentError] = useState<string | null>(null)
+
+  // IN-379 gate. Post-cutover (central_required) ONLY central enrolment passes —
+  // local records are structurally invisible (spec §Cutover semantics).
+  // Pre-cutover, backend enrolled_locally OR the session's own person record
+  // passes: equivalent trust to Slice 1, and resilient to a cold-start
+  // status fetched before the main process knows the account email.
+  // status null (backend unreachable) falls back to Slice 1 behaviour.
+  const enrolmentSatisfied = enrolmentStatus
+    ? (enrolmentStatus.central_required
+        ? enrolmentStatus.centrally_enrolled
+        : enrolmentStatus.enrolled_locally || currentPerson?.enrollment === 'enrolled')
+    : currentPerson?.enrollment === 'enrolled'
   const [view, setView] = useState<View>('home')
   const [recording, setRecording] = useState<RecordingSession | null>(null)
   const [extending, setExtending] = useState(false)
@@ -160,6 +173,7 @@ function App(): JSX.Element {
     let cancelled = false
     if (!user) {
       setCurrentPerson(null)
+      setEnrolmentStatus(null)
       setEnrollmentError(null)
       setEnrollmentLoading(false)
       return
@@ -179,10 +193,16 @@ function App(): JSX.Element {
       let lastErrorMessage: string | null = null
       for (let attempt = 0; ; attempt++) {
         try {
-          const person = await ensureCurrentPerson(user.name, user.email)
+          // Fetched alongside the person so the gate has fresh status the
+          // moment the person record resolves (IN-379).
+          const [person, status] = await Promise.all([
+            ensureCurrentPerson(user.name, user.email),
+            fetchEnrolmentStatus()
+          ])
           if (cancelled) return
           if (person) {
             setCurrentPerson(person)
+            setEnrolmentStatus(status)
             setEnrollmentLoading(false)
             return
           }
@@ -197,6 +217,7 @@ function App(): JSX.Element {
         if (cancelled) return
       }
       setCurrentPerson(null)
+      setEnrolmentStatus(null)
       setEnrollmentError(
         lastErrorMessage ??
           'Could not load your staff enrollment record. Check that the backend is running, then try again.'
@@ -223,7 +244,7 @@ function App(): JSX.Element {
 
   // Listen for auto-recording commands from the main process (IN-66).
   useEffect(() => {
-    if (!user || currentPerson?.enrollment !== 'enrolled' || typeof window.api?.onAutoStartRequest !== 'function') return
+    if (!user || !enrolmentSatisfied || typeof window.api?.onAutoStartRequest !== 'function') return
 
     const unsubStart = window.api.onAutoStartRequest(async (data) => {
       try {
@@ -408,7 +429,7 @@ function App(): JSX.Element {
         controlHandlersRef.current = { pause: () => {}, resume: () => {}, stop: () => {} }
       }
     }
-  }, [user, currentPerson?.enrollment])
+  }, [user, enrolmentSatisfied])
 
   if (!authChecked) {
     return <div className="flex h-full items-center justify-center bg-page"><span className="h-5 w-5 animate-spin rounded-full border-2 border-edge-tertiary border-t-brand-blue" /></div>
@@ -831,6 +852,7 @@ function App(): JSX.Element {
     localStorage.removeItem(USER_KEY)
     setRecording(null)
     setCurrentPerson(null)
+    setEnrolmentStatus(null)
     setEnrollmentError(null)
     setEnrollmentLoading(false)
     setView('home')
@@ -840,7 +862,7 @@ function App(): JSX.Element {
     }
   }
 
-  if (enrollmentLoading || enrollmentError || !currentPerson || currentPerson.enrollment !== 'enrolled') {
+  if (enrollmentLoading || enrollmentError || !currentPerson || !enrolmentSatisfied) {
     return (
       <div className="relative flex h-full flex-col items-center justify-center bg-page px-6">
         <div className="w-full max-w-[520px] rounded-lg border-[0.5px] border-edge-secondary bg-bg-primary p-5 text-center">
@@ -879,7 +901,7 @@ function App(): JSX.Element {
             </button>
           </div>
         </div>
-        {currentPerson && currentPerson.enrollment !== 'enrolled' && (
+        {currentPerson && !enrolmentSatisfied && (
           <EnrollmentModal
             person={currentPerson}
             required
@@ -888,6 +910,8 @@ function App(): JSX.Element {
               setCurrentPerson(updated)
               setEnrollmentError(null)
               setView('home')
+              // Re-fetch so the gate reflects the wizard's completion immediately.
+              void fetchEnrolmentStatus().then((status) => setEnrolmentStatus(status))
             }}
           />
         )}

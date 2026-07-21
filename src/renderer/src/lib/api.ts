@@ -426,11 +426,14 @@ export async function ensureCurrentPerson(name: string, email: string): Promise<
 export async function enrollPerson(
   employeeId: string,
   clipsB64: string[],
-  mimeType: string
+  mimeType: string,
+  sampleSources: ('recorded' | 'uploaded')[]
 ): Promise<StaffMember | null> {
   const dto = await callRequired<PersonEnrollmentDto>('POST', `/people/${employeeId}/enroll`, {
     clips_b64: clipsB64,
-    mime_type: mimeType
+    mime_type: mimeType,
+    consent_confirmed: true,
+    sample_sources: sampleSources
   })
   return {
     id: dto.employee_id,
@@ -440,6 +443,16 @@ export async function enrollPerson(
     enrollment: enrollmentState(dto),
     modelVersion: dto.model_version
   }
+}
+
+export interface EnrolmentStatus {
+  enrolled_locally: boolean
+  centrally_enrolled: boolean
+  central_required: boolean
+}
+
+export async function fetchEnrolmentStatus(): Promise<EnrolmentStatus | null> {
+  return call<EnrolmentStatus>('GET', '/people/me/enrolment-status')
 }
 
 function enrollmentState(dto: PersonEnrollmentDto): EnrollmentState {

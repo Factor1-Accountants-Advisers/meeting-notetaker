@@ -141,7 +141,8 @@ export function EnrollmentModal({ person, onClose, onEnrolled, required = false 
     const mime = readyClips[0]?.blob.type || 'audio/webm'
     const b64 = await Promise.all(readyClips.map((clip) => blobToBase64(clip.blob)))
     try {
-      const updated = await enrollPerson(person.id, b64, mime)
+      // Task 7 threads real sources
+      const updated = await enrollPerson(person.id, b64, mime, ['recorded', 'recorded', 'recorded'])
       if (updated) {
         setStep('complete')
         window.setTimeout(() => onEnrolled(updated), 900)
