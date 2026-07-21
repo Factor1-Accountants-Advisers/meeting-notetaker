@@ -9,6 +9,12 @@ from app import store
 from app.config import get_settings
 from app.schemas import CurrentUserRequest, EnrollRequest, PersonEnrollment
 from app.services.pyannote_client import PyannoteAIClient, PyannoteAIError, PyannotePollConfig
+from app.services.storage_api import (
+    CentralEnrolment,
+    StorageApiError,
+    central_enrolment_required,
+    get_storage_api_client,
+)
 from app.services.voiceprints import Voiceprint, get_voiceprint_repository
 
 router = APIRouter(prefix="/people", tags=["people"])
@@ -108,7 +114,10 @@ async def ensure_current_staff(body: CurrentUserRequest, actor: str = Actor) -> 
 
 @router.post("/{employee_id}/enroll", response_model=PersonEnrollment)
 async def enroll(
-    employee_id: str, body: EnrollRequest, actor: str = Actor
+    employee_id: str,
+    body: EnrollRequest,
+    actor: str = Actor,
+    storage_token: str | None = Header(None, alias="X-MN-Storage-Token"),
 ) -> PersonEnrollment:
     person = next((p for p in store.PEOPLE if p.employee_id == employee_id), None)
     if person is None:
@@ -200,6 +209,28 @@ async def enroll(
     )
     voiceprint_repo.enroll(voiceprint)
 
+    consent_recorded_at = datetime.now(timezone.utc)  # server-stamped
+    centrally_registered = False
+    if central_enrolment_required():
+        enrolment = CentralEnrolment(
+            person_id=employee_id,
+            display_name=person.display_name,
+            voiceprints=provider_voiceprints,
+            sample_sources=body.sample_sources or ["recorded"] * 3,
+            model_version=settings.pyannote_model_version,
+            consent_recorded_at=consent_recorded_at,
+        )
+        try:
+            get_storage_api_client().register_voiceprint(enrolment, access_token=storage_token)
+        except StorageApiError as exc:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                f"Central voiceprint registration failed — retry enrolment: {exc}",
+            ) from exc
+        centrally_registered = True
+    person.centrally_enrolled = centrally_registered
+    person.consent_recorded_at = consent_recorded_at
+
     # Update person enrollment state.
     person.enrolled = True
     person.model_version = settings.pyannote_model_version
@@ -219,6 +250,7 @@ async def enroll(
         after=(
             f"model={settings.pyannote_model_version}, "
             f"voiceprints={len(provider_voiceprints)}, enrollment_complete"
+            f", centrally_enrolled={centrally_registered}"
         ),
     )
 

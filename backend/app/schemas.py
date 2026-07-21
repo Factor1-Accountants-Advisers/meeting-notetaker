@@ -298,4 +298,6 @@ class EnrollRequest(BaseModel):
     consent_confirmed: bool = False
     # Per-clip provenance for the central store (IN-379); defaults to
     # all-recorded for callers predating the upload path.
-    sample_sources: list[Literal["recorded", "uploaded"]] | None = None
+    sample_sources: list[Literal["recorded", "uploaded"]] | None = Field(
+        default=None, min_length=3, max_length=3
+    )
