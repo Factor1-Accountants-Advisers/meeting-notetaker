@@ -6,6 +6,7 @@ with the PostgreSQL work; keep the two aligned.
 
 from datetime import date, datetime
 from enum import Enum
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -276,6 +277,8 @@ class PersonEnrollment(BaseModel):
     enrolled: bool
     model_version: str | None = None
     reenrollment_required: bool = False
+    centrally_enrolled: bool = False
+    consent_recorded_at: datetime | None = None
 
 
 class CurrentUserRequest(BaseModel):
@@ -292,3 +295,7 @@ class EnrollRequest(BaseModel):
 
     clips_b64: list[str] = Field(min_length=3, max_length=3)
     mime_type: str = "audio/webm"
+    consent_confirmed: bool = False
+    # Per-clip provenance for the central store (IN-379); defaults to
+    # all-recorded for callers predating the upload path.
+    sample_sources: list[Literal["recorded", "uploaded"]] | None = None

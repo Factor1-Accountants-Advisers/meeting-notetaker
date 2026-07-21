@@ -114,6 +114,12 @@ async def enroll(
     if person is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Employee not found")
 
+    if not body.consent_confirmed:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Consent must be confirmed before voiceprint enrolment",
+        )
+
     # Validate exactly three clips.
     if len(body.clips_b64) != 3:
         raise HTTPException(
