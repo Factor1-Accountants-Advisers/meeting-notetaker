@@ -59,6 +59,14 @@ acquisition in `api-proxy.ts`), which reads env through its own public-env
 path — both processes must see the same `MN_*` variables per the existing
 pattern; do not wire it backend-only.
 
+**Known packaged-env gap (found 21 Jul, Task 5):** in packaged installs,
+`backend-supervisor.ts` merges `backend.env` into the *backend subprocess*
+env only; the main process reads `.env.production` via `loadPublicEnv()`
+instead. At cutover, ops must place `MN_STORAGE_API_SCOPE` where the main
+process reads it (and `MN_STORAGE_API_URL` where the backend reads it) —
+add both to the provisioning checklist under IN-376/IN-471.
+`backend.env.template` does not yet mention either variable.
+
 ### Schemas (`backend/app/schemas.py`)
 
 - `EnrollRequest` + `consent_confirmed: bool` and per-clip
