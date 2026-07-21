@@ -47,6 +47,28 @@ export async function getGraphAccessToken(scopes?: readonly string[]): Promise<s
   return result.accessToken
 }
 
+/** Delegated Storage API token for enrolment routes (IN-379/IN-471).
+ *  Scope comes from MN_STORAGE_API_SCOPE; absent scope = stub mode, no token. */
+export async function getStorageApiAccessToken(scope: string): Promise<string | null> {
+  const status = getMsalConfigStatus()
+  if (!status.configured) {
+    logger().info('[auth] Storage API token unavailable: MSAL public-client config missing', {
+      missing: status.missing
+    })
+    return null
+  }
+
+  const result = await acquireGraphTokenSilent([scope])
+  if (result.accountEmail) currentUserEmail = result.accountEmail
+  if (!result.accessToken) {
+    logger().info('[auth] Storage API token unavailable', { reason: result.reason })
+    return null
+  }
+
+  logger().info('[auth] Storage API token acquired', { accountKnown: Boolean(result.accountEmail) })
+  return result.accessToken
+}
+
 export function getSignedInState(): { signedIn: boolean; email?: string; name?: string } {
   if (currentUser !== 'Unknown user') return { signedIn: true, email: currentUserEmail, name: currentUser }
   // On cold start, check whether a persisted cache exists so the renderer can skip the login

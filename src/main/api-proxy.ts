@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { getCurrentUser, getGraphAccessToken } from './auth-session'
+import { getCurrentUser, getCurrentUserEmail, getGraphAccessToken, getStorageApiAccessToken } from './auth-session'
 import { GRAPH_EMAIL_SCOPES, GRAPH_SHAREPOINT_SCOPES } from './auth-msal'
 import { logger } from './logger'
 
@@ -55,6 +55,29 @@ export function registerApiProxyIpc(): void {
       if (req.path.includes('/sharepoint') && req.method === 'POST') {
         const token = await getGraphAccessToken(GRAPH_SHAREPOINT_SCOPES)
         if (token) headers['X-MN-Graph-Token'] = token
+      }
+
+      // IN-379: identity + delegated Storage API token for enrolment routes.
+      // Email identifies "me" server-side (X-MN-User carries the display name).
+      // Boundary check: `req.path.includes('/enroll')` must not also match the
+      // POST /people/{id}/flag-reenrollment route. It doesn't — "flag-reenrollment"
+      // has no literal "/enroll" substring (the only slashes in that path precede
+      // "people", the id, and "flag-reenrollment"; "enroll" there is embedded in
+      // "re-enroll-ment" preceded by "re", not "/"). Confirmed against the full
+      // /people route list (backend/app/routers/people.py): "", "/me",
+      // "/me/enrolment-status", "/{id}/enroll", "/{id}/flag-reenrollment" — only
+      // the enroll route itself contains "/enroll".
+      const storageRoute =
+        (req.path.includes('/enroll') && req.method === 'POST') ||
+        req.path.includes('/people/me/enrolment-status')
+      if (storageRoute) {
+        const email = getCurrentUserEmail()
+        if (email) headers['X-MN-User-Email'] = email
+        const scope = process.env.MN_STORAGE_API_SCOPE
+        if (scope) {
+          const token = await getStorageApiAccessToken(scope)
+          if (token) headers['X-MN-Storage-Token'] = token
+        }
       }
 
       const res = await fetch(`${API_BASE}${req.path}`, {
