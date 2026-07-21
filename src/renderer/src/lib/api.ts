@@ -427,12 +427,13 @@ export async function enrollPerson(
   employeeId: string,
   clipsB64: string[],
   mimeType: string,
-  sampleSources: ('recorded' | 'uploaded')[]
+  sampleSources: ('recorded' | 'uploaded')[],
+  consentConfirmed: boolean
 ): Promise<StaffMember | null> {
   const dto = await callRequired<PersonEnrollmentDto>('POST', `/people/${employeeId}/enroll`, {
     clips_b64: clipsB64,
     mime_type: mimeType,
-    consent_confirmed: true,
+    consent_confirmed: consentConfirmed,
     sample_sources: sampleSources
   })
   return {

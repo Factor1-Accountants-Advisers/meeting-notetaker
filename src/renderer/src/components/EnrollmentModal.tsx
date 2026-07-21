@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, Mic, MicOff, RotateCcw, Square, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, Mic, MicOff, RotateCcw, Square, Upload, X } from 'lucide-react'
 import { Pill } from '@renderer/components/ui/Pill'
 import { enrollPerson } from '@renderer/lib/api'
 import {
@@ -38,6 +38,7 @@ interface Props {
 interface AcceptedClip {
   blob: Blob
   quality: VoiceSampleQuality
+  source: 'recorded' | 'uploaded'
 }
 
 export function EnrollmentModal({ person, onClose, onEnrolled, required = false }: Props): JSX.Element {
@@ -91,7 +92,22 @@ export function EnrollmentModal({ person, onClose, onEnrolled, required = false 
       return
     }
 
-    setClips((prev) => prev.map((item, i) => (i === sampleIndex ? { blob, quality } : item)))
+    setClips((prev) => prev.map((item, i) => (i === sampleIndex ? { blob, quality, source: 'recorded' } : item)))
+    setState('idle')
+    setError(null)
+  }
+
+  const handleUpload = async (file: File): Promise<void> => {
+    if (sampleIndex < 0 || state === 'saving') return
+    setError(null)
+    setState('checking')
+    const quality = await analyzeVoiceSample(file, MIN_CLIP_SECONDS, MAX_CLIP_SECONDS)
+    if (!quality.ok) {
+      setState('idle')
+      setError(quality.reason ?? 'This audio file was not clear enough. Please choose another clip.')
+      return
+    }
+    setClips((prev) => prev.map((item, i) => (i === sampleIndex ? { blob: file, quality, source: 'uploaded' } : item)))
     setState('idle')
     setError(null)
   }
@@ -140,9 +156,12 @@ export function EnrollmentModal({ person, onClose, onEnrolled, required = false 
     const readyClips = clips.filter((clip): clip is AcceptedClip => clip !== null)
     const mime = readyClips[0]?.blob.type || 'audio/webm'
     const b64 = await Promise.all(readyClips.map((clip) => blobToBase64(clip.blob)))
+    // Derived from the clips themselves rather than a parallel array so a
+    // recorded/uploaded mismatch can't slip in independent of what was
+    // actually accepted per slot.
+    const sources = readyClips.map((clip) => clip.source)
     try {
-      // Task 7 threads real sources
-      const updated = await enrollPerson(person.id, b64, mime, ['recorded', 'recorded', 'recorded'])
+      const updated = await enrollPerson(person.id, b64, mime, sources, consented)
       if (updated) {
         setStep('complete')
         window.setTimeout(() => onEnrolled(updated), 900)
@@ -249,13 +268,31 @@ export function EnrollmentModal({ person, onClose, onEnrolled, required = false 
                 </button>
               )}
               {!currentClip ? (
-                <SampleAction
-                  state={state}
-                  seconds={seconds}
-                  index={sampleIndex}
-                  onStart={() => void startClip()}
-                  onStop={() => void stopClip()}
-                />
+                <>
+                  <SampleAction
+                    state={state}
+                    seconds={seconds}
+                    index={sampleIndex}
+                    onStart={() => void startClip()}
+                    onStop={() => void stopClip()}
+                  />
+                  {(state === 'idle' || state === 'denied') && (
+                    <label className="flex cursor-pointer items-center gap-1.5 rounded-md border-[0.5px] border-edge-secondary px-3 py-2 text-[13px] text-content-primary transition-colors hover:bg-bg-secondary">
+                      <Upload size={14} strokeWidth={1.75} />
+                      Upload a clip instead
+                      <input
+                        type="file"
+                        accept="audio/*"
+                        className="hidden"
+                        onChange={(event) => {
+                          const file = event.target.files?.[0] ?? null
+                          event.target.value = ''
+                          if (file) void handleUpload(file)
+                        }}
+                      />
+                    </label>
+                  )}
+                </>
               ) : (
                 <button
                   type="button"
@@ -339,7 +376,7 @@ function ConsentPage({ consented, onChange }: { consented: boolean; onChange: (c
   return (
     <div className="space-y-4">
       <p className="m-0 text-[13px] leading-relaxed text-content-secondary">
-        To fully utilise Notetaker, we need to record a few short voice samples. These help reduce Unknown speakers in meeting transcripts.
+        Your voice samples are used only to create a voiceprint that identifies you in meeting transcripts. The original recordings are deleted immediately after the voiceprint is created — only the voiceprint reference is stored, centrally and securely, so any Factor1 Notetaker can recognise you. You can ask an administrator to disable or delete your voiceprint at any time. If you enrolled before central storage was introduced, this enrolment replaces that one.
       </p>
       <label className="flex items-start gap-2 rounded-md border-[0.5px] border-edge-tertiary p-3 text-[12px] leading-relaxed text-content-secondary">
         <input

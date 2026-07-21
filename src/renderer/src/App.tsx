@@ -66,6 +66,11 @@ function App(): JSX.Element {
   const [authChecked, setAuthChecked] = useState(Boolean(loadUser()))
   const [currentPerson, setCurrentPerson] = useState<StaffMember | null>(null)
   const [enrolmentStatus, setEnrolmentStatus] = useState<EnrolmentStatus | null>(null)
+  // IN-379/Slice 2 vocabulary spells this single-l "enrolment"; the file's
+  // older Slice 1 identifiers (currentPerson aside, see enrollmentLoading,
+  // EnrollmentModal, etc. below) keep the double-l "enrollment" spelling.
+  // Same concept — grep for one and you will miss the other.
+  const enrolmentEpochRef = useRef(0)
   const [enrollmentLoading, setEnrollmentLoading] = useState(false)
   // Bumping this re-runs the enrollment gate fetch (Try again after failure).
   const [enrollmentAttempt, setEnrollmentAttempt] = useState(0)
@@ -76,7 +81,14 @@ function App(): JSX.Element {
   // Pre-cutover, backend enrolled_locally OR the session's own person record
   // passes: equivalent trust to Slice 1, and resilient to a cold-start
   // status fetched before the main process knows the account email.
-  // status null (backend unreachable) falls back to Slice 1 behaviour.
+  // status null covers ANY failed status call, not just an unreachable
+  // backend (a thrown request, a transient single-route failure on the
+  // first try, etc.) — falls back to Slice 1 behaviour. Two defence layers
+  // guard the gate against that fallback firing when it shouldn't: the
+  // server-side fail-closed catch in /people/me/enrolment-status (missing
+  // identity header or a StorageApiError both answer false, never 500) and
+  // the renderer retry loop below, which treats a person-ok-but-status-null
+  // result as retryable rather than accepting it on the first try.
   const enrolmentSatisfied = enrolmentStatus
     ? (enrolmentStatus.central_required
         ? enrolmentStatus.centrally_enrolled
@@ -191,6 +203,13 @@ function App(): JSX.Element {
       typeof window.api?.request === 'function' ? [1000, 2000, 3000, 5000, 5000, 5000, 10000, 10000, 10000] : []
     const run = async (): Promise<void> => {
       let lastErrorMessage: string | null = null
+      // A person that resolves alongside a null status means the backend
+      // answered one of the two calls but not the other — anomalous, and
+      // worth retrying rather than accepting on the first try. If retries
+      // exhaust while still in that state, fall back to the person with a
+      // null status (existing Slice 1 fallback) instead of surfacing a hard
+      // error the backend never actually reported.
+      let lastPersonWithNullStatus: StaffMember | null = null
       for (let attempt = 0; ; attempt++) {
         try {
           // Fetched alongside the person so the gate has fresh status the
@@ -200,21 +219,29 @@ function App(): JSX.Element {
             fetchEnrolmentStatus()
           ])
           if (cancelled) return
-          if (person) {
+          if (person && status) {
             setCurrentPerson(person)
             setEnrolmentStatus(status)
             setEnrollmentLoading(false)
             return
           }
+          lastPersonWithNullStatus = person && !status ? person : null
           lastErrorMessage = null
         } catch (err) {
           if (cancelled) return
           lastErrorMessage = err instanceof Error ? err.message : null
+          lastPersonWithNullStatus = null
         }
         const delay = retryDelaysMs[attempt]
         if (delay === undefined) break
         await new Promise((resolve) => setTimeout(resolve, delay))
         if (cancelled) return
+      }
+      if (lastPersonWithNullStatus) {
+        setCurrentPerson(lastPersonWithNullStatus)
+        setEnrolmentStatus(null)
+        setEnrollmentLoading(false)
+        return
       }
       setCurrentPerson(null)
       setEnrolmentStatus(null)
@@ -849,6 +876,10 @@ function App(): JSX.Element {
   }
 
   const signOut = (): void => {
+    // Bump so any enrolment-status fetch already in flight (e.g. the
+    // onEnrolled refetch below) can detect this logout and discard its
+    // result instead of landing a stale status into the next session.
+    enrolmentEpochRef.current += 1
     localStorage.removeItem(USER_KEY)
     setRecording(null)
     setCurrentPerson(null)
@@ -910,8 +941,21 @@ function App(): JSX.Element {
               setCurrentPerson(updated)
               setEnrollmentError(null)
               setView('home')
-              // Re-fetch so the gate reflects the wizard's completion immediately.
-              void fetchEnrolmentStatus().then((status) => setEnrolmentStatus(status))
+              // Optimistic: the enroll call itself 502s when central
+              // registration fails, so a successful response here implies
+              // it already succeeded — flip the gate immediately rather
+              // than waiting on a round trip. The refetch below is just
+              // confirmation.
+              setEnrolmentStatus((s) => s && { ...s, centrally_enrolled: true })
+              // Cancellation guard mirrors the main gate effect: capture the
+              // epoch now so a logout that lands mid-flight (e.g. the user
+              // signs out before this refetch resolves) can't apply a stale
+              // status to the next session.
+              const epoch = enrolmentEpochRef.current
+              void fetchEnrolmentStatus().then((status) => {
+                if (enrolmentEpochRef.current !== epoch) return
+                setEnrolmentStatus(status)
+              })
             }}
           />
         )}
