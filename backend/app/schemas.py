@@ -67,9 +67,16 @@ class GraphMeetingMetadata(BaseModel):
     title: str | None = None
     attendees: list[GraphMeetingAttendeeMetadata] = Field(default_factory=list)
     meeting_id: str
+    # Slice 1 populated this with the event's iCalUId (normalise.ts), not the
+    # true Teams online meeting id. Kept as-is for stored-metadata compatibility;
+    # ical_uid carries the value under its honest name from Slice 2 on.
     online_meeting_id: str | None = None
     join_web_url: str | None = None
     organizer_email: str | None = None
+    organizer_name: str | None = None
+    scheduled_start_utc: str | None = None  # ISO 8601 UTC from Graph start
+    description: str | None = None  # Graph bodyPreview
+    ical_uid: str | None = None
 
 
 class Priority(str, Enum):

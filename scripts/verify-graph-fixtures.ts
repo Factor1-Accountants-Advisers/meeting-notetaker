@@ -42,7 +42,9 @@ const signedInEmail = 'joseph@factor1.com.au'
 function baseEvent(overrides: Partial<RawGraphEvent> = {}): RawGraphEvent {
   return {
     id: 'event-base',
+    iCalUId: 'ical-base',
     subject: 'Client meeting',
+    bodyPreview: 'Quarterly review agenda',
     start: { dateTime: '2026-06-26T01:00:00', timeZone: 'UTC' },
     end: { dateTime: '2026-06-26T02:00:00', timeZone: 'UTC' },
     isCancelled: false,
@@ -150,9 +152,15 @@ async function main(): Promise<void> {
   assert.equal(organiser.idempotencyKey, 'organiser:2026-06-26T01:00:00.000Z')
   assert.equal(organiser.metadata.title, 'Client meeting')
   assert.equal(organiser.metadata.meetingId, 'organiser')
-  assert.equal(organiser.metadata.onlineMeetingId, undefined)
+  // Legacy Slice 1 field: carries iCalUId, not the true online meeting id.
+  // Kept for stored-metadata compatibility; icalUid is the honest name (IN-384).
+  assert.equal(organiser.metadata.onlineMeetingId, 'ical-base')
+  assert.equal(organiser.metadata.icalUid, 'ical-base')
   assert.equal(organiser.metadata.joinWebUrl, 'https://teams.microsoft.com/l/meetup-join/redacted')
   assert.equal(organiser.metadata.organizerEmail, signedInEmail)
+  assert.equal(organiser.metadata.organizerName, 'Joseph')
+  assert.equal(organiser.metadata.scheduledStartUtc, '2026-06-26T01:00:00.000Z')
+  assert.equal(organiser.metadata.description, 'Quarterly review agenda')
   assert.equal(organiser.metadata.attendees.length, 2)
   assert.equal(organiser.metadata.attendees[1].email, 'client@example.com')
   assert.equal(organiser.logContext.eventIdHash.length, 12)

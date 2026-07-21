@@ -87,6 +87,11 @@ ACTION_ITEMS: dict[UUID, ActionItem] = {}
 
 PEOPLE: list[PersonEnrollment] = []
 
+# Canonical IN-384 export artifacts (schema_version "1.0"), keyed by meeting,
+# stored as plain JSON dicts. Built at pipeline-ready and refreshed on
+# post-ready edits; IN-386 uploads these to Azure Blob.
+MEETING_EXPORTS: dict[UUID, dict] = {}
+
 
 # ---------------------------------------------------------------------------
 # Snapshot persistence (Postgres stand-in durability)
@@ -110,6 +115,7 @@ def save_snapshot() -> None:
         },
         "people": [p.model_dump(mode="json") for p in PEOPLE],
         "audit_log": [e.model_dump(mode="json") for e in AUDIT_LOG],
+        "meeting_exports": {str(k): v for k, v in MEETING_EXPORTS.items()},
     }
     tmp = snapshot_path().with_suffix(".tmp")
     tmp.write_text(json.dumps(payload), encoding="utf-8")
@@ -143,6 +149,18 @@ def load_snapshot() -> bool:
         )
         people = [PersonEnrollment.model_validate(p) for p in raw["people"]]
         audit = [AuditEntry.model_validate(e) for e in raw["audit_log"]]
+        # Older snapshots predate the IN-384 export artifact: default empty.
+        # Exports are validated individually against the v1.0 contract; a
+        # corrupt entry is dropped (the artifact is derived and rebuildable)
+        # rather than rejecting the whole snapshot.
+        from app.services.meeting_export import MeetingExport
+
+        exports: dict[UUID, dict] = {}
+        for k, v in raw.get("meeting_exports", {}).items():
+            try:
+                exports[UUID(k)] = MeetingExport.model_validate(v).model_dump(mode="json")
+            except Exception:
+                continue
     except Exception:
         # Corrupt or schema-incompatible snapshot: keep the seeds.
         return False
@@ -164,6 +182,8 @@ def load_snapshot() -> bool:
         ACCESS.update(access)
     PEOPLE[:] = people
     AUDIT_LOG[:] = audit
+    MEETING_EXPORTS.clear()
+    MEETING_EXPORTS.update(exports)
     return True
 
 

@@ -20,9 +20,15 @@ export interface GraphMeetingMetadata {
   title?: string
   attendees: { name?: string; email?: string; response?: string }[]
   meetingId: string
+  // Legacy Slice 1 field carrying the event iCalUId; icalUid is the honest
+  // name used from Slice 2 on (IN-384).
   onlineMeetingId?: string
   joinWebUrl?: string
   organizerEmail?: string
+  organizerName?: string
+  scheduledStartUtc?: string
+  description?: string
+  icalUid?: string
 }
 
 export interface AutoStopRequest {

@@ -21,6 +21,7 @@ export interface RawGraphEvent {
   id?: string
   iCalUId?: string
   subject?: string
+  bodyPreview?: string
   start?: GraphDateTimeTimeZone
   end?: GraphDateTimeTimeZone
   isCancelled?: boolean
@@ -78,9 +79,16 @@ export interface GraphMeetingMetadata {
   title?: string
   attendees: GraphMeetingAttendeeMetadata[]
   meetingId: string
+  // Slice 1 legacy: carries the event iCalUId, not the true Teams online
+  // meeting id (see normalise.ts). Kept for compatibility; icalUid is the
+  // honest name used by the IN-384 export contract.
   onlineMeetingId?: string
   joinWebUrl?: string
   organizerEmail?: string
+  organizerName?: string
+  scheduledStartUtc?: string
+  description?: string
+  icalUid?: string
 }
 
 export type GraphEventInvalidReason = 'missing_id' | 'invalid_start' | 'invalid_end' | 'invalid_time_range'

@@ -358,3 +358,14 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
 
 - [ ] `IN-97` — Get org account for Pyannote
   - Development key exists, but production should use an organisation-owned PyannoteAI account and approved billing/secret management.
+
+## Slice 2 implementation evidence (IN-375)
+
+- [x] IN-384 — Define and implement structured JSON output schema
+  - Canonical versioned export contract (`schema_version` "1.0") in `backend/app/services/meeting_export.py`: pure builder (meeting + segments + summary + action items in, `MeetingExport` out) plus store adapter and refresh hook, so IN-386 can upload without touching the scattered stores.
+  - Exact 18-key contract: the 15 IN-384 fields plus `graph_event_id` / `graph_ical_uid` / `graph_online_meeting_id` (per storage brief §2). Slice 1's `online_meeting_id` actually carries the event iCalUId, so it backfills `graph_ical_uid`; `graph_online_meeting_id` stays null until the true Teams id is captured — never substituted.
+  - `meeting_type` internal|client from invitee domains (case-insensitive, deterministic internal fallback); invitees kept regardless of RSVP with case-insensitive email dedupe; transcript `start`/`end` in seconds; all timestamps ISO 8601 UTC (validator normalises offsets, rejects naive); `owner_confidence` is the categorical high|medium|low|unknown scale from the long-meeting plan; `key_points`/`follow_ups`/IN-390-owned action fields present-as-null/empty until IN-390.
+  - Graph metadata extended end-to-end (raw event → normalise → preload → renderer DTO → backend) with `organizerName`, `scheduledStartUtc`, `description` (bodyPreview), `icalUid`; all optional, old stored metadata still validates.
+  - Artifact stored at pipeline-ready in `store.MEETING_EXPORTS` (snapshot key `meeting_exports`, older snapshots load; entries contract-validated on load, corrupt ones dropped), invalidated by `kick_pipeline` on re-upload/retry, refreshed by segment edit / speaker naming / action-item update. Reprocessing now replaces prior pipeline action items instead of accumulating.
+  - Codex review rounds addressed: reprocessing invalidation + action-item replacement regression test, strict Literal contract enforcement, snapshot validation, SUMMARY_HTML test isolation, `owner_source` added, `owner_confidence` retyped categorical. `backend/.gitignore` now guards `.venv-win/` and `build/`.
+  - Verification: `backend\.venv-win\Scripts\python.exe -m unittest discover -s backend/tests -t backend` (105 tests), `npm run verify:graph`, `npm run typecheck`, `npm run build`, `git diff --check` all pass on native Windows.

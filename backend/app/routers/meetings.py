@@ -43,6 +43,7 @@ from app.services.email import (
     build_transcript_attachment,
     get_email_provider,
 )
+from app.services.meeting_export import refresh_meeting_export
 from app.services.sharepoint import get_sharepoint_provider, safe_transcript_filename
 from app.services.pipeline import (
     audio_path_for,
@@ -732,6 +733,7 @@ async def edit_segment(
         after=body.text,
         meeting_id=meeting_id,
     )
+    refresh_meeting_export(meeting_id)
     return _build_review(meeting)
 
 
@@ -777,6 +779,7 @@ async def name_speaker(
         after=body.name,
         meeting_id=meeting_id,
     )
+    refresh_meeting_export(meeting_id)
     return _build_review(updated)
 
 

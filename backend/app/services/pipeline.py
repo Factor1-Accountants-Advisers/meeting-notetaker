@@ -30,6 +30,7 @@ from app.schemas import (
 from app.paths import audio_dir
 from app.services import audio_checks
 from app.services.llm import get_llm_provider
+from app.services.meeting_export import refresh_meeting_export
 from app.services.speech import get_speech_provider
 from app.services.speaker_matching import get_speaker_matcher
 
@@ -315,6 +316,15 @@ async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
             store.SUMMARY_HTML[meeting_id] = summary_html
         else:
             store.SUMMARY_HTML.pop(meeting_id, None)
+        # A reprocessing run replaces the meeting's outputs wholesale — items
+        # from the prior run reference an obsolete transcript and must not
+        # accumulate alongside the new set.
+        for stale_id in [
+            item_id
+            for item_id, item in store.ACTION_ITEMS.items()
+            if item.meeting_id == meeting_id
+        ]:
+            del store.ACTION_ITEMS[stale_id]
         for item in items:
             store.ACTION_ITEMS[item.id] = item
 
@@ -340,6 +350,9 @@ async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
             PipelineStage.ready,
             "Transcript and notes are ready.",
         )
+        # Canonical IN-384 artifact for Blob upload/downstream consumers,
+        # built from the just-stored transcript/summary/action items.
+        refresh_meeting_export(meeting_id)
         logger.info("pipeline ready for %s at %s", meeting_id, _now())
     except Exception as exc:
         logger.exception("pipeline failed for %s", meeting_id)
@@ -358,6 +371,9 @@ async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
 
 def kick_pipeline(meeting_id: UUID, audio_path: Path) -> None:
     _increment_attempt(meeting_id)
+    # The canonical export describes outputs this run is about to replace;
+    # IN-386 must not be able to upload a stale artifact mid-reprocess.
+    store.MEETING_EXPORTS.pop(meeting_id, None)
     set_delivery_state(meeting_id, DeliveryStatus.not_started)
     set_pipeline_state(
         meeting_id,

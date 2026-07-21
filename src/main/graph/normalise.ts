@@ -57,7 +57,11 @@ export function normaliseGraphEvent(
       meetingId: id,
       onlineMeetingId: raw.iCalUId,
       joinWebUrl: raw.onlineMeeting?.joinUrl,
-      organizerEmail: raw.organizer?.emailAddress?.address
+      organizerEmail: raw.organizer?.emailAddress?.address,
+      organizerName: raw.organizer?.emailAddress?.name,
+      scheduledStartUtc: start.utc,
+      description: raw.bodyPreview,
+      icalUid: raw.iCalUId
     },
     invalidReasons
   }

@@ -51,9 +51,15 @@ export interface GraphMeetingMetadata {
   title?: string
   attendees: { name?: string; email?: string; response?: string }[]
   meetingId: string
+  // Legacy Slice 1 field carrying the event iCalUId; icalUid is the honest
+  // name used from Slice 2 on (IN-384).
   onlineMeetingId?: string
   joinWebUrl?: string
   organizerEmail?: string
+  organizerName?: string
+  scheduledStartUtc?: string
+  description?: string
+  icalUid?: string
 }
 
 export interface GraphMeetingMetadataDto {
@@ -63,6 +69,10 @@ export interface GraphMeetingMetadataDto {
   online_meeting_id?: string | null
   join_web_url?: string | null
   organizer_email?: string | null
+  organizer_name?: string | null
+  scheduled_start_utc?: string | null
+  description?: string | null
+  ical_uid?: string | null
 }
 
 export interface ActionItemDto {
@@ -298,7 +308,11 @@ function toGraphMetadataDto(metadata: GraphMeetingMetadata): GraphMeetingMetadat
     meeting_id: metadata.meetingId,
     online_meeting_id: metadata.onlineMeetingId ?? null,
     join_web_url: metadata.joinWebUrl ?? null,
-    organizer_email: metadata.organizerEmail ?? null
+    organizer_email: metadata.organizerEmail ?? null,
+    organizer_name: metadata.organizerName ?? null,
+    scheduled_start_utc: metadata.scheduledStartUtc ?? null,
+    description: metadata.description ?? null,
+    ical_uid: metadata.icalUid ?? null
   }
 }
 

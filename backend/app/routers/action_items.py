@@ -5,6 +5,7 @@ from fastapi import APIRouter, Header, HTTPException, status
 from app import store
 from app.access import can_see, require
 from app.schemas import AccessRole, ActionItem, ActionItemStatus, ActionItemUpdate
+from app.services.meeting_export import refresh_meeting_export
 
 Actor = Header("Unknown user", alias="X-MN-User")
 
@@ -65,5 +66,6 @@ async def update_action_item(
                 after=plain(new_value),
                 meeting_id=item.meeting_id,
             )
+    refresh_meeting_export(item.meeting_id)
     meeting = store.MEETINGS.get(item.meeting_id)
     return updated.model_copy(update={"meeting_title": meeting.title if meeting else ""})
