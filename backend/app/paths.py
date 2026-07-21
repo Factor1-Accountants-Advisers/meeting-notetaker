@@ -38,3 +38,8 @@ def voiceprint_path() -> Path:
 def local_sharepoint_dir() -> Path:
     """Directory for the local SharePoint stand-in (unconfigured drive id)."""
     return data_root() / "sharepoint"
+
+
+def central_voiceprint_path() -> Path:
+    """Stub central store (real one is Azure Blob behind the IN-471 API)."""
+    return data_root() / "central-voiceprints.json"

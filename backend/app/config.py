@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     # Raw-audio retention (requirements §6.2 engineering default).
     audio_retention_days: int = 30
 
+    # IN-471 Storage API (Slice 2). Empty = stub mode AND central enrolment
+    # not yet required (config-flagged cutover). MN_STORAGE_API_SCOPE is also
+    # read by the Electron main process for MSAL token acquisition — both
+    # processes must see these MN_* variables.
+    storage_api_url: str = ""
+    storage_api_scope: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:
