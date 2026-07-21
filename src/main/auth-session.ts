@@ -48,7 +48,7 @@ export async function getGraphAccessToken(scopes?: readonly string[]): Promise<s
 }
 
 /** Delegated Storage API token for enrolment routes (IN-379/IN-471).
- *  Scope comes from MN_STORAGE_API_SCOPE; absent scope = stub mode, no token. */
+ *  Callers pass the MN_STORAGE_API_SCOPE value; absent scope = stub mode, no token. */
 export async function getStorageApiAccessToken(scope: string): Promise<string | null> {
   const status = getMsalConfigStatus()
   if (!status.configured) {

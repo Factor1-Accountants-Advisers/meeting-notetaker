@@ -71,13 +71,15 @@ export function registerApiProxyIpc(): void {
         (req.path.includes('/enroll') && req.method === 'POST') ||
         req.path.includes('/people/me/enrolment-status')
       if (storageRoute) {
-        const email = getCurrentUserEmail()
-        if (email) headers['X-MN-User-Email'] = email
         const scope = process.env.MN_STORAGE_API_SCOPE
         if (scope) {
+          // Acquire first: silent MSAL acquisition also refreshes the cached
+          // account email, so a cold start still sends X-MN-User-Email.
           const token = await getStorageApiAccessToken(scope)
           if (token) headers['X-MN-Storage-Token'] = token
         }
+        const email = getCurrentUserEmail()
+        if (email) headers['X-MN-User-Email'] = email
       }
 
       const res = await fetch(`${API_BASE}${req.path}`, {
