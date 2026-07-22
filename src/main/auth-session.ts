@@ -3,6 +3,7 @@ import {
   acquireGraphTokenSilent,
   clearCurrentMsalAccount,
   getCurrentMsalAccountEmail,
+  getCurrentMsalAccountName,
   getMsalConfigStatus,
   getPersistedCache,
   signInInteractively
@@ -20,6 +21,9 @@ export function onMsalSignedIn(callback: () => void | Promise<void>): void {
 }
 
 export function getCurrentUser(): string {
+  // Silent cached sign-in never runs the interactive path that sets
+  // currentUser, so fall back to the MSAL account's display name.
+  if (currentUser === 'Unknown user') return getCurrentMsalAccountName() ?? currentUser
   return currentUser
 }
 
@@ -38,6 +42,7 @@ export async function getGraphAccessToken(scopes?: readonly string[]): Promise<s
 
   const result = await acquireGraphTokenSilent(scopes)
   if (result.accountEmail) currentUserEmail = result.accountEmail
+  if (result.accountName && currentUser === 'Unknown user') currentUser = result.accountName
   if (!result.accessToken) {
     logger().info('[auth] Graph token unavailable', { reason: result.reason })
     return null
@@ -60,6 +65,7 @@ export async function getStorageApiAccessToken(scope: string): Promise<string | 
 
   const result = await acquireGraphTokenSilent([scope])
   if (result.accountEmail) currentUserEmail = result.accountEmail
+  if (result.accountName && currentUser === 'Unknown user') currentUser = result.accountName
   if (!result.accessToken) {
     logger().info('[auth] Storage API token unavailable', { reason: result.reason })
     return null
@@ -77,7 +83,7 @@ export function getSignedInState(): { signedIn: boolean; email?: string; name?: 
   return {
     signedIn: hasCache,
     email: currentUserEmail ?? getCurrentMsalAccountEmail(),
-    name: hasCache ? currentUser : undefined
+    name: hasCache ? (getCurrentMsalAccountName() ?? currentUser) : undefined
   }
 }
 

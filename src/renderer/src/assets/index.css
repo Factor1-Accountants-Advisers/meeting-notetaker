@@ -71,6 +71,22 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Thin flat scrollbars to match the surface design. */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-secondary);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-tertiary);
+}
+
 /* Flat surfaces: focus rings only, no shadows. */
 :focus-visible {
   outline: none;

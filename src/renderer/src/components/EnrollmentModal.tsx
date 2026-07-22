@@ -48,6 +48,7 @@ export function EnrollmentModal({ person, onClose, onEnrolled, required = false 
   const [seconds, setSeconds] = useState(0)
   const [consented, setConsented] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [enrolledResult, setEnrolledResult] = useState<StaffMember | null>(null)
   const recorderRef = useRef<ClipRecorder | null>(null)
 
   useEffect(() => {
@@ -163,8 +164,10 @@ export function EnrollmentModal({ person, onClose, onEnrolled, required = false 
     try {
       const updated = await enrollPerson(person.id, b64, mime, sources, consented)
       if (updated) {
+        // Hold on the completion page until the user dismisses it — an auto
+        // timer here made the confirmation unreadable.
+        setEnrolledResult(updated)
         setStep('complete')
-        window.setTimeout(() => onEnrolled(updated), 900)
         return
       }
     } catch (err) {
@@ -187,7 +190,7 @@ export function EnrollmentModal({ person, onClose, onEnrolled, required = false 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6">
-      <div className="w-full max-w-[400px] aspect-square overflow-hidden rounded-lg border-[0.5px] border-edge-secondary bg-bg-primary flex flex-col">
+      <div className="w-full max-w-[480px] aspect-square overflow-hidden rounded-lg border-[0.5px] border-edge-secondary bg-bg-primary flex flex-col">
         <div className="border-b-[0.5px] border-edge-tertiary px-5 py-4">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -253,7 +256,14 @@ export function EnrollmentModal({ person, onClose, onEnrolled, required = false 
           </button>
 
           {step === 'complete' ? (
-            <span className="text-[13px] text-content-success">Unlocking Notetaker…</span>
+            <button
+              type="button"
+              onClick={() => enrolledResult && onEnrolled(enrolledResult)}
+              className="flex items-center gap-1.5 rounded-md border-[0.5px] border-edge-info bg-bg-info px-3.5 py-2 text-[13px] text-content-info transition-opacity"
+            >
+              Get started
+              <ArrowRight size={14} strokeWidth={1.75} />
+            </button>
           ) : step.startsWith('sample-') ? (
             <div className="flex items-center gap-2">
               {currentClip && (
@@ -269,13 +279,6 @@ export function EnrollmentModal({ person, onClose, onEnrolled, required = false 
               )}
               {!currentClip ? (
                 <>
-                  <SampleAction
-                    state={state}
-                    seconds={seconds}
-                    index={sampleIndex}
-                    onStart={() => void startClip()}
-                    onStop={() => void stopClip()}
-                  />
                   {(state === 'idle' || state === 'denied') && (
                     <label className="flex cursor-pointer items-center gap-1.5 rounded-md border-[0.5px] border-edge-secondary px-3 py-2 text-[13px] text-content-primary transition-colors hover:bg-bg-secondary">
                       <Upload size={14} strokeWidth={1.75} />
@@ -292,6 +295,13 @@ export function EnrollmentModal({ person, onClose, onEnrolled, required = false 
                       />
                     </label>
                   )}
+                  <SampleAction
+                    state={state}
+                    seconds={seconds}
+                    index={sampleIndex}
+                    onStart={() => void startClip()}
+                    onStop={() => void stopClip()}
+                  />
                 </>
               ) : (
                 <button

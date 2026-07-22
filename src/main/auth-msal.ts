@@ -33,6 +33,7 @@ export interface MsalConfigStatus {
 export interface MsalTokenResult {
   accessToken: string | null
   accountEmail?: string
+  accountName?: string
   reason?: 'missing_config' | 'no_cached_account' | 'interaction_required' | 'error'
   errorMessage?: string
 }
@@ -207,6 +208,10 @@ export function getCurrentMsalAccountEmail(): string | undefined {
   return currentAccount?.username || currentAccount?.idTokenClaims?.preferred_username?.toString()
 }
 
+export function getCurrentMsalAccountName(): string | undefined {
+  return currentAccount?.name || currentAccount?.idTokenClaims?.name?.toString()
+}
+
 export function clearCurrentMsalAccount(): void {
   currentAccount = null
   clearPersistedCache()
@@ -244,7 +249,8 @@ function toTokenResult(result: AuthenticationResult | null): MsalTokenResult {
   if (!result?.accessToken) return { accessToken: null, reason: 'interaction_required' }
   return {
     accessToken: result.accessToken,
-    accountEmail: result.account?.username || result.account?.idTokenClaims?.preferred_username?.toString()
+    accountEmail: result.account?.username || result.account?.idTokenClaims?.preferred_username?.toString(),
+    accountName: result.account?.name || result.account?.idTokenClaims?.name?.toString()
   }
 }
 

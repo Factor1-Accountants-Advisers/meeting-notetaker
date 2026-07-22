@@ -22,6 +22,9 @@ function timeoutMsFor(req: ApiRequest): number {
   const path = loggablePath(req.path)
   if (req.method === 'POST' && path.endsWith('/audio')) return 120_000
   if (req.method === 'POST' && path.endsWith('/email')) return 90_000
+  // Enrolment runs three sequential pyannoteAI voiceprint jobs, each polled
+  // at pyannote_poll_interval_seconds (10s) — a 30s budget cannot cover it.
+  if (req.method === 'POST' && path.endsWith('/enroll')) return 180_000
   if (req.method === 'POST') return 30_000
   return 15_000
 }
