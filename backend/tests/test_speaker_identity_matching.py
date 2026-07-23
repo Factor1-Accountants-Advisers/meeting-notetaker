@@ -1,9 +1,12 @@
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from app.schemas import GraphMeetingAttendeeMetadata, GraphMeetingMetadata, Meeting, MeetingSource, TranscriptSegment
 from app.config import Settings
 from app.services.speaker_matching import (
     IdentityRange,
+    PyannoteAIVoiceprintMatcher,
     _apply_identity_ranges,
     _candidate_voiceprints_for_meeting,
     _controlled_expansion_ids_from_settings,
@@ -409,6 +412,34 @@ class SpeakerIdentityMatchingTests(unittest.TestCase):
         self.assertEqual(matched[0].speaker, "David Ahlhaus")
         self.assertFalse(matched[1].speaker_known)
         self.assertEqual(matched[1].speaker, "Speaker 1")
+
+
+class InjectedVoiceprintTests(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_central_result_does_not_load_local_repository(self):
+        meeting = Meeting(
+            id=uuid4(),
+            title="Central result",
+            source=MeetingSource.online,
+            owner_id="owner@example.com",
+            created_at=datetime.now(timezone.utc),
+        )
+        segments = [segment("SPEAKER_00", 0, 5000)]
+
+        with patch(
+            "app.services.speaker_matching.get_voiceprint_repository"
+        ) as repository:
+            matched, _participants, unknown_count = (
+                await PyannoteAIVoiceprintMatcher().match_speakers(
+                    segments,
+                    meeting,
+                    Path("meeting.wav"),
+                    enrolled_voiceprints=[],
+                )
+            )
+
+        repository.assert_not_called()
+        self.assertEqual(unknown_count, 1)
+        self.assertEqual(matched[0].unknown_reason, "no_enrolled_voiceprints")
 
 
 if __name__ == "__main__":

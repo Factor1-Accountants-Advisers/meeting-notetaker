@@ -36,6 +36,7 @@ class SpeakerMatcher(Protocol):
         segments: list[TranscriptSegment],
         meeting: Meeting,
         audio_path: Path,
+        enrolled_voiceprints: list[Voiceprint] | None = None,
     ) -> tuple[list[TranscriptSegment], list[MeetingParticipant], int]:
         ...
 
@@ -48,6 +49,7 @@ class UnknownOnlySpeakerMatcher:
         segments: list[TranscriptSegment],
         meeting: Meeting,
         audio_path: Path,
+        enrolled_voiceprints: list[Voiceprint] | None = None,
     ) -> tuple[list[TranscriptSegment], list[MeetingParticipant], int]:
         return _unknown_only(segments, reason="no_voiceprint_identification")
 
@@ -71,9 +73,13 @@ class PyannoteAIVoiceprintMatcher:
         segments: list[TranscriptSegment],
         meeting: Meeting,
         audio_path: Path,
+        enrolled_voiceprints: list[Voiceprint] | None = None,
     ) -> tuple[list[TranscriptSegment], list[MeetingParticipant], int]:
-        repo = get_voiceprint_repository()
-        enrolled = repo.get_all()
+        enrolled = (
+            enrolled_voiceprints
+            if enrolled_voiceprints is not None
+            else get_voiceprint_repository().get_all()
+        )
         if not enrolled:
             return _unknown_only(segments, reason="no_enrolled_voiceprints")
 
