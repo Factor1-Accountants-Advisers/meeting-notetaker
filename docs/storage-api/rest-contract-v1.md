@@ -1,10 +1,9 @@
 # Notetaker Storage API — REST Contract v1.0
 
 Status: **Published** (IN-471). Foundation (auth, health, error contract) is
-implemented and live in this repo. The voiceprint resource described in
-section 5 is **ratified here as the contract voiceprint endpoints must
-implement, but is not yet built** — it ships in IN-377 against this exact
-contract. Sections marked "reserved" describe future work only.
+implemented and live. The voiceprint GET/PUT resource described in section 5
+was implemented under IN-377 and verified live on 23 July 2026. Sections
+marked "reserved" describe future work only.
 
 Mirrored copy: `meeting-notetaker-2/docs/storage-api/rest-contract-v1.md`
 (kept in sync by hand; this repo is the source of truth).
@@ -102,9 +101,8 @@ Notes:
   permitted. Path/dependency parameter names must match exactly; this is
   enforced by FastAPI request validation (a misnamed route parameter fails
   closed as `validation_error`, not open).
-- **`require_admin`:** reserved for admin-only operations (none ship in
-  IN-471; IN-377's disable/flag-style operations are expected to use this).
-  Requires the `StorageApi.Admin` role regardless of the path.
+- **`require_admin`:** reserved for future admin-only operations. Requires the
+  `StorageApi.Admin` role regardless of the path.
 
 ## 4. Health
 
@@ -120,9 +118,8 @@ tenant id, etc.) in the body.
 
 ## 5. Voiceprint resource — ratified for IN-377
 
-**Status: contract only.** These two endpoints are specified here so IN-377
-can implement against a stable, published shape. Neither is implemented in
-IN-471. Both apply `require_self_or_admin` on `{person_oid}`.
+**Status: implemented and live.** These two endpoints shipped under IN-377 on
+23 July 2026. Both apply `require_self_or_admin` on `{person_oid}`.
 
 ### `GET /api/v1/voiceprints/{person_oid}`
 
