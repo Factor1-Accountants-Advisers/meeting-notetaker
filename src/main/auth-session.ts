@@ -10,6 +10,7 @@ import {
   signInInteractively
 } from './auth-msal'
 import { logger } from './logger'
+import { storageTokenAcquireOptions } from './storage-api-identity'
 
 // Signed-in display name; sent as the audit actor on every backend call.
 // Replaced by the Entra ID token subject once real auth lands.
@@ -70,7 +71,11 @@ export async function getStorageApiAccessToken(scope: string): Promise<string | 
     return null
   }
 
-  const result = await acquireGraphTokenSilent([scope])
+  // Force a refresh for this custom resource. Entra token version is controlled
+  // by the API registration, so a cached token can retain an obsolete issuer
+  // after a provisioning correction even though the requested scope matches.
+  const options = storageTokenAcquireOptions(scope)
+  const result = await acquireGraphTokenSilent(options.scopes, process.env, options.forceRefresh)
   if (result.accountEmail) currentUserEmail = result.accountEmail
   if (result.accountOid) currentUserOid = result.accountOid
   if (result.accountName && currentUser === 'Unknown user') currentUser = result.accountName

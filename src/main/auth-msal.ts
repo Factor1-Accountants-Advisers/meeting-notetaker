@@ -129,7 +129,8 @@ export function getMsalConfigStatus(env: NodeJS.ProcessEnv = process.env): MsalC
 
 export async function acquireGraphTokenSilent(
   scopes: readonly string[] = GRAPH_DETECTION_SCOPES,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  forceRefresh = false
 ): Promise<MsalTokenResult> {
   const status = getMsalConfigStatus(env)
   if (!status.configured || !status.config) return { accessToken: null, reason: 'missing_config' }
@@ -140,7 +141,7 @@ export async function acquireGraphTokenSilent(
     const account = currentAccount ?? (await getFirstCachedAccount(app))
     if (!account) return { accessToken: null, reason: 'no_cached_account' }
 
-    const result = await app.acquireTokenSilent({ account, scopes: [...scopes] })
+    const result = await app.acquireTokenSilent({ account, scopes: [...scopes], forceRefresh })
     currentAccount = result?.account ?? account
     await saveTokenCache(app)
     return toTokenResult(result)

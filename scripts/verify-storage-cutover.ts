@@ -4,6 +4,7 @@ import { applyPublicEnvDefaults, PUBLIC_APP_CONFIG } from '../src/main/env'
 import {
   getAccountOid,
   isStorageApiEnabled,
+  storageTokenAcquireOptions,
   storageIdentityHeaders
 } from '../src/main/storage-api-identity'
 
@@ -52,6 +53,10 @@ assert.deepEqual(
 )
 assert.deepEqual(storageIdentityHeaders({ email: 'joseph@factor1.com.au' }), {
   'X-MN-User-Email': 'joseph@factor1.com.au'
+})
+assert.deepEqual(storageTokenAcquireOptions('api://example/access_as_user'), {
+  scopes: ['api://example/access_as_user'],
+  forceRefresh: true
 })
 
 assert.equal(

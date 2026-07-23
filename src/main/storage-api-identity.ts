@@ -9,6 +9,11 @@ export interface StorageIdentity {
   accessToken?: string
 }
 
+export interface StorageTokenAcquireOptions {
+  scopes: string[]
+  forceRefresh: true
+}
+
 function clean(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
   const trimmed = value.trim()
@@ -25,6 +30,10 @@ export function isStorageApiEnabled(
   env: NodeJS.ProcessEnv | Record<string, string | undefined>
 ): boolean {
   return clean(env.MN_STORAGE_API_ENABLED)?.toLowerCase() !== 'false'
+}
+
+export function storageTokenAcquireOptions(scope: string): StorageTokenAcquireOptions {
+  return { scopes: [scope], forceRefresh: true }
 }
 
 export function storageIdentityHeaders(identity: StorageIdentity): Record<string, string> {
