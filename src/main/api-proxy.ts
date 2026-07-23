@@ -1,33 +1,25 @@
 import { ipcMain } from 'electron'
-import { getCurrentUser, getCurrentUserEmail, getGraphAccessToken, getStorageApiAccessToken } from './auth-session'
+import {
+  getCurrentUser,
+  getCurrentUserEmail,
+  getCurrentUserOid,
+  getGraphAccessToken,
+  getStorageApiAccessToken
+} from './auth-session'
 import { GRAPH_EMAIL_SCOPES, GRAPH_SHAREPOINT_SCOPES } from './auth-msal'
+import {
+  isStorageRoute,
+  loggablePath,
+  timeoutMsFor,
+  type ApiRequest
+} from './api-request-policy'
 import { logger } from './logger'
+import { isStorageApiEnabled, storageIdentityHeaders } from './storage-api-identity'
 
 // All backend traffic goes through the main process: the renderer never holds
 // credentials or talks to the network directly (thin-client rule). Entra ID
 // tokens will be attached here once auth lands.
 const API_BASE = process.env.MN_API_BASE ?? 'http://127.0.0.1:8787'
-
-interface ApiRequest {
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE'
-  path: string
-  body?: unknown
-}
-
-function loggablePath(path: string): string {
-  return path.split('?')[0]
-}
-
-function timeoutMsFor(req: ApiRequest): number {
-  const path = loggablePath(req.path)
-  if (req.method === 'POST' && path.endsWith('/audio')) return 120_000
-  if (req.method === 'POST' && path.endsWith('/email')) return 90_000
-  // Enrolment runs three sequential pyannoteAI voiceprint jobs, each polled
-  // at pyannote_poll_interval_seconds (10s) — a 30s budget cannot cover it.
-  if (req.method === 'POST' && path.endsWith('/enroll')) return 180_000
-  if (req.method === 'POST') return 30_000
-  return 15_000
-}
 
 function parseBody(text: string): unknown {
   if (!text) return null
@@ -60,29 +52,22 @@ export function registerApiProxyIpc(): void {
         if (token) headers['X-MN-Graph-Token'] = token
       }
 
-      // IN-379: identity + delegated Storage API token for enrolment routes.
-      // Email identifies "me" server-side (X-MN-User carries the display name).
-      // Boundary check: `req.path.includes('/enroll')` must not also match the
-      // POST /people/{id}/flag-reenrollment route. It doesn't — "flag-reenrollment"
-      // has no literal "/enroll" substring (the only slashes in that path precede
-      // "people", the id, and "flag-reenrollment"; "enroll" there is embedded in
-      // "re-enroll-ment" preceded by "re", not "/"). Confirmed against the full
-      // /people route list (backend/app/routers/people.py): "", "/me",
-      // "/me/enrolment-status", "/{id}/enroll", "/{id}/flag-reenrollment" — only
-      // the enroll route itself contains "/enroll".
-      const storageRoute =
-        (req.path.includes('/enroll') && req.method === 'POST') ||
-        req.path.includes('/people/me/enrolment-status')
-      if (storageRoute) {
+      // IN-476: email remains the local person key; Entra oid is the central
+      // Storage API key. The renderer sees neither the token nor these headers.
+      if (isStorageRoute(req)) {
         const scope = process.env.MN_STORAGE_API_SCOPE
-        if (scope) {
-          // Acquire first: silent MSAL acquisition also refreshes the cached
-          // account email, so a cold start still sends X-MN-User-Email.
-          const token = await getStorageApiAccessToken(scope)
-          if (token) headers['X-MN-Storage-Token'] = token
-        }
-        const email = getCurrentUserEmail()
-        if (email) headers['X-MN-User-Email'] = email
+        const token =
+          scope && isStorageApiEnabled(process.env)
+            ? await getStorageApiAccessToken(scope)
+            : null
+        Object.assign(
+          headers,
+          storageIdentityHeaders({
+            email: getCurrentUserEmail(),
+            oid: getCurrentUserOid(),
+            accessToken: token ?? undefined
+          })
+        )
       }
 
       const res = await fetch(`${API_BASE}${req.path}`, {

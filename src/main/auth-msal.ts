@@ -12,6 +12,7 @@ import {
   type AuthenticationResult,
   type Configuration
 } from '@azure/msal-node'
+import { getAccountOid } from './storage-api-identity'
 
 export const GRAPH_DETECTION_SCOPES = ['User.Read', 'Calendars.Read'] as const
 export const GRAPH_EMAIL_SCOPES = ['User.Read', 'Mail.Send'] as const
@@ -34,6 +35,7 @@ export interface MsalTokenResult {
   accessToken: string | null
   accountEmail?: string
   accountName?: string
+  accountOid?: string
   reason?: 'missing_config' | 'no_cached_account' | 'interaction_required' | 'error'
   errorMessage?: string
 }
@@ -42,6 +44,7 @@ export interface MsalSignInResult {
   ok: boolean
   name?: string
   email?: string
+  oid?: string
   error?: string
 }
 
@@ -195,7 +198,7 @@ export async function signInInteractively(): Promise<MsalSignInResult> {
       email ||
       'Unknown user'
 
-    return { ok: true, name, email }
+    return { ok: true, name, email, oid: getAccountOid(currentAccount) }
   } catch (err) {
     return {
       ok: false,
@@ -210,6 +213,10 @@ export function getCurrentMsalAccountEmail(): string | undefined {
 
 export function getCurrentMsalAccountName(): string | undefined {
   return currentAccount?.name || currentAccount?.idTokenClaims?.name?.toString()
+}
+
+export function getCurrentMsalAccountOid(): string | undefined {
+  return getAccountOid(currentAccount)
 }
 
 export function clearCurrentMsalAccount(): void {
@@ -250,7 +257,8 @@ function toTokenResult(result: AuthenticationResult | null): MsalTokenResult {
   return {
     accessToken: result.accessToken,
     accountEmail: result.account?.username || result.account?.idTokenClaims?.preferred_username?.toString(),
-    accountName: result.account?.name || result.account?.idTokenClaims?.name?.toString()
+    accountName: result.account?.name || result.account?.idTokenClaims?.name?.toString(),
+    accountOid: getAccountOid(result.account)
   }
 }
 

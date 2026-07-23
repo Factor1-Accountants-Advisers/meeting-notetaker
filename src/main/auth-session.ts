@@ -4,6 +4,7 @@ import {
   clearCurrentMsalAccount,
   getCurrentMsalAccountEmail,
   getCurrentMsalAccountName,
+  getCurrentMsalAccountOid,
   getMsalConfigStatus,
   getPersistedCache,
   signInInteractively
@@ -14,6 +15,7 @@ import { logger } from './logger'
 // Replaced by the Entra ID token subject once real auth lands.
 let currentUser = 'Unknown user'
 let currentUserEmail: string | undefined
+let currentUserOid: string | undefined
 let afterMsalSignIn: (() => void | Promise<void>) | undefined
 
 export function onMsalSignedIn(callback: () => void | Promise<void>): void {
@@ -31,6 +33,10 @@ export function getCurrentUserEmail(): string | undefined {
   return currentUserEmail ?? getCurrentMsalAccountEmail()
 }
 
+export function getCurrentUserOid(): string | undefined {
+  return currentUserOid ?? getCurrentMsalAccountOid()
+}
+
 export async function getGraphAccessToken(scopes?: readonly string[]): Promise<string | null> {
   const status = getMsalConfigStatus()
   if (!status.configured) {
@@ -42,6 +48,7 @@ export async function getGraphAccessToken(scopes?: readonly string[]): Promise<s
 
   const result = await acquireGraphTokenSilent(scopes)
   if (result.accountEmail) currentUserEmail = result.accountEmail
+  if (result.accountOid) currentUserOid = result.accountOid
   if (result.accountName && currentUser === 'Unknown user') currentUser = result.accountName
   if (!result.accessToken) {
     logger().info('[auth] Graph token unavailable', { reason: result.reason })
@@ -65,6 +72,7 @@ export async function getStorageApiAccessToken(scope: string): Promise<string | 
 
   const result = await acquireGraphTokenSilent([scope])
   if (result.accountEmail) currentUserEmail = result.accountEmail
+  if (result.accountOid) currentUserOid = result.accountOid
   if (result.accountName && currentUser === 'Unknown user') currentUser = result.accountName
   if (!result.accessToken) {
     logger().info('[auth] Storage API token unavailable', { reason: result.reason })
@@ -91,6 +99,7 @@ export function registerAuthSessionIpc(): void {
   ipcMain.on('auth:set-user', (_event, name: string) => {
     currentUser = name || 'Unknown user'
     currentUserEmail = undefined
+    currentUserOid = undefined
     if (currentUser === 'Unknown user') clearCurrentMsalAccount()
     logger().info('[auth] actor updated', { actorKnown: currentUser !== 'Unknown user' })
   })
@@ -112,6 +121,7 @@ export function registerAuthSessionIpc(): void {
 
     currentUser = result.name ?? 'Unknown user'
     currentUserEmail = result.email
+    currentUserOid = result.oid
     if (currentUser !== 'Unknown user') {
       logger().info('[auth] actor updated via MSAL sign-in', {
         nameKnown: Boolean(result.name),
@@ -132,6 +142,7 @@ export function registerAuthSessionIpc(): void {
     logger().info('[auth] sign-out requested')
     currentUser = 'Unknown user'
     currentUserEmail = undefined
+    currentUserOid = undefined
     clearCurrentMsalAccount()
     return { ok: true }
   })
