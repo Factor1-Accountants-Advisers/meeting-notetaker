@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { isStorageRoute, timeoutMsFor } from '../src/main/api-request-policy'
+import { applyPublicEnvDefaults, PUBLIC_APP_CONFIG } from '../src/main/env'
 import {
   getAccountOid,
   isStorageApiEnabled,
@@ -52,5 +53,29 @@ assert.deepEqual(
 assert.deepEqual(storageIdentityHeaders({ email: 'joseph@factor1.com.au' }), {
   'X-MN-User-Email': 'joseph@factor1.com.au'
 })
+
+assert.equal(
+  PUBLIC_APP_CONFIG.MN_STORAGE_API_URL,
+  'https://func-innov-nt-storage-prod-eqg7dzf8gfbqawea.australiaeast-01.azurewebsites.net'
+)
+assert.equal(
+  PUBLIC_APP_CONFIG.MN_STORAGE_API_SCOPE,
+  'api://13298042-714a-4d57-a1c5-481c22753087/access_as_user'
+)
+
+const emptyEnv: NodeJS.ProcessEnv = {}
+applyPublicEnvDefaults(emptyEnv)
+assert.equal(emptyEnv.MN_STORAGE_API_URL, PUBLIC_APP_CONFIG.MN_STORAGE_API_URL)
+assert.equal(emptyEnv.MN_STORAGE_API_SCOPE, PUBLIC_APP_CONFIG.MN_STORAGE_API_SCOPE)
+
+const overrideEnv: NodeJS.ProcessEnv = {
+  MN_STORAGE_API_URL: 'https://override.example',
+  MN_STORAGE_API_SCOPE: 'api://override/scope',
+  MN_STORAGE_API_ENABLED: 'false'
+}
+applyPublicEnvDefaults(overrideEnv)
+assert.equal(overrideEnv.MN_STORAGE_API_URL, 'https://override.example')
+assert.equal(overrideEnv.MN_STORAGE_API_SCOPE, 'api://override/scope')
+assert.equal(overrideEnv.MN_STORAGE_API_ENABLED, 'false')
 
 console.log('Storage API cutover verification passed')
