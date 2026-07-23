@@ -2,6 +2,7 @@ node_modules
 dist
 out
 recordings
+.worktrees/
 *.log
 *.tsbuildinfo
 .DS_Store
