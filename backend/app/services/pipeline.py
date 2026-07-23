@@ -31,6 +31,7 @@ from app.paths import audio_dir
 from app.services import audio_checks
 from app.services.llm import get_llm_provider
 from app.services.meeting_export import refresh_meeting_export
+from app.services.meeting_voiceprints import resolve_meeting_voiceprints
 from app.services.speech import get_speech_provider
 from app.services.speaker_matching import get_speaker_matcher
 
@@ -255,7 +256,13 @@ async def pipeline_watchdog_loop() -> None:
         await asyncio.sleep(WATCHDOG_INTERVAL_S)
 
 
-async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
+async def run_pipeline(
+    meeting_id: UUID,
+    audio_path: Path,
+    *,
+    storage_token: str | None = None,
+    recorder_email: str | None = None,
+) -> None:
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is None:
         return
@@ -283,9 +290,18 @@ async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
             PipelineStage.identifying_speakers,
             "Identifying enrolled speakers...",
         )
+        voiceprint_resolution = await asyncio.to_thread(
+            resolve_meeting_voiceprints,
+            meeting,
+            recorder_email=recorder_email,
+            access_token=storage_token,
+        )
         matcher = get_speaker_matcher()
         segments, participants, unknown_count = await matcher.match_speakers(
-            raw_segments, meeting, audio_path
+            raw_segments,
+            meeting,
+            audio_path,
+            enrolled_voiceprints=voiceprint_resolution.records,
         )
 
         set_pipeline_state(
@@ -369,7 +385,13 @@ async def run_pipeline(meeting_id: UUID, audio_path: Path) -> None:
         store.save_snapshot()
 
 
-def kick_pipeline(meeting_id: UUID, audio_path: Path) -> None:
+def kick_pipeline(
+    meeting_id: UUID,
+    audio_path: Path,
+    *,
+    storage_token: str | None = None,
+    recorder_email: str | None = None,
+) -> None:
     _increment_attempt(meeting_id)
     # The canonical export describes outputs this run is about to replace;
     # IN-386 must not be able to upload a stale artifact mid-reprocess.
@@ -381,6 +403,13 @@ def kick_pipeline(meeting_id: UUID, audio_path: Path) -> None:
         PipelineStage.queued,
         "Recording uploaded. Waiting to start processing...",
     )
-    task = asyncio.create_task(run_pipeline(meeting_id, audio_path))
+    task = asyncio.create_task(
+        run_pipeline(
+            meeting_id,
+            audio_path,
+            storage_token=storage_token,
+            recorder_email=recorder_email,
+        )
+    )
     _PIPELINE_TASKS.add(task)
     task.add_done_callback(_PIPELINE_TASKS.discard)

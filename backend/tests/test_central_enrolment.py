@@ -325,6 +325,7 @@ class CentralRegistrationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNotNone(enrolment)
         self.assertEqual(enrolment.person_id, "oid-123")
+        self.assertEqual(enrolment.email, "joseph@factor1.com.au")
         self.assertEqual(person.employee_id, "joseph@factor1.com.au")
         self.assertLess(
             abs(datetime.now(timezone.utc) - enrolment.consent_recorded_at),

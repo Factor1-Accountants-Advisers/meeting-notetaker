@@ -63,6 +63,15 @@ def _normalise_actor_id(actor: str) -> str:
     return cleaned or "unknown user"
 
 
+def _clean_optional_header(value: object, *, casefold: bool = False) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    return cleaned.casefold() if casefold else cleaned
+
+
 @router.get("", response_model=list[Meeting])
 async def list_meetings(
     status_filter: MeetingStatus | None = None, actor: str = Actor
@@ -357,7 +366,11 @@ async def _prepare_uploaded_audio(
 
 @router.post("/{meeting_id}/audio", response_model=Meeting)
 async def upload_audio(
-    meeting_id: UUID, body: UploadAudioRequest, actor: str = Actor
+    meeting_id: UUID,
+    body: UploadAudioRequest,
+    actor: str = Actor,
+    storage_token: str | None = Header(None, alias="X-MN-Storage-Token"),
+    user_email: str | None = Header(None, alias="X-MN-User-Email"),
 ) -> Meeting:
     """Store meeting audio (Blob stand-in) and queue the processing pipeline."""
     meeting = store.MEETINGS.get(meeting_id)
@@ -397,12 +410,22 @@ async def upload_audio(
         PipelineStage.audio_uploaded,
         "Recording uploaded. Preparing processing...",
     )
-    kick_pipeline(meeting_id, path)
+    kick_pipeline(
+        meeting_id,
+        path,
+        storage_token=_clean_optional_header(storage_token),
+        recorder_email=_clean_optional_header(user_email, casefold=True),
+    )
     return store.MEETINGS[meeting_id]
 
 
 @router.post("/{meeting_id}/retry", response_model=Meeting)
-async def retry_pipeline(meeting_id: UUID, actor: str = Actor) -> Meeting:
+async def retry_pipeline(
+    meeting_id: UUID,
+    actor: str = Actor,
+    storage_token: str | None = Header(None, alias="X-MN-Storage-Token"),
+    user_email: str | None = Header(None, alias="X-MN-User-Email"),
+) -> Meeting:
     """Re-queue a failed meeting (requirements §4.4: flag and retry)."""
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is None:
@@ -413,7 +436,12 @@ async def retry_pipeline(meeting_id: UUID, actor: str = Actor) -> Meeting:
     path = audio_path_for(meeting_id, "audio/webm")
     if not path.exists():
         raise HTTPException(status.HTTP_409_CONFLICT, "No stored audio for this meeting")
-    kick_pipeline(meeting_id, path)
+    kick_pipeline(
+        meeting_id,
+        path,
+        storage_token=_clean_optional_header(storage_token),
+        recorder_email=_clean_optional_header(user_email, casefold=True),
+    )
     return store.MEETINGS[meeting_id]
 
 
