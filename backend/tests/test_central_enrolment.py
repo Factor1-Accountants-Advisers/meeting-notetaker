@@ -41,6 +41,19 @@ class StorageApiSeamTests(unittest.TestCase):
     def test_central_enrolment_not_required_when_url_empty(self):
         self.assertFalse(storage_api.central_enrolment_required())
 
+    def test_central_enrolment_disabled_even_when_url_is_configured(self):
+        with patch("app.services.storage_api.get_settings") as settings:
+            settings.return_value.storage_api_url = "https://api.example"
+            settings.return_value.storage_api_enabled = False
+            self.assertFalse(storage_api.central_enrolment_required())
+
+    def test_factory_returns_stub_when_central_enrolment_is_disabled(self):
+        with patch("app.services.storage_api.get_settings") as settings:
+            settings.return_value.storage_api_url = "https://api.example"
+            settings.return_value.storage_api_enabled = False
+            storage_api.reset_stub_for_tests()
+            self.assertIsInstance(storage_api.get_storage_api_client(), StubStorageApiClient)
+
     def test_factory_returns_stub_when_url_empty(self):
         client = storage_api.get_storage_api_client()
         self.assertIsInstance(client, StubStorageApiClient)
@@ -353,6 +366,68 @@ class EnrolmentStatusTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_required_status_uses_email_locally_and_oid_centrally(self):
+        self._seed_person(enrolled=True)
+
+        class _CapturingStorageApiClient:
+            def __init__(self):
+                self.calls = []
+
+            def get_enrolment(self, person_id, access_token=None):
+                self.calls.append((person_id, access_token))
+                return _enrolment(person_id)
+
+        client = _CapturingStorageApiClient()
+        with patch("app.routers.people.central_enrolment_required", return_value=True), \
+                patch("app.routers.people.get_storage_api_client", return_value=client):
+            result = await enrolment_status(
+                user_email="joseph@factor1.com.au",
+                user_oid="oid-123",
+                storage_token="token-123",
+            )
+
+        self.assertTrue(result.enrolled_locally)
+        self.assertTrue(result.centrally_enrolled)
+        self.assertEqual(client.calls, [("oid-123", "token-123")])
+
+    async def test_required_status_without_oid_does_not_call_central_api(self):
+        self._seed_person(enrolled=True)
+
+        class _UnexpectedStorageApiClient:
+            def get_enrolment(self, person_id, access_token=None):
+                raise AssertionError("central API must not be called without an OID")
+
+        client = _UnexpectedStorageApiClient()
+        with patch("app.routers.people.central_enrolment_required", return_value=True), \
+                patch("app.routers.people.get_storage_api_client", return_value=client):
+            result = await enrolment_status(
+                user_email="joseph@factor1.com.au",
+                user_oid=None,
+                storage_token="token-123",
+            )
+
+        self.assertTrue(result.enrolled_locally)
+        self.assertFalse(result.centrally_enrolled)
+
+    async def test_required_status_without_token_does_not_call_central_api(self):
+        self._seed_person(enrolled=True)
+
+        class _UnexpectedStorageApiClient:
+            def get_enrolment(self, person_id, access_token=None):
+                raise AssertionError("central API must not be called without a token")
+
+        client = _UnexpectedStorageApiClient()
+        with patch("app.routers.people.central_enrolment_required", return_value=True), \
+                patch("app.routers.people.get_storage_api_client", return_value=client):
+            result = await enrolment_status(
+                user_email="joseph@factor1.com.au",
+                user_oid="oid-123",
+                storage_token=None,
+            )
+
+        self.assertTrue(result.enrolled_locally)
+        self.assertFalse(result.centrally_enrolled)
+
     async def test_not_required_and_locally_enrolled(self):
         self._seed_person(enrolled=True)
         with patch("app.routers.people.central_enrolment_required", return_value=False):
@@ -393,17 +468,23 @@ class EnrolmentStatusTests(unittest.IsolatedAsyncioTestCase):
     async def test_required_locally_enrolled_no_central_record(self):
         self._seed_person(enrolled=True)
         with patch("app.routers.people.central_enrolment_required", return_value=True):
-            result = await enrolment_status(user_email="joseph@factor1.com.au", storage_token=None)
+            result = await enrolment_status(
+                user_email="joseph@factor1.com.au",
+                user_oid="oid-123",
+                storage_token="token-123",
+            )
         self.assertTrue(result.enrolled_locally)
         self.assertFalse(result.centrally_enrolled)
         self.assertTrue(result.central_required)
 
     async def test_required_with_central_record_is_case_insensitive(self):
         self._seed_person(enrolled=True)
-        get_storage_api_client().register_voiceprint(_enrolment(), access_token=None)
+        get_storage_api_client().register_voiceprint(_enrolment("oid-123"), access_token=None)
         with patch("app.routers.people.central_enrolment_required", return_value=True):
             result = await enrolment_status(
-                user_email="Joseph@Factor1.com.au", storage_token=None
+                user_email="Joseph@Factor1.com.au",
+                user_oid="oid-123",
+                storage_token="token-123",
             )
         self.assertTrue(result.enrolled_locally)
         self.assertTrue(result.centrally_enrolled)
@@ -434,10 +515,14 @@ class EnrolmentStatusTests(unittest.IsolatedAsyncioTestCase):
         record (e.g. offboarded staff) must not satisfy central_required
         (IN-379 review)."""
         self._seed_person(enrolled=True)
-        disabled = _enrolment().model_copy(update={"status": "disabled"})
+        disabled = _enrolment("oid-123").model_copy(update={"status": "disabled"})
         get_storage_api_client().register_voiceprint(disabled, access_token=None)
         with patch("app.routers.people.central_enrolment_required", return_value=True):
-            result = await enrolment_status(user_email="joseph@factor1.com.au", storage_token=None)
+            result = await enrolment_status(
+                user_email="joseph@factor1.com.au",
+                user_oid="oid-123",
+                storage_token="token-123",
+            )
         self.assertTrue(result.enrolled_locally)
         self.assertFalse(result.centrally_enrolled)
         self.assertTrue(result.central_required)
@@ -446,9 +531,13 @@ class EnrolmentStatusTests(unittest.IsolatedAsyncioTestCase):
         """Headline cutover scenario: enrolled centrally on another machine,
         no local voiceprint on this one — the gate must still open."""
         self._seed_person(enrolled=False)
-        get_storage_api_client().register_voiceprint(_enrolment(), access_token=None)
+        get_storage_api_client().register_voiceprint(_enrolment("oid-123"), access_token=None)
         with patch("app.routers.people.central_enrolment_required", return_value=True):
-            result = await enrolment_status(user_email="joseph@factor1.com.au", storage_token=None)
+            result = await enrolment_status(
+                user_email="joseph@factor1.com.au",
+                user_oid="oid-123",
+                storage_token="token-123",
+            )
         self.assertFalse(result.enrolled_locally)
         self.assertTrue(result.centrally_enrolled)
         self.assertTrue(result.central_required)
@@ -464,7 +553,11 @@ class EnrolmentStatusTests(unittest.IsolatedAsyncioTestCase):
 
         with patch("app.routers.people.central_enrolment_required", return_value=True), \
                 patch("app.routers.people.get_storage_api_client", return_value=_BoomStorageApiClient()):
-            result = await enrolment_status(user_email="joseph@factor1.com.au", storage_token=None)
+            result = await enrolment_status(
+                user_email="joseph@factor1.com.au",
+                user_oid="oid-123",
+                storage_token="token-123",
+            )
         self.assertTrue(result.enrolled_locally)
         self.assertFalse(result.centrally_enrolled)
         self.assertTrue(result.central_required)

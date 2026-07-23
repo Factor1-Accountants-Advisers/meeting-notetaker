@@ -2,6 +2,7 @@ import asyncio
 import base64
 import binascii
 from datetime import datetime, timezone
+from typing import Annotated
 
 from fastapi import APIRouter, Header, HTTPException, status
 
@@ -20,6 +21,9 @@ from app.services.voiceprints import Voiceprint, get_voiceprint_repository
 router = APIRouter(prefix="/people", tags=["people"])
 
 Actor = Header("Unknown user", alias="X-MN-User")
+UserEmail = Annotated[str | None, Header(alias="X-MN-User-Email")]
+UserOid = Annotated[str | None, Header(alias="X-MN-User-Oid")]
+StorageToken = Annotated[str | None, Header(alias="X-MN-Storage-Token")]
 
 
 def _sync_people_with_voiceprint_registry() -> None:
@@ -114,8 +118,9 @@ async def ensure_current_staff(body: CurrentUserRequest, actor: str = Actor) -> 
 
 @router.get("/me/enrolment-status", response_model=EnrolmentStatus)
 async def enrolment_status(
-    user_email: str | None = Header(None, alias="X-MN-User-Email"),
-    storage_token: str | None = Header(None, alias="X-MN-Storage-Token"),
+    user_email: UserEmail = None,
+    user_oid: UserOid = None,
+    storage_token: StorageToken = None,
 ) -> EnrolmentStatus:
     """Gate source of truth (IN-379). Identity comes from the authenticated
     main process, never the renderer; a missing header fails closed."""
@@ -131,9 +136,11 @@ async def enrolment_status(
     # offboarding scope.
     enrolled_locally = bool(person and person.enrolled and not person.reenrollment_required)
     centrally = False
-    if required:
+    oid = (user_oid or "").strip()
+    token = (storage_token or "").strip()
+    if required and oid and token:
         try:
-            record = get_storage_api_client().get_enrolment(email, access_token=storage_token)
+            record = get_storage_api_client().get_enrolment(oid, access_token=token)
             centrally = record is not None and record.status == "active"
         except StorageApiError:
             centrally = False  # unreachable store fails closed; wizard offers retry

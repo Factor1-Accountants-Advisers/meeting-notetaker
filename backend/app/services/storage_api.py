@@ -1,11 +1,12 @@
 """IN-471 Storage API client seam (IN-379 first consumer).
 
 RestStorageApiClient talks to the authenticated Azure Functions Storage API
-when MN_STORAGE_API_URL is configured; endpoint paths are provisional until
-the IN-471 REST contract is published. StubStorageApiClient activates when
-the URL is empty — file-backed so dev exercises the full flow. Central-store
-audit events are written server-side by the Function (brief §5, IN-381): the
-stub deliberately writes none. Stub data never migrates to the real store.
+when MN_STORAGE_API_URL is configured and the cutover is enabled.
+StubStorageApiClient activates when the URL is empty or the operational
+rollback switch is off — file-backed so dev exercises the full flow.
+Central-store audit events are written server-side by the Function (brief §5,
+IN-381): the stub deliberately writes none. Stub data never migrates to the
+real store.
 
 Never log tokens or voiceprint values.
 """
@@ -29,7 +30,7 @@ class StorageApiError(RuntimeError):
 
 
 class CentralEnrolment(BaseModel):
-    person_id: str  # email today; Entra object id once IN-471 validates tokens
+    person_id: str  # Entra object id (oid); email remains the local registry key
     display_name: str
     voiceprints: list[str]
     sample_sources: list[Literal["recorded", "uploaded"]]
@@ -46,7 +47,8 @@ class StorageApiClient(Protocol):
 
 
 def central_enrolment_required() -> bool:
-    return bool(get_settings().storage_api_url)
+    settings = get_settings()
+    return settings.storage_api_enabled and bool(settings.storage_api_url)
 
 
 class StubStorageApiClient:
@@ -147,6 +149,6 @@ def reset_stub_for_tests() -> None:
 
 def get_storage_api_client() -> StorageApiClient:
     settings = get_settings()
-    if settings.storage_api_url:
+    if settings.storage_api_enabled and settings.storage_api_url:
         return RestStorageApiClient(settings.storage_api_url)
     return _STUB

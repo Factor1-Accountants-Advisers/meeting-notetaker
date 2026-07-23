@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     # processes must see these MN_* variables.
     storage_api_url: str = ""
     storage_api_scope: str = ""
+    storage_api_enabled: bool = True
 
 
 @lru_cache
