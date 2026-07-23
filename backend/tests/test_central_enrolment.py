@@ -4,6 +4,7 @@ import json
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
+from uuid import UUID
 
 import pydantic
 from fastapi import HTTPException
@@ -16,6 +17,7 @@ from app.services import storage_api
 from app.services import voiceprints as voiceprints_service
 from app.services.storage_api import (
     CentralEnrolment,
+    MeetingVoiceprintCandidate,
     RestStorageApiClient,
     StorageApiError,
     StubStorageApiClient,
@@ -23,9 +25,13 @@ from app.services.storage_api import (
 )
 
 
-def _enrolment(person_id="joseph@factor1.com.au") -> CentralEnrolment:
+def _enrolment(
+    person_id="joseph@factor1.com.au",
+    email="joseph@factor1.com.au",
+) -> CentralEnrolment:
     return CentralEnrolment(
         person_id=person_id,
+        email=email,
         display_name="Joseph Guerrero",
         voiceprints=["vp1", "vp2", "vp3"],
         sample_sources=["recorded", "recorded", "uploaded"],
@@ -83,6 +89,38 @@ class StorageApiSeamTests(unittest.TestCase):
         with self.assertRaises(StorageApiError):
             client.register_voiceprint(enrolment, None)
 
+    def test_stub_meeting_lookup_returns_only_active_exact_email_matches(self):
+        client = storage_api.get_storage_api_client()
+        client.register_voiceprint(_enrolment("oid-active", "Invitee@Example.com"), None)
+        client.register_voiceprint(
+            _enrolment("oid-disabled", "disabled@example.com").model_copy(
+                update={"status": "disabled"}
+            ),
+            None,
+        )
+
+        result = client.get_meeting_voiceprints(
+            UUID("9ab402de-a57f-45a6-8cde-4f89902f5d0b"),
+            [
+                MeetingVoiceprintCandidate(
+                    email=" invitee@example.com ", source="invitee"
+                ),
+                MeetingVoiceprintCandidate(
+                    email="disabled@example.com", source="organizer"
+                ),
+                MeetingVoiceprintCandidate(
+                    email="missing@example.com", source="recorder"
+                ),
+            ],
+            access_token=None,
+        )
+
+        self.assertEqual([record.person_id for record in result.records], ["oid-active"])
+        self.assertEqual(
+            result.missing,
+            ["disabled@example.com", "missing@example.com"],
+        )
+
 
 class _FakeHttpResponse:
     """Minimal stand-in for the context manager `urlopen` returns."""
@@ -127,6 +165,72 @@ class RestStorageApiClientMalformedRecordTests(unittest.TestCase):
         )
         with self.assertRaises(StorageApiError):
             client.register_voiceprint(_enrolment(), access_token="tok")
+
+    def test_meeting_lookup_posts_bounded_candidates_and_validates_response(self):
+        seen = {}
+        meeting_id = UUID("9ab402de-a57f-45a6-8cde-4f89902f5d0b")
+        record = _enrolment("oid-123", "invitee@example.com")
+
+        def opener(req, timeout=30):
+            seen["method"] = req.get_method()
+            seen["url"] = req.full_url
+            seen["authorization"] = req.headers["Authorization"]
+            seen["payload"] = json.loads(req.data.decode("utf-8"))
+            return _FakeHttpResponse(
+                json.dumps(
+                    {
+                        "meeting_id": str(meeting_id),
+                        "records": [record.model_dump(mode="json")],
+                        "missing": ["missing@example.com"],
+                    }
+                ).encode("utf-8")
+            )
+
+        client = RestStorageApiClient("https://storage.example", opener=opener)
+        result = client.get_meeting_voiceprints(
+            meeting_id,
+            [
+                MeetingVoiceprintCandidate(
+                    email="invitee@example.com", source="invitee"
+                ),
+                MeetingVoiceprintCandidate(
+                    email="missing@example.com", source="controlled_expansion"
+                ),
+            ],
+            access_token="tok",
+        )
+
+        self.assertEqual(seen["method"], "POST")
+        self.assertEqual(
+            seen["url"],
+            "https://storage.example/api/v1/voiceprints/meeting-candidates",
+        )
+        self.assertEqual(seen["authorization"], "Bearer tok")
+        self.assertEqual(seen["payload"]["meeting_id"], str(meeting_id))
+        self.assertEqual(result.records[0].person_id, "oid-123")
+        self.assertEqual(result.missing, ["missing@example.com"])
+
+    def test_meeting_lookup_wraps_malformed_response(self):
+        client = RestStorageApiClient(
+            "http://x",
+            opener=self._fake_opener_returning(
+                {
+                    "meeting_id": "not-a-uuid",
+                    "records": [],
+                    "missing": [],
+                }
+            ),
+        )
+        with self.assertRaises(StorageApiError):
+            client.get_meeting_voiceprints(
+                UUID("9ab402de-a57f-45a6-8cde-4f89902f5d0b"),
+                [
+                    MeetingVoiceprintCandidate(
+                        email="invitee@example.com", source="invitee"
+                    )
+                ],
+                access_token="tok",
+            )
 
 
 class ConsentEnforcementTests(unittest.IsolatedAsyncioTestCase):
