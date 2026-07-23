@@ -152,7 +152,9 @@ async def enroll(
     employee_id: str,
     body: EnrollRequest,
     actor: str = Actor,
-    storage_token: str | None = Header(None, alias="X-MN-Storage-Token"),
+    user_email: UserEmail = None,
+    user_oid: UserOid = None,
+    storage_token: StorageToken = None,
 ) -> PersonEnrollment:
     # Only /people/me lowercases at creation today; normalize here too so the
     # central person_id and local registry key stay consistently lowercase
@@ -175,6 +177,24 @@ async def enroll(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"Exactly 3 clips required (received {len(body.clips_b64)})",
         )
+
+    central_required = central_enrolment_required()
+    person_oid = ""
+    central_token = ""
+    if central_required:
+        signed_in_email = (user_email or "").strip().lower()
+        person_oid = (user_oid or "").strip()
+        central_token = (storage_token or "").strip()
+        if not signed_in_email or signed_in_email != employee_id:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "Signed-in user does not match enrolment target",
+            )
+        if not person_oid or not central_token:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                "Central voiceprint registration requires a signed-in Storage API identity",
+            )
 
     clips: list[bytes] = []
     for i, b64 in enumerate(body.clips_b64):
@@ -251,9 +271,9 @@ async def enroll(
 
     consent_recorded_at = datetime.now(timezone.utc)  # server-stamped
     centrally_registered = False
-    if central_enrolment_required():
+    if central_required:
         enrolment = CentralEnrolment(
-            person_id=employee_id,
+            person_id=person_oid,
             display_name=person.display_name,
             voiceprints=provider_voiceprints,
             sample_sources=body.sample_sources or ["recorded"] * 3,
@@ -261,7 +281,10 @@ async def enroll(
             consent_recorded_at=consent_recorded_at,
         )
         try:
-            get_storage_api_client().register_voiceprint(enrolment, access_token=storage_token)
+            get_storage_api_client().register_voiceprint(
+                enrolment,
+                access_token=central_token,
+            )
         except StorageApiError as exc:
             raise HTTPException(
                 status.HTTP_502_BAD_GATEWAY,

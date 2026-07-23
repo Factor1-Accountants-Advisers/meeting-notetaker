@@ -211,13 +211,17 @@ class CentralRegistrationTests(unittest.IsolatedAsyncioTestCase):
                 "joseph@factor1.com.au",
                 self._valid_body(),
                 actor="Joseph",
-                storage_token="tok",
+                user_email="joseph@factor1.com.au",
+                user_oid="oid-123",
+                storage_token="token-123",
             )
 
         enrolment = get_storage_api_client().get_enrolment(
-            "joseph@factor1.com.au", access_token=None
+            "oid-123", access_token=None
         )
         self.assertIsNotNone(enrolment)
+        self.assertEqual(enrolment.person_id, "oid-123")
+        self.assertEqual(person.employee_id, "joseph@factor1.com.au")
         self.assertLess(
             abs(datetime.now(timezone.utc) - enrolment.consent_recorded_at),
             timedelta(seconds=60),
@@ -241,7 +245,9 @@ class CentralRegistrationTests(unittest.IsolatedAsyncioTestCase):
                     "joseph@factor1.com.au",
                     self._valid_body(),
                     actor="Joseph",
-                    storage_token="tok",
+                    user_email="joseph@factor1.com.au",
+                    user_oid="oid-123",
+                    storage_token="token-123",
                 )
 
         self.assertEqual(ctx.exception.status_code, 502)
@@ -257,7 +263,7 @@ class CentralRegistrationTests(unittest.IsolatedAsyncioTestCase):
         # and the response itself must never claim success.
         self.assertTrue(person.enrolled)
         self.assertIsNone(
-            get_storage_api_client().get_enrolment("joseph@factor1.com.au", access_token=None)
+            get_storage_api_client().get_enrolment("oid-123", access_token=None)
         )
 
     async def test_enroll_without_central_requirement_skips_registration(self):
@@ -295,15 +301,65 @@ class CentralRegistrationTests(unittest.IsolatedAsyncioTestCase):
                 "Joseph@Factor1.com.au",
                 self._valid_body(),
                 actor="Joseph",
-                storage_token="tok",
+                user_email="Joseph@Factor1.com.au",
+                user_oid="oid-123",
+                storage_token="token-123",
             )
 
         self.assertEqual(person.employee_id, "joseph@factor1.com.au")
         enrolment = get_storage_api_client().get_enrolment(
-            "joseph@factor1.com.au", access_token=None
+            "oid-123", access_token=None
         )
         self.assertIsNotNone(enrolment)
-        self.assertEqual(enrolment.person_id, "joseph@factor1.com.au")
+        self.assertEqual(enrolment.person_id, "oid-123")
+
+    async def test_missing_oid_fails_before_provider_work(self):
+        with patch("app.routers.people.PyannoteAIClient") as mock_client_cls, \
+                patch("app.routers.people.central_enrolment_required", return_value=True):
+            with self.assertRaises(HTTPException) as ctx:
+                await enroll(
+                    "joseph@factor1.com.au",
+                    self._valid_body(),
+                    actor="Joseph",
+                    user_email="joseph@factor1.com.au",
+                    user_oid=None,
+                    storage_token="token-123",
+                )
+
+        self.assertEqual(ctx.exception.status_code, 502)
+        mock_client_cls.assert_not_called()
+
+    async def test_missing_storage_token_fails_before_provider_work(self):
+        with patch("app.routers.people.PyannoteAIClient") as mock_client_cls, \
+                patch("app.routers.people.central_enrolment_required", return_value=True):
+            with self.assertRaises(HTTPException) as ctx:
+                await enroll(
+                    "joseph@factor1.com.au",
+                    self._valid_body(),
+                    actor="Joseph",
+                    user_email="joseph@factor1.com.au",
+                    user_oid="oid-123",
+                    storage_token=None,
+                )
+
+        self.assertEqual(ctx.exception.status_code, 502)
+        mock_client_cls.assert_not_called()
+
+    async def test_signed_in_email_mismatch_fails_before_provider_work(self):
+        with patch("app.routers.people.PyannoteAIClient") as mock_client_cls, \
+                patch("app.routers.people.central_enrolment_required", return_value=True):
+            with self.assertRaises(HTTPException) as ctx:
+                await enroll(
+                    "joseph@factor1.com.au",
+                    self._valid_body(),
+                    actor="Joseph",
+                    user_email="someone-else@factor1.com.au",
+                    user_oid="oid-123",
+                    storage_token="token-123",
+                )
+
+        self.assertEqual(ctx.exception.status_code, 403)
+        mock_client_cls.assert_not_called()
 
 
 class FlagReenrollmentNormalizationTests(unittest.IsolatedAsyncioTestCase):
