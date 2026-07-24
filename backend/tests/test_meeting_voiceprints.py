@@ -8,6 +8,7 @@ from app.config import get_settings
 from app.schemas import (
     GraphMeetingAttendeeMetadata,
     GraphMeetingMetadata,
+    ManualMeetingAttendee,
     Meeting,
     MeetingSource,
 )
@@ -116,6 +117,44 @@ class MeetingCandidateTests(unittest.TestCase):
         self.assertIn(
             ("owner@example.com", "recorder"),
             [(candidate.email, candidate.source) for candidate in candidates],
+        )
+
+    def test_manual_attendees_precede_recorder_and_expansion(self):
+        meeting = Meeting(
+            id=MEETING_ID,
+            title="Ad-hoc planning",
+            source=MeetingSource.online,
+            owner_id="owner@example.com",
+            created_at=datetime.now(timezone.utc),
+            manual_attendees=[
+                ManualMeetingAttendee(
+                    name="David Ahlhaus",
+                    email="David@Example.com",
+                ),
+                ManualMeetingAttendee(
+                    name="Benjamin Bryant",
+                    email="benjamin@example.com",
+                ),
+            ],
+        )
+
+        candidates = build_meeting_candidates(
+            meeting,
+            recorder_email="Recorder@Example.com",
+            expansion_emails=[
+                "david@example.com",
+                "expansion@example.com",
+            ],
+        )
+
+        self.assertEqual(
+            [(candidate.email, candidate.source) for candidate in candidates],
+            [
+                ("david@example.com", "invitee"),
+                ("benjamin@example.com", "invitee"),
+                ("recorder@example.com", "recorder"),
+                ("expansion@example.com", "controlled_expansion"),
+            ],
         )
 
 

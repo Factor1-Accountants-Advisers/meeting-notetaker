@@ -268,6 +268,11 @@ def _candidate_voiceprints_for_meeting(
     if meeting.graph_metadata:
         for attendee in meeting.graph_metadata.attendees:
             add(attendee.email)
+
+    for attendee in meeting.manual_attendees:
+        add(attendee.email)
+
+    if meeting.graph_metadata:
         add(meeting.graph_metadata.organizer_email)
 
     add(meeting.owner_id)
