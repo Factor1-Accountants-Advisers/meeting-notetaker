@@ -229,11 +229,12 @@ disable, delete, or enumerate voiceprints beyond the submitted candidates.
 
 - **Auth:** a delegated token carrying the exact `access_as_user` scope, or
   an app-role token carrying `StorageApi.Admin`.
-- **Feature-branch security gate:** `meeting_id`, candidate emails, and
-  sources are caller assertions because the Storage API does not yet hold an
-  authoritative meeting roster. This operation must not be deployed until
-  the object-authorization risk is explicitly accepted or server-verifiable
-  meeting membership is added.
+- **Trust model:** `meeting_id`, candidate emails, and sources are supplied by
+  the authenticated employee client. This matches manual/ad-hoc flows, where
+  participant lists are user-entered. Joseph accepted this bounded
+  employee-trust model on 24 Jul 2026. The operation remains exact-request-only,
+  read-only, and capped at 50 candidates per call. Stronger server-verifiable
+  meeting membership is out of scope unless separately required.
 - Request body: one meeting UUID and between 1 and 50 candidate entries.
   Each candidate has an email and a source:
   `invitee`, `organizer`, `recorder`, or `controlled_expansion`.
