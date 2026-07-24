@@ -19,7 +19,9 @@ from app.services.meeting_voiceprints import (
 from app.services.storage_api import (
     CentralEnrolment,
     MeetingVoiceprintResponse,
-    StorageApiError,
+    StorageApiContractError,
+    StorageApiRejected,
+    StorageApiUnavailable,
 )
 from app.services.voiceprints import Voiceprint
 
@@ -130,7 +132,12 @@ class MeetingResolutionTests(unittest.TestCase):
         response = MeetingVoiceprintResponse(
             meeting_id=MEETING_ID,
             records=[_central("invitee@example.com")],
-            missing=["organizer@example.com"],
+            missing=[
+                {
+                    "email": "organizer@example.com",
+                    "source": "organizer",
+                }
+            ],
         )
         client = _CapturingClient(response=response)
 
@@ -148,13 +155,19 @@ class MeetingResolutionTests(unittest.TestCase):
         self.assertEqual(client.calls[0][2], "token")
         self.assertEqual([record.employee_id for record in result.records], ["invitee@example.com"])
         self.assertFalse(result.degraded)
+        self.assertEqual(result.request_count, 1)
 
     def test_central_success_with_no_records_does_not_revive_local_data(self):
         client = _CapturingClient(
             response=MeetingVoiceprintResponse(
                 meeting_id=MEETING_ID,
                 records=[],
-                missing=["invitee@example.com"],
+                missing=[
+                    {
+                        "email": "invitee@example.com",
+                        "source": "invitee",
+                    }
+                ],
             )
         )
 
@@ -171,7 +184,7 @@ class MeetingResolutionTests(unittest.TestCase):
         self.assertFalse(result.degraded)
 
     def test_central_failure_uses_only_relevant_local_fallback(self):
-        client = _CapturingClient(error=StorageApiError("temporary outage"))
+        client = _CapturingClient(error=StorageApiUnavailable("temporary outage"))
 
         result = resolve_meeting_voiceprints(
             _meeting(),
@@ -187,9 +200,48 @@ class MeetingResolutionTests(unittest.TestCase):
 
         self.assertEqual([record.employee_id for record in result.records], ["invitee@example.com"])
         self.assertTrue(result.degraded)
+        self.assertEqual(result.request_count, 1)
+
+    def test_fallback_is_limited_to_exact_capped_request_candidates(self):
+        meeting = _meeting().model_copy(
+            update={
+                "graph_metadata": GraphMeetingMetadata(
+                    meeting_id="large-graph-meeting",
+                    organizer_email="organizer@example.com",
+                    attendees=[
+                        GraphMeetingAttendeeMetadata(
+                            email=f"attendee{index:02d}@example.com"
+                        )
+                        for index in range(51)
+                    ],
+                )
+            }
+        )
+        client = _CapturingClient(error=StorageApiUnavailable("temporary outage"))
+
+        result = resolve_meeting_voiceprints(
+            meeting,
+            recorder_email="recorder@example.com",
+            access_token="token",
+            settings=self.settings,
+            client=client,
+            local_records=[
+                _local("attendee00@example.com"),
+                _local("attendee49@example.com"),
+                _local("attendee50@example.com"),
+                _local("organizer@example.com"),
+                _local("recorder@example.com"),
+            ],
+        )
+
+        self.assertEqual(len(client.calls[0][1]), 50)
+        self.assertEqual(
+            [record.employee_id for record in result.records],
+            ["attendee00@example.com", "attendee49@example.com"],
+        )
 
     def test_central_failure_without_relevant_local_data_is_retryable(self):
-        client = _CapturingClient(error=StorageApiError("temporary outage"))
+        client = _CapturingClient(error=StorageApiUnavailable("temporary outage"))
 
         with self.assertRaises(MeetingVoiceprintsUnavailable):
             resolve_meeting_voiceprints(
@@ -199,6 +251,34 @@ class MeetingResolutionTests(unittest.TestCase):
                 settings=self.settings,
                 client=client,
                 local_records=[_local("unrelated@example.com")],
+            )
+
+    def test_auth_rejection_never_activates_local_fallback(self):
+        client = _CapturingClient(error=StorageApiRejected("unauthorized"))
+
+        with self.assertRaises(StorageApiRejected):
+            resolve_meeting_voiceprints(
+                _meeting(),
+                recorder_email="recorder@example.com",
+                access_token="token",
+                settings=self.settings,
+                client=client,
+                local_records=[_local("invitee@example.com")],
+            )
+
+    def test_contract_failure_never_activates_local_fallback(self):
+        client = _CapturingClient(
+            error=StorageApiContractError("malformed response")
+        )
+
+        with self.assertRaises(StorageApiContractError):
+            resolve_meeting_voiceprints(
+                _meeting(),
+                recorder_email="recorder@example.com",
+                access_token="token",
+                settings=self.settings,
+                client=client,
+                local_records=[_local("invitee@example.com")],
             )
 
     def test_disabled_central_cutover_preserves_legacy_matcher_loading(self):
@@ -215,6 +295,7 @@ class MeetingResolutionTests(unittest.TestCase):
 
         self.assertIsNone(result.records)
         self.assertFalse(result.degraded)
+        self.assertEqual(result.request_count, 0)
 
 
 if __name__ == "__main__":

@@ -15,14 +15,13 @@ from typing import Iterable
 from app.config import Settings, get_settings
 from app.schemas import Meeting
 from app.services.speaker_matching import (
-    _candidate_voiceprints_for_meeting,
     _controlled_expansion_ids_from_settings,
 )
 from app.services.storage_api import (
     CentralEnrolment,
     MeetingVoiceprintCandidate,
     StorageApiClient,
-    StorageApiError,
+    StorageApiUnavailable,
     get_storage_api_client,
 )
 from app.services.voiceprints import Voiceprint, get_voiceprint_repository
@@ -118,7 +117,7 @@ def resolve_meeting_voiceprints(
         return MeetingVoiceprintResolution(
             records=None,
             degraded=False,
-            request_count=len(candidates),
+            request_count=0,
         )
 
     if not candidates:
@@ -149,34 +148,23 @@ def resolve_meeting_voiceprints(
         return MeetingVoiceprintResolution(
             records=records,
             degraded=False,
-            request_count=len(candidates),
+            request_count=1,
         )
-    except StorageApiError as exc:
+    except StorageApiUnavailable as exc:
         available_local = (
             local_records
             if local_records is not None
             else get_voiceprint_repository().get_all()
         )
-        fallback = _candidate_voiceprints_for_meeting(
-            available_local,
-            meeting,
-            controlled_expansion_employee_ids=expansion_emails,
-            max_controlled_expansion=resolved_settings.voiceprint_expansion_cap,
-        )
-        recorder = _normalized_email(recorder_email)
-        if recorder and all(
-            record.employee_id.strip().casefold() != recorder for record in fallback
-        ):
-            recorder_record = next(
-                (
-                    record
-                    for record in available_local
-                    if record.employee_id.strip().casefold() == recorder
-                ),
-                None,
-            )
-            if recorder_record is not None:
-                fallback.append(recorder_record)
+        local_by_email = {
+            record.employee_id.strip().casefold(): record
+            for record in available_local
+        }
+        fallback = [
+            local_by_email[candidate.email]
+            for candidate in candidates
+            if candidate.email in local_by_email
+        ]
         if not fallback:
             logger.warning(
                 "Meeting voiceprint lookup unavailable with no local fallback: requested=%d",
@@ -193,5 +181,5 @@ def resolve_meeting_voiceprints(
         return MeetingVoiceprintResolution(
             records=fallback,
             degraded=True,
-            request_count=len(candidates),
+            request_count=1,
         )

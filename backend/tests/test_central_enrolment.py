@@ -2,6 +2,7 @@
 
 import json
 import unittest
+import urllib.error
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from uuid import UUID
@@ -19,7 +20,10 @@ from app.services.storage_api import (
     CentralEnrolment,
     MeetingVoiceprintCandidate,
     RestStorageApiClient,
+    StorageApiContractError,
     StorageApiError,
+    StorageApiRejected,
+    StorageApiUnavailable,
     StubStorageApiClient,
     get_storage_api_client,
 )
@@ -117,8 +121,11 @@ class StorageApiSeamTests(unittest.TestCase):
 
         self.assertEqual([record.person_id for record in result.records], ["oid-active"])
         self.assertEqual(
-            result.missing,
-            ["disabled@example.com", "missing@example.com"],
+            [(item.email, item.source) for item in result.missing],
+            [
+                ("disabled@example.com", "organizer"),
+                ("missing@example.com", "recorder"),
+            ],
         )
 
 
@@ -181,7 +188,12 @@ class RestStorageApiClientMalformedRecordTests(unittest.TestCase):
                     {
                         "meeting_id": str(meeting_id),
                         "records": [record.model_dump(mode="json")],
-                        "missing": ["missing@example.com"],
+                        "missing": [
+                            {
+                                "email": "missing@example.com",
+                                "source": "controlled_expansion",
+                            }
+                        ],
                     }
                 ).encode("utf-8")
             )
@@ -208,7 +220,10 @@ class RestStorageApiClientMalformedRecordTests(unittest.TestCase):
         self.assertEqual(seen["authorization"], "Bearer tok")
         self.assertEqual(seen["payload"]["meeting_id"], str(meeting_id))
         self.assertEqual(result.records[0].person_id, "oid-123")
-        self.assertEqual(result.missing, ["missing@example.com"])
+        self.assertEqual(
+            [(item.email, item.source) for item in result.missing],
+            [("missing@example.com", "controlled_expansion")],
+        )
 
     def test_meeting_lookup_wraps_malformed_response(self):
         client = RestStorageApiClient(
@@ -221,7 +236,51 @@ class RestStorageApiClientMalformedRecordTests(unittest.TestCase):
                 }
             ),
         )
-        with self.assertRaises(StorageApiError):
+        with self.assertRaises(StorageApiContractError):
+            client.get_meeting_voiceprints(
+                UUID("9ab402de-a57f-45a6-8cde-4f89902f5d0b"),
+                [
+                    MeetingVoiceprintCandidate(
+                        email="invitee@example.com", source="invitee"
+                    )
+                ],
+                access_token="tok",
+            )
+
+    def test_meeting_lookup_classifies_503_as_transient_unavailable(self):
+        def opener(req, timeout=30):
+            raise urllib.error.HTTPError(
+                req.full_url,
+                503,
+                "Service Unavailable",
+                hdrs=None,
+                fp=None,
+            )
+
+        client = RestStorageApiClient("http://x", opener=opener)
+        with self.assertRaises(StorageApiUnavailable):
+            client.get_meeting_voiceprints(
+                UUID("9ab402de-a57f-45a6-8cde-4f89902f5d0b"),
+                [
+                    MeetingVoiceprintCandidate(
+                        email="invitee@example.com", source="invitee"
+                    )
+                ],
+                access_token="tok",
+            )
+
+    def test_meeting_lookup_classifies_401_as_rejected_not_unavailable(self):
+        def opener(req, timeout=30):
+            raise urllib.error.HTTPError(
+                req.full_url,
+                401,
+                "Unauthorized",
+                hdrs=None,
+                fp=None,
+            )
+
+        client = RestStorageApiClient("http://x", opener=opener)
+        with self.assertRaises(StorageApiRejected):
             client.get_meeting_voiceprints(
                 UUID("9ab402de-a57f-45a6-8cde-4f89902f5d0b"),
                 [

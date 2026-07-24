@@ -229,14 +229,19 @@ disable, delete, or enumerate voiceprints beyond the submitted candidates.
 
 - **Auth:** a delegated token carrying the exact `access_as_user` scope, or
   an app-role token carrying `StorageApi.Admin`.
+- **Feature-branch security gate:** `meeting_id`, candidate emails, and
+  sources are caller assertions because the Storage API does not yet hold an
+  authoritative meeting roster. This operation must not be deployed until
+  the object-authorization risk is explicitly accepted or server-verifiable
+  meeting membership is added.
 - Request body: one meeting UUID and between 1 and 50 candidate entries.
   Each candidate has an email and a source:
   `invitee`, `organizer`, `recorder`, or `controlled_expansion`.
 - Emails are trimmed and case-folded, then de-duplicated while preserving
   the first candidate's order and source.
 - **200** — `records` contains only active enrolments that exactly match a
-  candidate email; `missing` contains the normalized emails that did not
-  resolve.
+  candidate email; `missing` contains the normalized candidate objects that
+  did not resolve, preserving each first-seen source.
 - Disabled/deleted records, stale indexes, mismatched records, and missing
   records all collapse to `missing`; the response does not disclose why a
   candidate was absent.
@@ -275,7 +280,9 @@ Example response:
       "updated_at": "2026-07-23T04:31:07+00:00"
     }
   ],
-  "missing": ["recorder@example.com"]
+  "missing": [
+    {"email": "recorder@example.com", "source": "recorder"}
+  ]
 }
 ```
 
