@@ -35,6 +35,27 @@ assert.equal(
   false
 )
 assert.equal(
+  isStorageRoute({
+    method: 'POST',
+    path: '/api/v1/meetings/9ab402de-a57f-45a6-8cde-4f89902f5d0b/audio'
+  }),
+  true
+)
+assert.equal(
+  isStorageRoute({
+    method: 'POST',
+    path: '/api/v1/meetings/9ab402de-a57f-45a6-8cde-4f89902f5d0b/retry'
+  }),
+  true
+)
+assert.equal(
+  isStorageRoute({
+    method: 'GET',
+    path: '/api/v1/meetings/9ab402de-a57f-45a6-8cde-4f89902f5d0b'
+  }),
+  false
+)
+assert.equal(
   timeoutMsFor({ method: 'POST', path: '/api/v1/people/joseph%40factor1.com.au/enroll' }),
   180_000
 )

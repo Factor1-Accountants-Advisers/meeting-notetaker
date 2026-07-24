@@ -2,8 +2,9 @@
 
 Status: **Published** (IN-471). Foundation (auth, health, error contract) is
 implemented and live. The voiceprint GET/PUT resource described in section 5
-was implemented under IN-377 and verified live on 23 July 2026. Sections
-marked "reserved" describe future work only.
+was implemented under IN-377 and verified live on 23 July 2026. The IN-378
+meeting-candidate operation is implemented on its feature branch and remains
+pending deployment. Sections marked "reserved" describe future work only.
 
 Mirrored copy: `meeting-notetaker-2/docs/storage-api/rest-contract-v1.md`
 (kept in sync by hand; this repo is the source of truth).
@@ -185,6 +186,7 @@ Field-for-field, this is the same shape the IN-379 client already defines
 | Field | Type | Notes |
 |---|---|---|
 | `person_id` | string | **Entra object id (`oid`)** — amended from email, see above. |
+| `email` | string \| null | Normalized sign-in email used only for exact meeting-candidate resolution. Self PUTs stamp it from token `preferred_username`; old records may omit it. |
 | `display_name` | string | Human-readable name for the enrolled person. |
 | `voiceprints` | array of string | Opaque voiceprint model artifacts/references. Never logged or included in audit `details` (section 6). |
 | `sample_sources` | array of `"recorded" \| "uploaded"` | Provenance of the voice samples used to build `voiceprints`. |
@@ -204,6 +206,86 @@ voiceprints/{oid}.json
 
 in the `voiceprints` container (`NSA_VOICEPRINTS_CONTAINER`, default
 `voiceprints`).
+
+For bounded meeting-candidate lookup, each PUT also maintains a private,
+one-way email index:
+
+```
+by-email/{sha256(normalized_email)}.json
+```
+
+The index document contains only `{"person_id": "<oid>"}`. A lookup never
+trusts the index alone: it reads the referenced enrolment and requires an
+exact normalized-email match plus `status == "active"`. Missing, malformed,
+or stale index entries therefore fail closed. Existing records without an
+`email` remain valid for self GET/PUT but cannot be returned by meeting
+lookup until they are PUT/re-enrolled again or an approved backfill is run.
+
+### `POST /api/v1/voiceprints/meeting-candidates` — IN-378
+
+Resolve the active central voiceprints for a bounded set of meeting
+participants. This is a read-only operation: it cannot create, update,
+disable, delete, or enumerate voiceprints beyond the submitted candidates.
+
+- **Auth:** a delegated token carrying the exact `access_as_user` scope, or
+  an app-role token carrying `StorageApi.Admin`.
+- **Trust model:** `meeting_id`, candidate emails, and sources are supplied by
+  the authenticated employee client. This matches manual/ad-hoc flows, where
+  participant lists are user-entered. Joseph accepted this bounded
+  employee-trust model on 24 Jul 2026. The operation remains exact-request-only,
+  read-only, and capped at 50 candidates per call. Stronger server-verifiable
+  meeting membership is out of scope unless separately required.
+- Request body: one meeting UUID and between 1 and 50 candidate entries.
+  Each candidate has an email and a source:
+  `invitee`, `organizer`, `recorder`, or `controlled_expansion`.
+- Emails are trimmed and case-folded, then de-duplicated while preserving
+  the first candidate's order and source.
+- **200** — `records` contains only active enrolments that exactly match a
+  candidate email; `missing` contains the normalized candidate objects that
+  did not resolve, preserving each first-seen source.
+- Disabled/deleted records, stale indexes, mismatched records, and missing
+  records all collapse to `missing`; the response does not disclose why a
+  candidate was absent.
+- This read does not write the immutable voiceprint audit log. Meeting-time
+  retrieval audit is tracked separately by IN-381.
+- **401 / 403 / 422 / 503** — per the tables above.
+
+Example request:
+
+```json
+{
+  "meeting_id": "9ab402de-a57f-45a6-8cde-4f89902f5d0b",
+  "candidates": [
+    {"email": "invitee@example.com", "source": "invitee"},
+    {"email": "recorder@example.com", "source": "recorder"}
+  ]
+}
+```
+
+Example response:
+
+```json
+{
+  "meeting_id": "9ab402de-a57f-45a6-8cde-4f89902f5d0b",
+  "records": [
+    {
+      "person_id": "8f5203eb-2398-40ce-8567-646ba28e7d27",
+      "email": "invitee@example.com",
+      "display_name": "Invitee",
+      "voiceprints": ["opaque-voiceprint"],
+      "sample_sources": ["recorded"],
+      "status": "active",
+      "model_version": "pyannote-v1",
+      "consent_recorded_at": "2026-07-23T04:31:07+00:00",
+      "created_at": "2026-07-23T04:31:07+00:00",
+      "updated_at": "2026-07-23T04:31:07+00:00"
+    }
+  ],
+  "missing": [
+    {"email": "recorder@example.com", "source": "recorder"}
+  ]
+}
+```
 
 ## 6. Audit event schema
 

@@ -274,6 +274,7 @@ async def enroll(
     if central_required:
         enrolment = CentralEnrolment(
             person_id=person_oid,
+            email=employee_id,
             display_name=person.display_name,
             voiceprints=provider_voiceprints,
             sample_sources=body.sample_sources or ["recorded"] * 3,
