@@ -403,3 +403,35 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - Canonical structured output includes selected manual attendees in `full_invitee_list` while retaining the deterministic `internal` fallback for non-Graph meetings. Scheduled Graph meetings continue to use their authoritative Graph attendee/organiser metadata unchanged.
   - TDD/verification evidence: attendee persistence/validation, candidate ordering/deduplication, legacy fallback, structured output, and delivery isolation tests were added; the renderer verification covers filtering, enrollment eligibility, normalization, duplicate suppression, typed-email fallback, the 49-person cap, selected chips, and disabled state. Fresh full verification passed: `164` backend tests, `npm run verify:ad-hoc-attendees`, `npm run verify:storage-cutover`, `npm run verify:graph`, `npm run verify:recording-controls`, `npm run typecheck`, `npm run build`, and `git diff --check`.
   - Commits: `9a7faf8` (persist manual attendees), `3945aa2` (voiceprint candidate wiring), `71de41d` (structured output/delivery isolation), `6bd689b` (desktop picker and propagation). A native authenticated UI smoke remains the final manual check after integration; no Jira transition or production write was performed from this branch.
+
+- [ ] IN-381 — Voiceprint audit logging
+  - Implemented in the Storage API worktree
+    `codex/in-381-voiceprint-audit`. The existing IN-378
+    meeting-candidate retrieval is now the genuine `voiceprint_used` point:
+    one immutable event per returned active person OID, with only the meeting
+    UUID and server UTC date. Ordinary enrolment-status/self GETs remain
+    unaudited.
+  - Existing central PUTs now classify exact `voiceprint_created`,
+    `voiceprint_disabled`, `voiceprint_deleted`, and `voiceprint_updated`
+    actions. The responsible actor comes only from validated Entra claims.
+    IN-381 adds no disable/delete management workflow or offboarding
+    automation; those remain IN-380/IN-382.
+  - The authenticated admin view is the additive, read-only
+    `GET /api/v1/voiceprints/audit-events` contract: exact
+    `StorageApi.Admin`, 31-day maximum UTC range, 1–100 page size, opaque
+    filter-bound cursor, 10,000-offset cap, and optional exact
+    action/person/meeting filters. A desktop admin screen remains IN-380, so
+    no renderer/preload/Electron/FastAPI desktop runtime code changed.
+  - Audit JSONL remains server-written and append-only. Recursive write/read
+    guards reject token, authorization, SAS, email, embedding, raw-audio, and
+    voiceprint detail keys; malformed or privacy-invalid historical lines fail
+    closed. The field-by-field review found no raw voiceprints, tokens,
+    employee email lists, embeddings, or audio in any event or response.
+  - Verification: Storage API full suite `177 passed` plus Ruff; desktop full
+    backend suite `164 tests`; `npm run verify:storage-cutover`,
+    `npm run verify:graph`, `npm run typecheck`, `npm run build`, contract
+    byte comparison, and `git diff --check` in both repositories passed.
+  - The source contract and this repository's mirror are byte-identical, and
+    the stale §3 `require_admin` sentence is corrected. No Jira change,
+    merge, push, deployment, production write, or production smoke was
+    performed.

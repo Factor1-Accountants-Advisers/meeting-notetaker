@@ -3,8 +3,10 @@
 Status: **Published** (IN-471). Foundation (auth, health, error contract) is
 implemented and live. The voiceprint GET/PUT resource described in section 5
 was implemented under IN-377 and verified live on 23 July 2026. The IN-378
-meeting-candidate operation is implemented on its feature branch and remains
-pending deployment. Sections marked "reserved" describe future work only.
+meeting-candidate operation was deployed and verified live on 24 July 2026.
+The additive IN-381 event taxonomy and administrator audit-read operation are
+implemented on their feature branch and are not deployed. Sections marked
+"reserved" describe future work only.
 
 Mirrored copy: `meeting-notetaker-2/docs/storage-api/rest-contract-v1.md`
 (kept in sync by hand; this repo is the source of truth).
@@ -102,8 +104,9 @@ Notes:
   permitted. Path/dependency parameter names must match exactly; this is
   enforced by FastAPI request validation (a misnamed route parameter fails
   closed as `validation_error`, not open).
-- **`require_admin`:** reserved for future admin-only operations. Requires the
-  `StorageApi.Admin` role regardless of the path.
+- **`require_admin`:** protects
+  `GET /api/v1/voiceprints/audit-events` and any future admin-only operation.
+  It requires the exact `StorageApi.Admin` role regardless of the path.
 
 ## 4. Health
 
@@ -246,8 +249,11 @@ disable, delete, or enumerate voiceprints beyond the submitted candidates.
 - Disabled/deleted records, stale indexes, mismatched records, and missing
   records all collapse to `missing`; the response does not disclose why a
   candidate was absent.
-- This read does not write the immutable voiceprint audit log. Meeting-time
-  retrieval audit is tracked separately by IN-381.
+- Every active record returned emits one immutable `voiceprint_used` event.
+  Missing, disabled, deleted, stale-index, and malformed candidates emit no
+  use event because no voiceprint record was returned. The event contains the
+  target person OID plus the submitted `meeting_id` and server UTC date; it
+  never contains candidate emails or voiceprint values.
 - **401 / 403 / 422 / 503** — per the tables above.
 
 Example request:
@@ -287,7 +293,7 @@ Example response:
 }
 ```
 
-## 6. Audit event schema
+## 6. Voiceprint audit
 
 Every mutating operation on server-held data is expected to write an audit
 event. Audit events are written **only by this Function, server-side** —
@@ -317,7 +323,94 @@ Each event has exactly these nine keys:
 | `action` | string | Short verb describing what happened (e.g. `voiceprint.update`). |
 | `target` | string | What was acted on (e.g. the affected `person_oid`/blob path). |
 | `correlation_id` | string | Ties the event back to the originating request/logs. |
-| `details` | object | Free-form extra context. **Voiceprint values are rejected** — passing a `voiceprint`/`voiceprints` key in `details` raises before anything is written, so voiceprint material can never end up in the audit trail. |
+| `details` | object | Minimal event-specific context. Sensitive key shapes are rejected recursively before writes and after reads, so token, authorization, SAS, email, embedding, raw-audio, and voiceprint values cannot enter or leave through this API. |
+
+### Event actions
+
+New events use these exact underscore-separated action names:
+
+| Trigger | `action` | `target` | `details` |
+|---|---|---|---|
+| A PUT creates a record | `voiceprint_created` | Target person OID | `status` |
+| A meeting-candidate response returns an active record | `voiceprint_used` | Returned person OID | `meeting_id`, server UTC `date` |
+| An existing PUT changes status to `disabled` | `voiceprint_disabled` | Target person OID | `previous_status`, `status` |
+| An existing PUT changes status to `deleted` | `voiceprint_deleted` | Target person OID | `previous_status`, `status` |
+| Any other existing-record PUT | `voiceprint_updated` | Target person OID | `previous_status`, `status` |
+
+The validated caller's `oid` and `name` claims are always the event's
+`actor_oid` and `actor_name`. This identifies the responsible actor for
+disable and delete transitions without accepting actor identity from request
+data.
+
+One `voiceprint_used` event is appended per returned record rather than one
+event containing a list of participants. This keeps every target unambiguous
+and avoids storing an employee email/OID list. Ordinary
+`GET /voiceprints/{person_oid}` enrolment-status/self/admin reads remain
+unaudited.
+
+Audit writes have at-least-once semantics. If a multi-record meeting lookup
+appends some use events and a later append fails, the endpoint returns
+`503 storage_unavailable`; retry can produce another event with a different
+`event_id`. Existing entries are never rewritten to deduplicate them.
+`correlation_id` allows administrators to identify events from the same API
+request.
+
+Historical events written before IN-381 can have dotted action names such as
+`voiceprint.create` / `voiceprint.update` and Blob-path targets. They remain
+immutable and are returned by the read API when they match the supplied
+filters; the API does not rewrite history.
+
+### `GET /api/v1/voiceprints/audit-events`
+
+Return a bounded, newest-first page from the immutable voiceprint audit log.
+This is the read-only administrator view required by IN-381; no audit mutation
+endpoint exists.
+
+- **Auth:** exact `StorageApi.Admin` app role via `require_admin`. A delegated
+  user without that role receives `403` before audit storage is read.
+- **`from_date` / `to_date`:** optional UTC dates (`YYYY-MM-DD`). If neither is
+  supplied, both default to the current UTC date. If only one is supplied, the
+  other defaults to the same date. The inclusive range is limited to 31 days,
+  and `from_date` must not be after `to_date`.
+- **`action`:** optional exact action filter, maximum 64 characters.
+- **`person_oid`:** optional exact `target` filter, maximum 128 characters.
+  Historical Blob-path targets do not match an OID-only filter.
+- **`meeting_id`:** optional UUID matched exactly against
+  `details.meeting_id`.
+- **`limit`:** page size from 1 to 100; default 50.
+- **`cursor`:** optional opaque continuation value, maximum 512 characters.
+  It is bound to the normalized date range and filters. Invalid, mismatched,
+  or over-limit cursors return the generic `422 validation_error` envelope.
+  Traversal is capped at a 10,000 matching-event offset.
+- **200:** an `items` array plus nullable `next_cursor`.
+- **503:** Blob failures, malformed audit JSONL, invalid event schema, or a
+  historical event carrying a forbidden sensitive detail key fail closed as
+  `storage_unavailable`. Such lines are never silently skipped or returned as
+  arbitrary JSON.
+
+Example response:
+
+```json
+{
+  "items": [
+    {
+      "schema_version": 1,
+      "event_id": "54af9f874477477bb17fd0e0f65d461b",
+      "occurred_at": "2026-07-24T01:02:03+00:00",
+      "actor_oid": "caller-oid",
+      "actor_name": "Administrator",
+      "action": "voiceprint_used",
+      "target": "person-oid",
+      "correlation_id": "request-correlation-id",
+      "details": {
+        "meeting_id": "9ab402de-a57f-45a6-8cde-4f89902f5d0b",
+        "date": "2026-07-24"
+      }
+    }
+  ],
+  "next_cursor": null
+}
+```
 
 ## 7. Reserved for IN-386 — meeting JSON/audio (sketch, not implemented)
 
