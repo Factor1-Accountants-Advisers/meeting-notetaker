@@ -102,6 +102,7 @@ async def create_meeting(body: MeetingCreate, actor: str = Actor) -> Meeting:
         owner_id=_normalise_actor_id(actor),
         created_at=datetime.now(timezone.utc),
         graph_metadata=body.graph_metadata,
+        manual_attendees=body.manual_attendees,
     )
     store.MEETINGS[meeting.id] = meeting
     # Creator owns the meeting (decision #7).

@@ -45,6 +45,12 @@ export interface MeetingDto {
   sharepoint_error_message: string | null
   sharepoint_web_url: string | null
   graph_metadata?: GraphMeetingMetadataDto | null
+  manual_attendees: ManualMeetingAttendee[]
+}
+
+export interface ManualMeetingAttendee {
+  name?: string | null
+  email: string
 }
 
 export interface GraphMeetingMetadata {
@@ -259,7 +265,8 @@ export async function createMeeting(
   title: string,
   meetingLink: string | null,
   source?: 'online' | 'in_person' | 'upload',
-  graphMetadata?: GraphMeetingMetadata | null
+  graphMetadata?: GraphMeetingMetadata | null,
+  manualAttendees: ManualMeetingAttendee[] = []
 ): Promise<MeetingDto | null> {
   // Link present implies an online meeting (loopback + mic); otherwise in-person.
   // The link itself is only used for Graph title/attendee auto-fill later.
@@ -267,7 +274,8 @@ export async function createMeeting(
     title,
     source: source ?? (meetingLink ? 'online' : 'in_person'),
     meeting_link: meetingLink,
-    graph_metadata: graphMetadata ? toGraphMetadataDto(graphMetadata) : null
+    graph_metadata: graphMetadata ? toGraphMetadataDto(graphMetadata) : null,
+    manual_attendees: manualAttendees
   })
 }
 

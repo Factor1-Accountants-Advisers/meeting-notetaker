@@ -1,9 +1,16 @@
 import unittest
 from uuid import UUID
 
+from pydantic import ValidationError
+
 from app import store
 from app.routers.meetings import create_meeting
-from app.schemas import AccessRole, MeetingCreate, MeetingSource
+from app.schemas import (
+    AccessRole,
+    ManualMeetingAttendee,
+    MeetingCreate,
+    MeetingSource,
+)
 from app.services.speaker_matching import _candidate_voiceprints_for_meeting
 from app.services.voiceprints import Voiceprint
 
@@ -34,6 +41,60 @@ class MeetingOwnerIdentityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.MEETINGS[meeting.id].owner_id, "davidahlhaus@factor1.com.au")
         self.assertEqual(store.ACCESS[meeting.id][0].user, "davidahlhaus@factor1.com.au")
         self.assertEqual(store.ACCESS[meeting.id][0].role, AccessRole.owner)
+
+    async def test_create_meeting_persists_normalized_manual_attendees(self):
+        meeting = await create_meeting(
+            MeetingCreate(
+                title="Ad-hoc planning",
+                source=MeetingSource.online,
+                manual_attendees=[
+                    ManualMeetingAttendee(
+                        name=" David Ahlhaus ",
+                        email=" DAVIDAHLHAUS@Factor1.com.au ",
+                    ),
+                    ManualMeetingAttendee(
+                        name=None,
+                        email="benjaminbryant@factor1.com.au",
+                    ),
+                ],
+            ),
+            actor="josephguerrero@factor1.com.au",
+        )
+
+        self.assertEqual(
+            [attendee.model_dump() for attendee in meeting.manual_attendees],
+            [
+                {
+                    "name": "David Ahlhaus",
+                    "email": "davidahlhaus@factor1.com.au",
+                },
+                {
+                    "name": None,
+                    "email": "benjaminbryant@factor1.com.au",
+                },
+            ],
+        )
+        self.assertEqual(
+            store.MEETINGS[meeting.id].manual_attendees,
+            meeting.manual_attendees,
+        )
+
+    def test_manual_attendees_reject_invalid_email_and_more_than_49_people(self):
+        with self.assertRaises(ValidationError):
+            ManualMeetingAttendee(name="Not an email", email="invalid")
+
+        with self.assertRaises(ValidationError):
+            MeetingCreate(
+                title="Too many people",
+                source=MeetingSource.online,
+                manual_attendees=[
+                    ManualMeetingAttendee(
+                        name=f"Person {index}",
+                        email=f"person{index}@factor1.com.au",
+                    )
+                    for index in range(50)
+                ],
+            )
 
     async def test_manual_meeting_owner_selects_recorders_voiceprint_candidate(self):
         meeting = await create_meeting(
