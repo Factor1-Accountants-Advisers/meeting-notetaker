@@ -5,7 +5,7 @@ import { HomeScreen } from './screens/HomeScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
 import { LoginScreen, type User } from './screens/LoginScreen'
 import { RecordingScreen, type RecordingSession } from './screens/RecordingScreen'
-import { createMeeting, emailNotes, ensureCurrentPerson, fetchEnrolmentStatus, fetchMeetingReview, retryPipeline, saveTranscriptToSharePoint, uploadAudio, type EnrolmentStatus, type GraphMeetingMetadata, type SystemAudioSegmentUpload } from './lib/api'
+import { createMeeting, emailNotes, ensureCurrentPerson, fetchEnrolmentStatus, fetchMeetingReview, retryPipeline, saveTranscriptToSharePoint, uploadAudio, type EnrolmentStatus, type GraphMeetingMetadata, type ManualMeetingAttendee, type SystemAudioSegmentUpload } from './lib/api'
 import { capture, type CaptureStatus, type SystemSegment } from './lib/capture'
 import { loadPrefs } from './lib/prefs'
 import { useNotifications } from './lib/useNotifications'
@@ -473,11 +473,14 @@ function App(): JSX.Element {
     )
   }
 
-  const startManualRecording = async (title: string): Promise<void> => {
+  const startManualRecording = async (
+    title: string,
+    manualAttendees: ManualMeetingAttendee[]
+  ): Promise<void> => {
     if (recordingRef.current) return
     const startedAt = Date.now()
     const source = 'online' as const
-    const created = await createMeeting(title, null, source)
+    const created = await createMeeting(title, null, source, null, manualAttendees)
     const meetingId = created?.id ?? null
     const status = await capture.start(source, loadPrefs().micDeviceId, {
       title,
@@ -862,8 +865,12 @@ function App(): JSX.Element {
     }
   }
 
-  const uploadRecording = async (title: string, file: File): Promise<void> => {
-    const created = await createMeeting(title, null, 'upload')
+  const uploadRecording = async (
+    title: string,
+    file: File,
+    manualAttendees: ManualMeetingAttendee[]
+  ): Promise<void> => {
+    const created = await createMeeting(title, null, 'upload', null, manualAttendees)
     if (!created) {
       console.warn('Upload needs the backend — start it and try again')
       return
@@ -1009,8 +1016,12 @@ function App(): JSX.Element {
       {view === 'home' && (
         <HomeScreen
           userName={user.name}
-          onStartRecording={(title) => void startManualRecording(title)}
-          onUploadRecording={(t, f) => void uploadRecording(t, f)}
+          onStartRecording={(title, attendees) =>
+            void startManualRecording(title, attendees)
+          }
+          onUploadRecording={(title, file, attendees) =>
+            void uploadRecording(title, file, attendees)
+          }
           recordingState={shellRecordingState}
           interruptedRecordings={interrupted.map((e) => ({
             key: e.key,
