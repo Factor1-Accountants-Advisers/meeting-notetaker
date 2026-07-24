@@ -333,9 +333,9 @@ New events use these exact underscore-separated action names:
 |---|---|---|---|
 | A PUT creates a record | `voiceprint_created` | Target person OID | `status` |
 | A meeting-candidate response returns an active record | `voiceprint_used` | Returned person OID | `meeting_id`, server UTC `date` |
-| An existing PUT changes status to `disabled` | `voiceprint_disabled` | Target person OID | `previous_status`, `status` |
-| An existing PUT changes status to `deleted` | `voiceprint_deleted` | Target person OID | `previous_status`, `status` |
-| Any other existing-record PUT | `voiceprint_updated` | Target person OID | `previous_status`, `status` |
+| An existing PUT changes status to `disabled` | `voiceprint_disabled` | Target person OID | `status` |
+| An existing PUT changes status to `deleted` | `voiceprint_deleted` | Target person OID | `status` |
+| Any other existing-record PUT | `voiceprint_updated` | Target person OID | `status` |
 
 The validated caller's `oid` and `name` claims are always the event's
 `actor_oid` and `actor_name`. This identifies the responsible actor for
@@ -354,6 +354,13 @@ appends some use events and a later append fails, the endpoint returns
 `event_id`. Existing entries are never rewritten to deduplicate them.
 `correlation_id` allows administrators to identify events from the same API
 request.
+
+The v1 voiceprint record/index write and audit append use separate Blob
+operations and cannot be committed atomically. If the data write succeeds but
+the audit append fails, the API returns `503 storage_unavailable`, but the
+record may already be stored; a retry can therefore be classified as an
+update. A durable transactional outbox would require a wider IN-377 storage
+contract change and is not introduced by IN-381.
 
 Historical events written before IN-381 can have dotted action names such as
 `voiceprint.create` / `voiceprint.update` and Blob-path targets. They remain
@@ -382,6 +389,11 @@ endpoint exists.
   It is bound to the normalized date range and filters. Invalid, mismatched,
   or over-limit cursors return the generic `422 validation_error` envelope.
   Traversal is capped at a 10,000 matching-event offset.
+- Audit blobs are scanned newest-first with 64-KiB backward range reads. One
+  request can scan at most 32 MiB across its date window. If a selective
+  filter cannot produce a page within that budget, the API returns the
+  generic `422 validation_error` envelope and the caller must narrow the date
+  range or filters.
 - **200:** an `items` array plus nullable `next_cursor`.
 - **503:** Blob failures, malformed audit JSONL, invalid event schema, or a
   historical event carrying a forbidden sensitive detail key fail closed as

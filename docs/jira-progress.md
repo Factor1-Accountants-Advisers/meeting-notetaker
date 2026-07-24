@@ -420,14 +420,20 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     `GET /api/v1/voiceprints/audit-events` contract: exact
     `StorageApi.Admin`, 31-day maximum UTC range, 1–100 page size, opaque
     filter-bound cursor, 10,000-offset cap, and optional exact
-    action/person/meeting filters. A desktop admin screen remains IN-380, so
-    no renderer/preload/Electron/FastAPI desktop runtime code changed.
+    action/person/meeting filters. Daily JSONL is read backward in 64-KiB
+    ranges with a 32-MiB per-request scan ceiling. A desktop admin screen
+    remains IN-380, so no renderer/preload/Electron/FastAPI desktop runtime
+    code changed.
   - Audit JSONL remains server-written and append-only. Recursive write/read
     guards reject token, authorization, SAS, email, embedding, raw-audio, and
     voiceprint detail keys; malformed or privacy-invalid historical lines fail
     closed. The field-by-field review found no raw voiceprints, tokens,
     employee email lists, embeddings, or audio in any event or response.
-  - Verification: Storage API full suite `177 passed` plus Ruff; desktop full
+  - Independent review removed unnecessary prior-status details and replaced
+    whole-day downloads with bounded ranged reads. The existing v1
+    record/index write and audit append remain separate Blob operations; a
+    durable cross-blob outbox would be an IN-377 storage-contract change.
+  - Verification: Storage API full suite `181 passed` plus Ruff; desktop full
     backend suite `164 tests`; `npm run verify:storage-cutover`,
     `npm run verify:graph`, `npm run typecheck`, `npm run build`, contract
     byte comparison, and `git diff --check` in both repositories passed.
