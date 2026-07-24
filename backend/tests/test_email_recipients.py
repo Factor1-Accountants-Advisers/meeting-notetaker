@@ -12,12 +12,13 @@ from app.routers.meetings import _email_recipients
 from app.schemas import (
     GraphMeetingAttendeeMetadata,
     GraphMeetingMetadata,
+    ManualMeetingAttendee,
     Meeting,
     MeetingSource,
 )
 
 
-def _meeting(graph_metadata=None, source=MeetingSource.online):
+def _meeting(graph_metadata=None, source=MeetingSource.online, manual_attendees=None):
     return Meeting(
         id=uuid4(),
         title="Test",
@@ -25,6 +26,7 @@ def _meeting(graph_metadata=None, source=MeetingSource.online):
         owner_id="organizer@factor1.com.au",
         created_at=datetime.now(timezone.utc),
         graph_metadata=graph_metadata,
+        manual_attendees=manual_attendees or [],
     )
 
 
@@ -54,7 +56,20 @@ class EmailRecipientTests(unittest.TestCase):
 
     def test_adhoc_recording_still_emails_recorder_only(self):
         recipients = _email_recipients(
-            _meeting(None, source=MeetingSource.in_person),
+            _meeting(
+                None,
+                source=MeetingSource.in_person,
+                manual_attendees=[
+                    ManualMeetingAttendee(
+                        name="David Ahlhaus",
+                        email="davidahlhaus@factor1.com.au",
+                    ),
+                    ManualMeetingAttendee(
+                        name="Benjamin Bryant",
+                        email="benjaminbryant@factor1.com.au",
+                    ),
+                ],
+            ),
             recorder_email="recorder@factor1.com.au",
         )
         self.assertEqual(recipients, ["recorder@factor1.com.au"])

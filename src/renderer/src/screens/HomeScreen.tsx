@@ -1,6 +1,13 @@
 import { useState } from 'react'
 import { AlertTriangle, CheckCircle2, Loader2, Mic, Plus, Upload, XCircle } from 'lucide-react'
 import { Card, SectionHeader } from '@renderer/components/ui/Card'
+import {
+  AttendeePicker,
+  type ManualAttendee
+} from '@renderer/components/AttendeePicker'
+import { staff as sampleStaff, type StaffMember } from '@renderer/data/mock'
+import { fetchPeople } from '@renderer/lib/api'
+import { useLive } from '@renderer/lib/useLive'
 
 /** A recording interrupted by sleep/crash, recoverable from its spill file (IN-129). */
 export interface InterruptedRecording {
@@ -11,8 +18,8 @@ export interface InterruptedRecording {
 
 interface HomeProps {
   userName: string
-  onStartRecording: (title: string) => void
-  onUploadRecording: (title: string, file: File) => void
+  onStartRecording: (title: string, attendees: ManualAttendee[]) => void
+  onUploadRecording: (title: string, file: File, attendees: ManualAttendee[]) => void
   recordingState?: 'idle' | 'recording' | 'processing'
   interruptedRecordings?: InterruptedRecording[]
   onRecoverInterrupted?: (key: string) => void
@@ -41,6 +48,8 @@ export function HomeScreen({
   onRetryPostCapture,
   onShowRecording
 }: HomeProps): JSX.Element {
+  const { data: staff, offline } = useLive(fetchPeople, sampleStaff)
+
   return (
     <div className="flex flex-col gap-4">
       <Greeting userName={userName} />
@@ -78,6 +87,8 @@ export function HomeScreen({
         onStart={onStartRecording}
         onUpload={onUploadRecording}
         recordingActive={recordingState === 'recording'}
+        people={staff}
+        directoryUnavailable={offline}
       />
     </div>
   )
@@ -227,14 +238,19 @@ function Greeting({ userName }: { userName: string }): JSX.Element {
 function CaptureCard({
   onStart,
   onUpload,
-  recordingActive = false
+  recordingActive = false,
+  people,
+  directoryUnavailable
 }: {
-  onStart: (title: string) => void
-  onUpload: (title: string, file: File) => void
+  onStart: (title: string, attendees: ManualAttendee[]) => void
+  onUpload: (title: string, file: File, attendees: ManualAttendee[]) => void
   /** Upload is disabled while an automatic recording is in progress. */
   recordingActive?: boolean
+  people: StaffMember[]
+  directoryUnavailable: boolean
 }): JSX.Element {
   const [title, setTitle] = useState('')
+  const [attendees, setAttendees] = useState<ManualAttendee[]>([])
   const hasTitle = title.trim().length > 0
   const canUpload = hasTitle && !recordingActive
 
@@ -249,11 +265,18 @@ function CaptureCard({
         placeholder="e.g. Tax compliance — Henderson & Co"
         className="mb-3 h-9 w-full rounded-md border-[0.5px] border-edge-tertiary bg-bg-primary px-3 text-[14px] text-content-primary placeholder:text-content-tertiary focus:border-brand-blue focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
       />
+      <AttendeePicker
+        people={people}
+        selected={attendees}
+        onChange={setAttendees}
+        disabled={recordingActive}
+        directoryUnavailable={directoryUnavailable}
+      />
       <div className="flex gap-2.5">
         <button
           type="button"
           disabled={!canUpload}
-          onClick={() => onStart(title.trim())}
+          onClick={() => onStart(title.trim(), attendees)}
           className="flex flex-1 items-center justify-center gap-1.5 rounded-md border-[0.5px] border-edge-info bg-bg-info py-2.5 text-[14px] text-content-info transition-colors hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-45"
         >
           <Mic size={16} strokeWidth={1.75} />
@@ -280,7 +303,7 @@ function CaptureCard({
             disabled={!canUpload}
             onChange={(e) => {
               const file = e.target.files?.[0]
-              if (file) onUpload(title.trim(), file)
+              if (file) onUpload(title.trim(), file, attendees)
               e.target.value = ''
             }}
           />

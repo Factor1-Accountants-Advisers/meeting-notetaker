@@ -2,7 +2,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.schemas import GraphMeetingAttendeeMetadata, GraphMeetingMetadata, Meeting, MeetingSource, TranscriptSegment
+from app.schemas import (
+    GraphMeetingAttendeeMetadata,
+    GraphMeetingMetadata,
+    ManualMeetingAttendee,
+    Meeting,
+    MeetingSource,
+    TranscriptSegment,
+)
 from app.config import Settings
 from app.services.speaker_matching import (
     IdentityRange,
@@ -103,6 +110,47 @@ class SpeakerIdentityMatchingTests(unittest.TestCase):
         self.assertEqual(
             [item.employee_id for item in ordered],
             ["benjamin@factor1.com.au", "david@factor1.com.au", "df@factor1.com.au", "tc@factor1.com.au"],
+        )
+
+    def test_manual_attendees_are_selected_before_recorder_and_expansion(self):
+        records = [
+            vp("david@factor1.com.au", "David Ahlhaus"),
+            vp("benjamin@factor1.com.au", "Benjamin Bryant"),
+            vp("recorder@factor1.com.au", "Recorder"),
+            vp("expansion@factor1.com.au", "Expansion"),
+        ]
+        meeting = Meeting(
+            id=uuid4(),
+            title="Ad-hoc planning",
+            source=MeetingSource.online,
+            owner_id="recorder@factor1.com.au",
+            created_at=datetime.now(timezone.utc),
+            manual_attendees=[
+                ManualMeetingAttendee(
+                    name="David Ahlhaus",
+                    email="david@factor1.com.au",
+                ),
+                ManualMeetingAttendee(
+                    name="Benjamin Bryant",
+                    email="benjamin@factor1.com.au",
+                ),
+            ],
+        )
+
+        ordered = _candidate_voiceprints_for_meeting(
+            records,
+            meeting,
+            controlled_expansion_employee_ids=["expansion@factor1.com.au"],
+        )
+
+        self.assertEqual(
+            [item.employee_id for item in ordered],
+            [
+                "david@factor1.com.au",
+                "benjamin@factor1.com.au",
+                "recorder@factor1.com.au",
+                "expansion@factor1.com.au",
+            ],
         )
 
     def test_controlled_expansion_ids_are_loaded_from_config(self):

@@ -170,7 +170,9 @@ def build_meeting_export(
     action_items: list[ActionItem],
 ) -> MeetingExport:
     metadata = meeting.graph_metadata
-    invitees = _dedupe_invitees(metadata.attendees) if metadata else []
+    invitees = _dedupe_invitees(
+        metadata.attendees if metadata else meeting.manual_attendees
+    )
     # Normalise before validation: a malformed stored timestamp degrades to
     # null instead of failing the pipeline run that builds the artifact.
     scheduled_start: str | None = None
@@ -179,7 +181,7 @@ def build_meeting_export(
         scheduled_start = _format_utc_timestamp(parsed) if parsed else None
     return MeetingExport(
         meeting_id=str(meeting.id),
-        meeting_type=_derive_meeting_type(invitees),
+        meeting_type=_derive_meeting_type(invitees) if metadata else "internal",
         meeting_name=meeting.title,
         organiser_name=metadata.organizer_name if metadata else None,
         organiser_email=metadata.organizer_email if metadata else None,

@@ -9,7 +9,7 @@ from enum import Enum
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class MeetingStatus(str, Enum):
@@ -80,6 +80,34 @@ class GraphMeetingMetadata(BaseModel):
     ical_uid: str | None = None
 
 
+class ManualMeetingAttendee(BaseModel):
+    """Employee selected by the recorder as an ad-hoc voiceprint hint."""
+
+    name: str | None = None
+    email: str
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str | None) -> str | None:
+        normalized = (value or "").strip()
+        return normalized or None
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        normalized = value.strip().casefold()
+        local, separator, domain = normalized.partition("@")
+        if (
+            separator != "@"
+            or not local
+            or not domain
+            or "." not in domain
+            or any(character.isspace() for character in normalized)
+        ):
+            raise ValueError("valid attendee email is required")
+        return normalized
+
+
 class Priority(str, Enum):
     high = "high"
     medium = "medium"
@@ -147,6 +175,10 @@ class Meeting(BaseModel):
     # absent). Set at upload; surfaced in the minutes header.
     recorder_audio_missing: bool = False
     graph_metadata: GraphMeetingMetadata | None = None
+    manual_attendees: list[ManualMeetingAttendee] = Field(
+        default_factory=list,
+        max_length=49,
+    )
 
 
 class MeetingCreate(BaseModel):
@@ -155,6 +187,10 @@ class MeetingCreate(BaseModel):
     source: MeetingSource
     meeting_link: str | None = None  # optional; only used for Graph auto-fill
     graph_metadata: GraphMeetingMetadata | None = None
+    manual_attendees: list[ManualMeetingAttendee] = Field(
+        default_factory=list,
+        max_length=49,
+    )
 
 
 class ActionItem(BaseModel):

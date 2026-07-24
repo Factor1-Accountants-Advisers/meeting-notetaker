@@ -71,6 +71,11 @@ def build_meeting_candidates(
     if meeting.graph_metadata:
         for attendee in meeting.graph_metadata.attendees:
             add(attendee.email, "invitee")
+
+    for attendee in meeting.manual_attendees:
+        add(attendee.email, "invitee")
+
+    if meeting.graph_metadata:
         add(meeting.graph_metadata.organizer_email, "organizer")
 
     add(recorder_email or meeting.owner_id, "recorder")

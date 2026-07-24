@@ -22,6 +22,7 @@ from app.schemas import (
     ActionItem,
     GraphMeetingAttendeeMetadata,
     GraphMeetingMetadata,
+    ManualMeetingAttendee,
     Meeting,
     MeetingAccessEntry,
     MeetingParticipant,
@@ -237,6 +238,38 @@ class MeetingExportBuilderTests(unittest.TestCase):
         self.assertEqual(
             len([e for e in emails if e and e.lower() == "josephguerrero@factor1.com.au"]), 1
         )
+
+    def test_manual_attendees_are_exported_without_changing_manual_type_fallback(self):
+        data = _export_dict(
+            _meeting(
+                graph_metadata=None,
+                manual_attendees=[
+                    ManualMeetingAttendee(
+                        name="David Ahlhaus",
+                        email="davidahlhaus@factor1.com.au",
+                    ),
+                    ManualMeetingAttendee(
+                        name="Benjamin Bryant",
+                        email="benjaminbryant@factor1.com.au",
+                    ),
+                ],
+            )
+        )
+
+        self.assertEqual(
+            data["full_invitee_list"],
+            [
+                {
+                    "name": "David Ahlhaus",
+                    "email": "davidahlhaus@factor1.com.au",
+                },
+                {
+                    "name": "Benjamin Bryant",
+                    "email": "benjaminbryant@factor1.com.au",
+                },
+            ],
+        )
+        self.assertEqual(data["meeting_type"], "internal")
 
     def test_missing_optional_sources_serialize_as_null_or_empty_without_dropping_keys(self):
         data = _export_dict(_meeting(graph_metadata=None, duration_seconds=None))
