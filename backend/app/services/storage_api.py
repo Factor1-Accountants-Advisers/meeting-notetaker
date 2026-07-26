@@ -11,11 +11,14 @@ real store.
 Never log tokens or voiceprint values.
 """
 
+import http.client
 import json
+import shutil
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Literal, Protocol
 from uuid import UUID
 
@@ -23,7 +26,7 @@ import pydantic
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
-from app.paths import central_voiceprint_path
+from app.paths import central_meetings_dir, central_voiceprint_path
 
 
 class StorageApiError(RuntimeError):
@@ -90,6 +93,19 @@ class MeetingVoiceprintResponse(BaseModel):
     missing: list[MeetingVoiceprintCandidate]
 
 
+class BlobExportReceipt(BaseModel):
+    meeting_id: UUID
+    blob_path: str
+    revision: Literal["created", "updated"]
+    updated_at: datetime
+
+
+class AudioUploadGrant(BaseModel):
+    upload_url: str
+    blob_path: str
+    expires_at: datetime
+
+
 class StorageApiClient(Protocol):
     def register_voiceprint(self, enrolment: CentralEnrolment, access_token: str | None) -> CentralEnrolment: ...
     def get_enrolment(self, person_id: str, access_token: str | None) -> CentralEnrolment | None: ...
@@ -99,6 +115,20 @@ class StorageApiClient(Protocol):
         candidates: list[MeetingVoiceprintCandidate],
         access_token: str | None,
     ) -> MeetingVoiceprintResponse: ...
+    def upload_meeting_export(
+        self,
+        meeting_id: UUID,
+        time_basis_utc: datetime,
+        export_payload: dict,
+        access_token: str | None,
+    ) -> BlobExportReceipt: ...
+    def request_audio_upload_sas(
+        self,
+        meeting_id: UUID,
+        time_basis_utc: datetime,
+        access_token: str | None,
+    ) -> AudioUploadGrant: ...
+    def upload_audio_to_grant(self, grant: AudioUploadGrant, audio_path: Path) -> None: ...
 
 
 def central_enrolment_required() -> bool:
@@ -126,10 +156,21 @@ class StubStorageApiClient:
         tmp.write_text(json.dumps(data), encoding="utf-8")
         tmp.replace(path)
 
-    def register_voiceprint(self, enrolment: CentralEnrolment, access_token: str | None) -> CentralEnrolment:
-        if self.fail_next:
-            self.fail_next = False
+    @staticmethod
+    def _fail_if_injected(client: "StubStorageApiClient") -> None:
+        if client.fail_next:
+            client.fail_next = False
             raise StorageApiError("injected stub failure")
+
+    @staticmethod
+    def _write_json(path: Path, value: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(value), encoding="utf-8")
+        tmp.replace(path)
+
+    def register_voiceprint(self, enrolment: CentralEnrolment, access_token: str | None) -> CentralEnrolment:
+        self._fail_if_injected(self)
         data = self._load()
         existing = data.get(enrolment.person_id)
         record = enrolment.model_copy(update={"updated_at": datetime.now(timezone.utc)})
@@ -149,9 +190,7 @@ class StubStorageApiClient:
         candidates: list[MeetingVoiceprintCandidate],
         access_token: str | None,
     ) -> MeetingVoiceprintResponse:
-        if self.fail_next:
-            self.fail_next = False
-            raise StorageApiError("injected stub failure")
+        self._fail_if_injected(self)
         request = MeetingVoiceprintRequest(
             meeting_id=meeting_id,
             candidates=candidates,
@@ -183,13 +222,80 @@ class StubStorageApiClient:
             missing=missing,
         )
 
+    def upload_meeting_export(
+        self,
+        meeting_id: UUID,
+        time_basis_utc: datetime,
+        export_payload: dict,
+        access_token: str | None,
+    ) -> BlobExportReceipt:
+        self._fail_if_injected(self)
+        meeting_dir = central_meetings_dir() / str(meeting_id)
+        current = meeting_dir / "meeting.json"
+        now = datetime.now(timezone.utc)
+        revision: Literal["created", "updated"] = "created"
+        if current.exists():
+            revision = "updated"
+            history_name = now.strftime("%Y%m%dT%H%M%S%fZ") + ".json"
+            history = meeting_dir / "history" / history_name
+            history.parent.mkdir(parents=True, exist_ok=True)
+            tmp_history = history.with_suffix(".tmp")
+            shutil.copyfile(current, tmp_history)
+            tmp_history.replace(history)
+        self._write_json(current, export_payload)
+        return BlobExportReceipt(
+            meeting_id=meeting_id,
+            blob_path=f"central-meetings/{meeting_id}/meeting.json",
+            revision=revision,
+            updated_at=now,
+        )
+
+    def request_audio_upload_sas(
+        self,
+        meeting_id: UUID,
+        time_basis_utc: datetime,
+        access_token: str | None,
+    ) -> AudioUploadGrant:
+        self._fail_if_injected(self)
+        return AudioUploadGrant(
+            upload_url=f"stub://meeting-upload/{meeting_id}",
+            blob_path=f"central-meetings/{meeting_id}/audio.webm",
+            expires_at=datetime.now(timezone.utc),
+        )
+
+    def upload_audio_to_grant(self, grant: AudioUploadGrant, audio_path: Path) -> None:
+        self._fail_if_injected(self)
+        parsed = urllib.parse.urlsplit(grant.upload_url)
+        if parsed.scheme != "stub" or parsed.netloc != "meeting-upload":
+            raise StorageApiContractError("stub audio upload grant was invalid")
+        try:
+            meeting_id = UUID(parsed.path.lstrip("/"))
+        except ValueError as exc:
+            raise StorageApiContractError("stub audio upload grant was invalid") from exc
+        destination = central_meetings_dir() / str(meeting_id) / "audio.webm"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_suffix(".tmp")
+        try:
+            with audio_path.open("rb") as source, temporary.open("wb") as target:
+                shutil.copyfileobj(source, target, length=1024 * 1024)
+            temporary.replace(destination)
+        except OSError as exc:
+            temporary.unlink(missing_ok=True)
+            raise StorageApiUnavailable("stub audio upload could not read the recording") from exc
+
 
 class RestStorageApiClient:
     """Provisional REST binding for IN-471 (contract not yet published)."""
 
-    def __init__(self, base_url: str, opener=urllib.request.urlopen) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        opener=urllib.request.urlopen,
+        connection_factory=http.client.HTTPSConnection,
+    ) -> None:
         self._base = base_url.rstrip("/")
         self._opener = opener
+        self._connection_factory = connection_factory
 
     def _request(
         self,
@@ -226,7 +332,7 @@ class RestStorageApiClient:
                 ) from exc
             raise StorageApiRejected(f"storage API returned {exc.code}") from exc
         except (urllib.error.URLError, TimeoutError) as exc:
-            raise StorageApiUnavailable(f"storage API unreachable: {exc}") from exc
+            raise StorageApiUnavailable("storage API unreachable") from exc
         if not text:
             return None
         try:
@@ -287,6 +393,115 @@ class RestStorageApiClient:
             )
         return response
 
+    def upload_meeting_export(
+        self,
+        meeting_id: UUID,
+        time_basis_utc: datetime,
+        export_payload: dict,
+        access_token: str | None,
+    ) -> BlobExportReceipt:
+        raw = self._request(
+            "PUT",
+            f"/api/v1/meetings/{meeting_id}/export",
+            access_token,
+            {
+                "time_basis_utc": time_basis_utc.isoformat(),
+                "export": export_payload,
+            },
+        )
+        try:
+            receipt = BlobExportReceipt.model_validate(raw)
+        except pydantic.ValidationError as exc:
+            raise StorageApiContractError(
+                "storage API returned a malformed meeting export receipt"
+            ) from exc
+        if receipt.meeting_id != meeting_id:
+            raise StorageApiContractError(
+                "storage API returned a meeting export receipt for a different meeting"
+            )
+        return receipt
+
+    def request_audio_upload_sas(
+        self,
+        meeting_id: UUID,
+        time_basis_utc: datetime,
+        access_token: str | None,
+    ) -> AudioUploadGrant:
+        raw = self._request(
+            "POST",
+            f"/api/v1/meetings/{meeting_id}/audio/upload-sas",
+            access_token,
+            {"time_basis_utc": time_basis_utc.isoformat()},
+        )
+        try:
+            grant = AudioUploadGrant.model_validate(raw)
+            self._blob_upload_target(grant.upload_url)
+        except (pydantic.ValidationError, ValueError) as exc:
+            raise StorageApiContractError(
+                "storage API returned a malformed audio upload grant"
+            ) from exc
+        return grant
+
+    @staticmethod
+    def _blob_upload_target(upload_url: str) -> tuple[str, int | None, str]:
+        """Return a safe Azure Blob endpoint without exposing a SAS in errors."""
+        try:
+            parsed = urllib.parse.urlsplit(upload_url)
+            hostname = parsed.hostname
+            port = parsed.port
+        except ValueError as exc:
+            raise StorageApiContractError("audio upload grant target was invalid") from exc
+        if (
+            parsed.scheme != "https"
+            or not hostname
+            or not hostname.lower().endswith(".blob.core.windows.net")
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.fragment
+        ):
+            raise StorageApiContractError("audio upload grant target was invalid")
+        target = parsed.path or "/"
+        if parsed.query:
+            target = f"{target}?{parsed.query}"
+        return hostname, port, target
+
+    def upload_audio_to_grant(self, grant: AudioUploadGrant, audio_path: Path) -> None:
+        try:
+            hostname, port, target = self._blob_upload_target(grant.upload_url)
+            size = audio_path.stat().st_size
+        except StorageApiContractError:
+            raise
+        except OSError as exc:
+            raise StorageApiUnavailable("audio upload recording was unavailable") from exc
+
+        connection = None
+        try:
+            connection = self._connection_factory(hostname, port=port, timeout=900)
+            connection.putrequest("PUT", target)
+            connection.putheader("Content-Type", "audio/webm")
+            connection.putheader("x-ms-blob-type", "BlockBlob")
+            connection.putheader("Content-Length", str(size))
+            connection.endheaders()
+            with audio_path.open("rb") as audio:
+                while chunk := audio.read(1024 * 1024):
+                    connection.send(chunk)
+            response = connection.getresponse()
+            response.read()
+            if not 200 <= response.status < 300:
+                if response.status >= 500:
+                    raise StorageApiUnavailable("blob storage was unavailable for audio upload")
+                raise StorageApiRejected("blob storage rejected the audio upload")
+        except (StorageApiRejected, StorageApiUnavailable):
+            raise
+        except OSError as exc:
+            raise StorageApiUnavailable("audio upload was unavailable") from exc
+        finally:
+            if connection is not None:
+                try:
+                    connection.close()
+                except OSError:
+                    pass
+
 
 _STUB = StubStorageApiClient()
 
@@ -294,6 +509,9 @@ _STUB = StubStorageApiClient()
 def reset_stub_for_tests() -> None:
     _STUB.fail_next = False
     central_voiceprint_path().unlink(missing_ok=True)
+    meetings = central_meetings_dir()
+    if meetings.exists():
+        shutil.rmtree(meetings)
 
 
 def get_storage_api_client() -> StorageApiClient:

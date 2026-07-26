@@ -43,3 +43,8 @@ def local_sharepoint_dir() -> Path:
 def central_voiceprint_path() -> Path:
     """Stub central store (real one is Azure Blob behind the IN-471 API)."""
     return data_root() / "central-voiceprints.json"
+
+
+def central_meetings_dir() -> Path:
+    """Stub central meeting store (real one is Azure Blob behind the Storage API)."""
+    return data_root() / "central-meetings"
