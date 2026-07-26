@@ -209,6 +209,20 @@ class RestMeetingDeliveryTests(unittest.TestCase):
             with self.assertRaises(StorageApiUnavailable):
                 client.upload_audio_to_grant(AudioUploadGrant(**GRANT), Path(tmp) / "missing.webm")
 
+    def test_audio_upload_malformed_https_target_never_leaks_sas_in_error(self):
+        malformed_url = "https://acct.blob.core.windows.net/bad path?sig=TOPSECRET"
+        with tempfile.TemporaryDirectory() as tmp:
+            audio_path = Path(tmp) / "audio.webm"
+            audio_path.write_bytes(b"a")
+            with self.assertRaises(StorageApiError) as error:
+                RestStorageApiClient("https://storage.example").upload_audio_to_grant(
+                    AudioUploadGrant(**dict(GRANT, upload_url=malformed_url)),
+                    audio_path,
+                )
+
+        self.assertNotIn("TOPSECRET", str(error.exception))
+        self.assertNotIn(malformed_url, str(error.exception))
+
 
 class StubMeetingDeliveryTests(unittest.TestCase):
     def setUp(self):

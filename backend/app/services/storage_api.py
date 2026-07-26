@@ -493,6 +493,8 @@ class RestStorageApiClient:
                 raise StorageApiRejected("blob storage rejected the audio upload")
         except (StorageApiRejected, StorageApiUnavailable):
             raise
+        except (http.client.InvalidURL, ValueError) as exc:
+            raise StorageApiContractError("audio upload grant target was invalid") from exc
         except OSError as exc:
             raise StorageApiUnavailable("audio upload was unavailable") from exc
         finally:
