@@ -1102,6 +1102,22 @@ class BlobDeliveryTriggerTests(unittest.IsolatedAsyncioTestCase):
                 await meetings_router.retry_blob_delivery(meeting.id, actor="Editor")
             self.assertEqual(unready.exception.status_code, 409)
 
+            for blob_status in (BlobStatus.pending, BlobStatus.uploaded):
+                with self.subTest(blob_status=blob_status):
+                    store.MEETINGS[meeting.id] = meeting.model_copy(
+                        update={"blob_status": blob_status}
+                    )
+                    audit_before = list(store.AUDIT_LOG)
+                    with self.assertRaises(HTTPException) as not_failed:
+                        await meetings_router.retry_blob_delivery(
+                            meeting.id,
+                            actor="Editor",
+                            storage_token="retry-token",
+                        )
+                    self.assertEqual(not_failed.exception.status_code, 409)
+                    self.assertEqual(store.AUDIT_LOG, audit_before)
+                    self.assertEqual(store.MEETINGS[meeting.id].blob_status, blob_status)
+
             store.MEETINGS[meeting.id] = meeting
             result = await meetings_router.retry_blob_delivery(
                 meeting.id,
@@ -1387,8 +1403,23 @@ class BlobDeliveryHttpTests(unittest.IsolatedAsyncioTestCase):
                 f"/api/v1/meetings/{meeting.id}/blob/retry",
                 {"X-MN-User": "Editor", "X-MN-Storage-Token": "secret"},
             )
+            self.assertEqual(unready.status_code, 409)
 
-        self.assertEqual(unready.status_code, 409)
+            for blob_status in (BlobStatus.pending, BlobStatus.uploaded):
+                with self.subTest(blob_status=blob_status):
+                    store.MEETINGS[meeting.id] = meeting.model_copy(
+                        update={"blob_status": blob_status}
+                    )
+                    response = await _asgi_post(
+                        self.app,
+                        f"/api/v1/meetings/{meeting.id}/blob/retry",
+                        {"X-MN-User": "Editor", "X-MN-Storage-Token": "secret"},
+                    )
+                    self.assertEqual(response.status_code, 409)
+                    self.assertIn("not failed", response.text)
+                    self.assertEqual(store.MEETINGS[meeting.id].blob_status, blob_status)
+                    self.assertEqual(store.AUDIT_LOG, [])
+
         self.assertNotIn("secret", denied.text + unready.text)
         kick.assert_not_called()
 

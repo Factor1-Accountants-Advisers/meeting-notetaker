@@ -463,6 +463,11 @@ async def retry_blob_delivery(
     require(meeting_id, actor, AccessRole.editor)
     if meeting.pipeline_status is not PipelineStatus.ready:
         raise HTTPException(status.HTTP_409_CONFLICT, "Transcript is not ready yet")
+    if meeting.blob_status is not BlobStatus.failed:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Secure storage delivery is not failed",
+        )
     before_blob_status = meeting.blob_status.value
     kick_blob_delivery(
         meeting_id,

@@ -484,10 +484,11 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     `POST /api/v1/meetings/{meeting_id}/audio/upload-sas`. Pipeline-ready
     attempts audio then canonical export; state is only `pending`, `uploaded`,
     or `failed`, with a fixed safe error message. The authenticated retry
-    endpoint re-attempts a failed/pending delivery. A prior successful delivery
-    followed by finalisation uploads JSON only; it does not request another
-    audio SAS or send audio again. Blob failure is non-blocking for local
-    processing, finalisation, SharePoint, email, and local review.
+    endpoint and UI retry action re-attempt only a failed delivery. A prior
+    successful delivery followed by finalisation uploads JSON only; it does
+    not request another audio SAS or send audio again. Blob failure is
+    non-blocking for local processing, finalisation, SharePoint, email, and
+    local review.
   - **UI boundary:** Home is the reachable renderer flow and shows only safe
     delivery status/actionable retry notices. `MeetingReviewScreen` remains
     deliberately unrouted and contains no IN-386 UI because Slice 1 removed
