@@ -32,14 +32,14 @@ interface HomeProps {
   } | null
   onDismissPostCaptureNotice?: () => void
   onRetryPostCapture?: (meetingId: string, title: string) => void
-  blobDeliveryNotice?: {
+  blobDeliveryNotices?: {
     status: BlobStatus
     meetingId: string
     title: string
     message: string
     retrying: boolean
-  } | null
-  onDismissBlobDeliveryNotice?: () => void
+  }[]
+  onDismissBlobDeliveryNotice?: (meetingId: string) => void
   onRetryBlobDelivery?: (meetingId: string, title: string) => void
   onShowRecording?: () => void
 }
@@ -55,7 +55,7 @@ export function HomeScreen({
   postCaptureNotice,
   onDismissPostCaptureNotice,
   onRetryPostCapture,
-  blobDeliveryNotice,
+  blobDeliveryNotices,
   onDismissBlobDeliveryNotice,
   onRetryBlobDelivery,
   onShowRecording
@@ -95,13 +95,14 @@ export function HomeScreen({
           onRetry={onRetryPostCapture}
         />
       )}
-      {blobDeliveryNotice && (
+      {blobDeliveryNotices?.map((notice) => (
         <BlobDeliveryNoticeCard
-          notice={blobDeliveryNotice}
+          key={notice.meetingId}
+          notice={notice}
           onDismiss={onDismissBlobDeliveryNotice}
           onRetry={onRetryBlobDelivery}
         />
-      )}
+      ))}
       <CaptureCard
         onStart={onStartRecording}
         onUpload={onUploadRecording}
@@ -118,8 +119,8 @@ function BlobDeliveryNoticeCard({
   onDismiss,
   onRetry
 }: {
-  notice: NonNullable<HomeProps['blobDeliveryNotice']>
-  onDismiss?: () => void
+  notice: NonNullable<HomeProps['blobDeliveryNotices']>[number]
+  onDismiss?: (meetingId: string) => void
   onRetry?: (meetingId: string, title: string) => void
 }): JSX.Element {
   const failed = notice.status === 'failed'
@@ -167,7 +168,7 @@ function BlobDeliveryNoticeCard({
             <button
               type="button"
               className="text-[12px] opacity-80 hover:opacity-100 focus:outline-none focus:ring-1 focus:ring-brand-blue"
-              onClick={onDismiss}
+              onClick={() => onDismiss(notice.meetingId)}
             >
               Dismiss
             </button>

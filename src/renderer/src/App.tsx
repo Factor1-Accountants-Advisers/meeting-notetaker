@@ -84,17 +84,20 @@ type BlobDeliveryNotice = {
   title: string
   message: string
   retrying: boolean
-} | null
+}
 
 const BLOB_DELIVERY_FALLBACK = 'Secure storage upload failed. Retry when connected.'
-const BLOB_DELIVERY_POLL_WINDOW_MS = 10 * 60 * 1000
+const BLOB_DELIVERY_TAKING_LONGER =
+  'Secure storage is taking longer than expected. You can continue working while it finishes.'
+const BLOB_DELIVERY_SLOW_POLL_AFTER_MS = 10 * 60 * 1000
 
 function blobDeliveryNotice(
   meetingId: string,
   title: string,
   meeting: MeetingDto,
-  retrying: boolean
-): NonNullable<BlobDeliveryNotice> {
+  retrying: boolean,
+  pendingMessage = 'Saving meeting record to secure storage…'
+): BlobDeliveryNotice {
   const status = meeting.blob_status
   return {
     status,
@@ -104,7 +107,7 @@ function blobDeliveryNotice(
       status === 'uploaded'
         ? 'Meeting record saved to secure storage.'
         : status === 'pending'
-          ? 'Saving meeting record to secure storage…'
+          ? pendingMessage
           : meeting.blob_error_message ?? BLOB_DELIVERY_FALLBACK,
     retrying: status === 'pending' && retrying
   }
@@ -156,12 +159,25 @@ function App(): JSX.Element {
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null)
   const [autoRecordingState, setAutoRecordingState] = useState<'idle' | 'recording' | 'processing'>('idle')
   const [postCaptureNotice, setPostCaptureNotice] = useState<PostCaptureNotice>(null)
-  const [blobDeliveryNoticeState, setBlobDeliveryNoticeState] =
-    useState<BlobDeliveryNotice>(null)
-  const blobDeliveryEpochRef = useRef(0)
+  const [blobDeliveryNotices, setBlobDeliveryNotices] = useState<
+    Record<string, BlobDeliveryNotice>
+  >({})
+  const blobDeliveryEpochSequenceRef = useRef(0)
+  const blobDeliveryEpochsRef = useRef(new Map<string, number>())
+  const blobDeliveryTimersRef = useRef(new Map<string, number>())
   const [interrupted, setInterrupted] = useState<SpillEntry[]>([])
   const { theme, toggle } = useTheme()
   const { items: notifications, unread, markAllRead } = useNotifications(user !== null)
+
+  useEffect(() => {
+    return () => {
+      for (const timer of blobDeliveryTimersRef.current.values()) {
+        window.clearTimeout(timer)
+      }
+      blobDeliveryTimersRef.current.clear()
+      blobDeliveryEpochsRef.current.clear()
+    }
+  }, [])
 
   // On cold start, check whether a persisted MSAL cache exists. If the user was
   // signed in last session, skip the login screen and restore the session from
@@ -586,52 +602,95 @@ function App(): JSX.Element {
     setView(id)
   }
 
-  const watchBlobDelivery = async (
+  const clearBlobDeliveryTimer = (meetingId: string): void => {
+    const timer = blobDeliveryTimersRef.current.get(meetingId)
+    if (timer !== undefined) window.clearTimeout(timer)
+    blobDeliveryTimersRef.current.delete(meetingId)
+  }
+
+  const nextBlobDeliveryEpoch = (meetingId: string): number => {
+    clearBlobDeliveryTimer(meetingId)
+    const epoch = ++blobDeliveryEpochSequenceRef.current
+    blobDeliveryEpochsRef.current.set(meetingId, epoch)
+    return epoch
+  }
+
+  const blobDeliveryIsCurrent = (meetingId: string, epoch: number): boolean =>
+    blobDeliveryEpochsRef.current.get(meetingId) === epoch
+
+  const upsertBlobDeliveryNotice = (notice: BlobDeliveryNotice): void => {
+    setBlobDeliveryNotices((current) => ({
+      ...current,
+      [notice.meetingId]: notice
+    }))
+  }
+
+  const removeBlobDeliveryNotice = (meetingId: string): void => {
+    setBlobDeliveryNotices((current) => {
+      if (!(meetingId in current)) return current
+      const next = { ...current }
+      delete next[meetingId]
+      return next
+    })
+  }
+
+  const watchBlobDelivery = (
     meetingId: string,
     title: string,
     initialMeeting: MeetingDto,
     epoch: number,
     retrying: boolean
-  ): Promise<void> => {
+  ): void => {
     const startedAt = Date.now()
-    let meeting = initialMeeting
 
-    while (blobDeliveryEpochRef.current === epoch) {
-      setBlobDeliveryNoticeState(blobDeliveryNotice(meetingId, title, meeting, retrying))
-      if (meeting.blob_status !== 'pending') return
+    const applyAndSchedule = (meeting: MeetingDto): void => {
+      if (!blobDeliveryIsCurrent(meetingId, epoch)) return
+      clearBlobDeliveryTimer(meetingId)
 
       const elapsedMs = Date.now() - startedAt
-      if (elapsedMs >= BLOB_DELIVERY_POLL_WINDOW_MS) {
-        if (blobDeliveryEpochRef.current === epoch) {
-          setBlobDeliveryNoticeState({
-            status: 'failed',
-            meetingId,
-            title,
-            message: BLOB_DELIVERY_FALLBACK,
-            retrying: false
-          })
-        }
-        return
-      }
-
-      await new Promise<void>((resolve) =>
-        window.setTimeout(resolve, elapsedMs < 120_000 ? 2000 : 5000)
+      upsertBlobDeliveryNotice(
+        blobDeliveryNotice(
+          meetingId,
+          title,
+          meeting,
+          retrying,
+          elapsedMs >= BLOB_DELIVERY_SLOW_POLL_AFTER_MS
+            ? BLOB_DELIVERY_TAKING_LONGER
+            : undefined
+        )
       )
-      if (blobDeliveryEpochRef.current !== epoch) return
+      if (meeting.blob_status !== 'pending') return
 
-      try {
-        const review = await fetchMeetingReview(meetingId)
-        if (blobDeliveryEpochRef.current !== epoch) return
-        if (review) meeting = review.meeting
-      } catch {
-        // Poll through transient failures; never surface transport or provider details.
-      }
+      const delayMs =
+        elapsedMs < 120_000
+          ? 2000
+          : elapsedMs < BLOB_DELIVERY_SLOW_POLL_AFTER_MS
+            ? 5000
+            : 15_000
+      const timer = window.setTimeout(() => {
+        blobDeliveryTimersRef.current.delete(meetingId)
+        if (!blobDeliveryIsCurrent(meetingId, epoch)) return
+
+        void (async () => {
+          let nextMeeting = meeting
+          try {
+            const review = await fetchMeetingReview(meetingId)
+            if (!blobDeliveryIsCurrent(meetingId, epoch)) return
+            if (review) nextMeeting = review.meeting
+          } catch {
+            // Poll through transient failures; never surface transport or provider details.
+          }
+          if (blobDeliveryIsCurrent(meetingId, epoch)) applyAndSchedule(nextMeeting)
+        })()
+      }, delayMs)
+      blobDeliveryTimersRef.current.set(meetingId, timer)
     }
+
+    applyAndSchedule(initialMeeting)
   }
 
   const watchProcessing = (meetingId: string, title: string): void => {
-    const blobDeliveryEpoch = ++blobDeliveryEpochRef.current
-    setBlobDeliveryNoticeState(null)
+    const blobDeliveryEpoch = nextBlobDeliveryEpoch(meetingId)
     setPostCaptureNotice({
       state: 'processing',
       meetingId,
@@ -747,8 +806,8 @@ function App(): JSX.Element {
     meetingId: string,
     title: string
   ): Promise<void> => {
-    const epoch = ++blobDeliveryEpochRef.current
-    setBlobDeliveryNoticeState({
+    const epoch = nextBlobDeliveryEpoch(meetingId)
+    upsertBlobDeliveryNotice({
       status: 'pending',
       meetingId,
       title,
@@ -758,17 +817,17 @@ function App(): JSX.Element {
 
     try {
       const meeting = await retryBlobDelivery(meetingId)
-      if (blobDeliveryEpochRef.current !== epoch) return
+      if (!blobDeliveryIsCurrent(meetingId, epoch)) return
       if (meeting) {
-        await watchBlobDelivery(meetingId, title, meeting, epoch, true)
+        watchBlobDelivery(meetingId, title, meeting, epoch, true)
         return
       }
     } catch {
       // The error may contain implementation details; show only the fixed fallback.
     }
 
-    if (blobDeliveryEpochRef.current === epoch) {
-      setBlobDeliveryNoticeState({
+    if (blobDeliveryIsCurrent(meetingId, epoch)) {
+      upsertBlobDeliveryNotice({
         status: 'failed',
         meetingId,
         title,
@@ -778,9 +837,9 @@ function App(): JSX.Element {
     }
   }
 
-  const dismissBlobDeliveryNotice = (): void => {
-    blobDeliveryEpochRef.current += 1
-    setBlobDeliveryNoticeState(null)
+  const dismissBlobDeliveryNotice = (meetingId: string): void => {
+    nextBlobDeliveryEpoch(meetingId)
+    removeBlobDeliveryNotice(meetingId)
   }
 
   const retryTranscriptEmail = async (meetingId: string, title: string): Promise<void> => {
@@ -1066,14 +1125,18 @@ function App(): JSX.Element {
     // onEnrolled refetch below) can detect this logout and discard its
     // result instead of landing a stale status into the next session.
     enrolmentEpochRef.current += 1
-    blobDeliveryEpochRef.current += 1
+    for (const timer of blobDeliveryTimersRef.current.values()) {
+      window.clearTimeout(timer)
+    }
+    blobDeliveryTimersRef.current.clear()
+    blobDeliveryEpochsRef.current.clear()
     localStorage.removeItem(USER_KEY)
     setRecording(null)
     setCurrentPerson(null)
     setEnrolmentStatus(null)
     setEnrollmentError(null)
     setEnrollmentLoading(false)
-    setBlobDeliveryNoticeState(null)
+    setBlobDeliveryNotices({})
     setView('home')
     setUser(null)
     if (typeof window.api?.signOut === 'function') {
@@ -1214,7 +1277,7 @@ function App(): JSX.Element {
           postCaptureNotice={postCaptureNotice}
           onDismissPostCaptureNotice={() => setPostCaptureNotice(null)}
           onRetryPostCapture={(meetingId, title) => void retryPostCapture(meetingId, title)}
-          blobDeliveryNotice={blobDeliveryNoticeState}
+          blobDeliveryNotices={Object.values(blobDeliveryNotices)}
           onDismissBlobDeliveryNotice={dismissBlobDeliveryNotice}
           onRetryBlobDelivery={(meetingId, title) =>
             void retryMeetingBlobDelivery(meetingId, title)
