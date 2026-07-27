@@ -471,14 +471,15 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     `require_admin` sentence.
   - **Desktop branch and commit evidence:**
     `codex/in-386-meeting-blob-delivery` contains, in order,
-    `8ffc2a9`, `e15ddf7`, `865856e`, `78bb74c`, `207f58b`, `6de4f92`,
-    `c57e40e`, `1c82d74`, `dcb2332`, `e2a5f47`, `98dd1ff`, `976de81`,
-    `3704e0a`, `17d5b5e`, and `845e737` (the final implementation commit
-    before this evidence entry). These cover the
-    typed Storage API seam, safe streamed audio upload, non-blocking persisted
-    delivery state, guarded delivery generations, pipeline/finalisation/retry
-    wiring and audit truthfulness, exact Electron token routing, and the
-    reachable Home notices.
+    `becfdb7`, `a36eef6`, `670b62a`, `8e2ac6c`, `b999351`, `2664e55`,
+    `965198e`, `6d958ab`, `071b990`, `6203c82`, `6d09f2b`, `51fae45`,
+    `6189efb`, `2a57617`, `850e227`, `ed8a4e4`, `b90f3c8`, and `6c3d6e0`.
+    These rebased commits cover the typed Storage API seam, safe streamed
+    audio upload, non-blocking persisted delivery state, guarded delivery
+    generations, pipeline/finalisation/retry wiring and audit truthfulness,
+    exact Electron token routing, reachable Home notices, evidence, and
+    failed-only duplicate-retry protection. The branch is based on local
+    `main` at `4a3eede`, so the parallel IN-478/IN-477 work is included.
   - **Contract and lifecycle:** the consumer uses
     `PUT /api/v1/meetings/{meeting_id}/export` and
     `POST /api/v1/meetings/{meeting_id}/audio/upload-sas`. Pipeline-ready
@@ -501,14 +502,42 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     backend. Audio is streamed by the backend directly to the scoped upload
     grant, while persisted state/audit output contains only safe status
     metadata.
-  - **Evidence recorded before Task 7:** TDD introduced focused client,
-    delivery-state, trigger/retry/finalisation, token-route, and Home-notice
-    coverage; review fixes include malformed-target redaction, delivery
-    generation guards, truthful retry audits, concurrent notice handling, and
-    restoring actionable notices. Prior Storage API evidence records `214`
-    tests; the desktop's current evidence records `219` tests. These are not a
-    final full-verification claim: Task 7 must rerun and refresh the complete
-    verification counts, lint/review, local wire smoke, and privacy review.
+  - **TDD and independent review:** focused client, delivery-state,
+    trigger/retry/finalisation, token-route, and Home-notice coverage was
+    written red-first. Review fixes include malformed-target redaction,
+    delivery-generation guards, truthful retry audits, failed-only retry,
+    concurrent notice handling, authenticated notice restoration, cancellable
+    polling, and the reachable-Home boundary.
+  - **Final verification (27 July 2026, after rebasing onto `4a3eede`):**
+    Storage API `215 passed` with one pre-existing Starlette deprecation
+    warning; Ruff and `git diff main...HEAD --check` passed. Desktop backend
+    `228 tests` passed. `npm run verify:storage-cutover`,
+    `npm run verify:graph`, `npm run verify:email-notice`,
+    `npm run verify:toast-xml`, `npm run typecheck`, `npm run build`,
+    contract SHA-256 comparison, and `git diff --check` passed. The Graph
+    verifier emitted only the sandbox's expected inability to write its
+    optional Electron log under AppData; assertions still passed.
+  - **Isolated local smoke:** with a temporary `MN_DATA_DIR`, enabled stub
+    delivery, and an empty Storage API URL, full audio+JSON delivery reached
+    `uploaded`; an injected failure became retryable and the authenticated
+    retry returned to `uploaded`; finalisation created one JSON history
+    revision while the audio hash and modification time stayed unchanged.
+    The temporary directory was removed on exit.
+  - **Field-by-field privacy review:** the only new renderer fields are
+    `blob_status` and fixed-safe `blob_error_message`. Electron main owns the
+    delegated token; the backend-internal SAS grant is `repr=False`, is never
+    returned to the renderer, and is not snapshotted or audited. Local audits
+    contain actor, meeting title/ID, action, and status transitions only.
+    Central events remain `meeting_json_written` (`meeting_id`,
+    `schema_version`, `revision`) and `meeting_audio_sas_issued`
+    (`meeting_id`). Searches found token/SAS literals only in transport code,
+    contract placeholders, and redaction tests—not in renderer responses,
+    logs, or persistence.
+  - **Lifecycle review:** the `meetings-audio/` Cool-at-30/delete-at-365 rule
+    is correctly prefix-scoped, but deploying the account-level
+    `managementPolicies/default` resource replaces the entire existing
+    lifecycle policy. The mandatory human-reviewed Azure `what-if` remains
+    required before any apply.
   - **Release/operations state:** no Jira transition, merge, push, deployment,
     or production smoke was performed. A production meeting smoke remains
     pending and is an approval-gated production write. The Storage API Bicep

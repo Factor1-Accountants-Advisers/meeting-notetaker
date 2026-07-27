@@ -337,7 +337,7 @@ class StubStorageApiClient:
 
 
 class RestStorageApiClient:
-    """Provisional REST binding for IN-471 (contract not yet published)."""
+    """REST binding for the ratified Storage API v1 contract."""
 
     def __init__(
         self,
