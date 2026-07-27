@@ -53,6 +53,12 @@ class DeliveryStatus(str, Enum):
     failed = "failed"
 
 
+class BlobStatus(str, Enum):
+    pending = "pending"
+    uploaded = "uploaded"
+    failed = "failed"
+
+
 class SharePointStatus(str, Enum):
     not_started = "not_started"
     saving = "saving"
@@ -165,6 +171,8 @@ class Meeting(BaseModel):
     processing_error_code: str | None = None
     processing_error_message: str | None = None
     processing_attempt: int = 0
+    blob_status: BlobStatus = BlobStatus.pending
+    blob_error_message: str | None = None
     delivery_status: DeliveryStatus = DeliveryStatus.not_started
     delivery_error_message: str | None = None
     # Who the transcript email actually went to and when, kept so a repeated

@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import store
 from app.config import get_settings
 from app.routers import action_items, health, meetings, people, search
+from app.services.blob_delivery import reconcile_interrupted_blob_deliveries
 from app.services.pipeline import pipeline_watchdog_loop, reconcile_interrupted_pipelines
 from app.services.retention import retention_loop
 
@@ -15,6 +16,7 @@ from app.services.retention import retention_loop
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     reconcile_interrupted_pipelines()
+    reconcile_interrupted_blob_deliveries()
     tasks = [
         asyncio.create_task(retention_loop()),
         asyncio.create_task(pipeline_watchdog_loop()),
