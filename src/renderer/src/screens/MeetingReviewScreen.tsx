@@ -230,7 +230,16 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
     if (live) {
       const dto = await finalizeMeeting(meetingId)
       if (dto) {
-        setVm((prev) => (prev ? { ...prev, finalized: dto.status === 'finalized' } : prev))
+        setVm((prev) =>
+          prev
+            ? {
+                ...prev,
+                finalized: dto.status === 'finalized',
+                blobStatus: dto.blob_status,
+                blobErrorMessage: dto.blob_error_message
+              }
+            : prev
+        )
         refreshAudit()
         return
       }
