@@ -5,7 +5,7 @@ import {
   AttendeePicker,
   type ManualAttendee
 } from '@renderer/components/AttendeePicker'
-import { staff as sampleStaff, type StaffMember } from '@renderer/data/mock'
+import { staff as sampleStaff, type BlobStatus, type StaffMember } from '@renderer/data/mock'
 import { fetchPeople } from '@renderer/lib/api'
 import { useLive } from '@renderer/lib/useLive'
 
@@ -32,6 +32,15 @@ interface HomeProps {
   } | null
   onDismissPostCaptureNotice?: () => void
   onRetryPostCapture?: (meetingId: string, title: string) => void
+  blobDeliveryNotice?: {
+    status: BlobStatus
+    meetingId: string
+    title: string
+    message: string
+    retrying: boolean
+  } | null
+  onDismissBlobDeliveryNotice?: () => void
+  onRetryBlobDelivery?: (meetingId: string, title: string) => void
   onShowRecording?: () => void
 }
 
@@ -46,6 +55,9 @@ export function HomeScreen({
   postCaptureNotice,
   onDismissPostCaptureNotice,
   onRetryPostCapture,
+  blobDeliveryNotice,
+  onDismissBlobDeliveryNotice,
+  onRetryBlobDelivery,
   onShowRecording
 }: HomeProps): JSX.Element {
   const { data: staff, offline } = useLive(fetchPeople, sampleStaff)
@@ -83,6 +95,13 @@ export function HomeScreen({
           onRetry={onRetryPostCapture}
         />
       )}
+      {blobDeliveryNotice && (
+        <BlobDeliveryNoticeCard
+          notice={blobDeliveryNotice}
+          onDismiss={onDismissBlobDeliveryNotice}
+          onRetry={onRetryBlobDelivery}
+        />
+      )}
       <CaptureCard
         onStart={onStartRecording}
         onUpload={onUploadRecording}
@@ -91,6 +110,71 @@ export function HomeScreen({
         directoryUnavailable={offline}
       />
     </div>
+  )
+}
+
+function BlobDeliveryNoticeCard({
+  notice,
+  onDismiss,
+  onRetry
+}: {
+  notice: NonNullable<HomeProps['blobDeliveryNotice']>
+  onDismiss?: () => void
+  onRetry?: (meetingId: string, title: string) => void
+}): JSX.Element {
+  const failed = notice.status === 'failed'
+  const terminal = notice.status !== 'pending'
+  const icon =
+    notice.status === 'uploaded' ? (
+      <CheckCircle2 size={16} strokeWidth={1.75} />
+    ) : failed ? (
+      <XCircle size={16} strokeWidth={1.75} />
+    ) : (
+      <Loader2 size={16} strokeWidth={1.75} />
+    )
+  const toneClass =
+    notice.status === 'uploaded'
+      ? '!border-edge-success !bg-bg-success text-content-success'
+      : failed
+        ? '!border-edge-danger !bg-bg-danger text-content-danger'
+        : '!border-edge-info !bg-bg-info text-content-info'
+
+  return (
+    <Card className={`!rounded-md !px-3 !py-2.5 ${toneClass}`}>
+      <div className="flex items-start gap-2">
+        <div className="mt-0.5 shrink-0">{icon}</div>
+        <div
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className="min-w-0 flex-1"
+        >
+          <div className="truncate text-[13px] font-medium">{notice.title}</div>
+          <div className="mt-0.5 text-[12px] opacity-90">{notice.message}</div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {(failed || notice.retrying) && onRetry && (
+            <button
+              type="button"
+              disabled={notice.retrying}
+              className="rounded-sm border-[0.5px] border-current px-2 py-1 text-[12px] opacity-85 hover:opacity-100 focus:border-brand-blue focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
+              onClick={() => onRetry(notice.meetingId, notice.title)}
+            >
+              {notice.retrying ? 'Retrying…' : 'Retry upload'}
+            </button>
+          )}
+          {terminal && onDismiss && (
+            <button
+              type="button"
+              className="text-[12px] opacity-80 hover:opacity-100 focus:outline-none focus:ring-1 focus:ring-brand-blue"
+              onClick={onDismiss}
+            >
+              Dismiss
+            </button>
+          )}
+        </div>
+      </div>
+    </Card>
   )
 }
 

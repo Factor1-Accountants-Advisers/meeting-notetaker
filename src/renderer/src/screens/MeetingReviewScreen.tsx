@@ -32,7 +32,6 @@ import {
   mapActionItem,
   nameSpeaker,
   patchActionItem,
-  retryBlobDelivery,
   retryPipeline,
   revokeAccess,
   toneFor,
@@ -45,7 +44,6 @@ import {
   meetings,
   staffNames,
   type ActionItem,
-  type BlobStatus,
   type PipelineStatus
 } from '@renderer/data/mock'
 import type { Tone } from '@renderer/components/ui/tones'
@@ -61,8 +59,6 @@ interface ReviewVm {
   finalized: boolean
   sourceLabel: string
   pipelineStatus: PipelineStatus
-  blobStatus: BlobStatus
-  blobErrorMessage: string | null
   summary: string
   participants: { name: string; known: boolean; tone: Tone }[]
   segments: { id: string; speaker: string; known: boolean; time: string; text: string }[]
@@ -93,8 +89,6 @@ function vmFromDto(dto: MeetingReviewDto): ReviewVm {
     finalized: dto.meeting.status === 'finalized',
     sourceLabel: SOURCE_LABELS[dto.meeting.source],
     pipelineStatus: dto.meeting.pipeline_status,
-    blobStatus: dto.meeting.blob_status,
-    blobErrorMessage: dto.meeting.blob_error_message,
     summary: dto.summary_text ?? '',
     participants: dto.participants.map((p) => ({
       name: p.name,
@@ -123,8 +117,6 @@ function vmFromSample(meetingId: string): ReviewVm | null {
     finalized: meeting.status === 'Finalized',
     sourceLabel: SOURCE_LABELS[meeting.source],
     pipelineStatus: meeting.pipelineStatus,
-    blobStatus: meeting.blobStatus,
-    blobErrorMessage: meeting.blobErrorMessage,
     summary: detail.summary,
     participants: detail.participants.map((p) => ({
       name: p.name,
@@ -164,12 +156,8 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
   const [audit, setAudit] = useState<AuditEntryDto[]>([])
   const [emailOpen, setEmailOpen] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
-  const [retryingBlobDelivery, setRetryingBlobDelivery] = useState(false)
 
-  const inFlight =
-    vm?.pipelineStatus === 'queued' ||
-    vm?.pipelineStatus === 'processing' ||
-    (live && vm?.pipelineStatus === 'ready' && vm.blobStatus === 'pending')
+  const inFlight = vm?.pipelineStatus === 'queued' || vm?.pipelineStatus === 'processing'
 
   useEffect(() => {
     let cancelled = false
@@ -230,16 +218,7 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
     if (live) {
       const dto = await finalizeMeeting(meetingId)
       if (dto) {
-        setVm((prev) =>
-          prev
-            ? {
-                ...prev,
-                finalized: dto.status === 'finalized',
-                blobStatus: dto.blob_status,
-                blobErrorMessage: dto.blob_error_message
-              }
-            : prev
-        )
+        setVm((prev) => (prev ? { ...prev, finalized: dto.status === 'finalized' } : prev))
         refreshAudit()
         return
       }
@@ -251,45 +230,6 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
     const dto = await retryPipeline(meetingId)
     if (dto)
       setVm((prev) => (prev ? { ...prev, pipelineStatus: dto.pipeline_status } : prev))
-  }
-
-  const handleRetryBlobDelivery = async (): Promise<void> => {
-    if (retryingBlobDelivery) return
-
-    setRetryingBlobDelivery(true)
-    setVm((prev) =>
-      prev ? { ...prev, blobStatus: 'pending', blobErrorMessage: null } : prev
-    )
-
-    try {
-      const dto = await retryBlobDelivery(meetingId)
-      if (dto) {
-        setVm((prev) =>
-          prev
-            ? {
-                ...prev,
-                blobStatus: dto.blob_status,
-                blobErrorMessage: dto.blob_error_message
-              }
-            : prev
-        )
-        return
-      }
-    } catch {
-      // The service error may contain implementation details; show a fixed safe message instead.
-    } finally {
-      setRetryingBlobDelivery(false)
-    }
-
-    setVm((prev) =>
-      prev
-        ? {
-            ...prev,
-            blobStatus: 'failed',
-            blobErrorMessage: 'Secure storage upload failed. Retry when connected.'
-          }
-        : prev
-    )
   }
 
   const handleEditSegment = async (index: number, text: string): Promise<void> => {
@@ -397,14 +337,6 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
       ) : (
         <>
           {live && <AudioCard meetingId={meetingId} />}
-          {live && vm.blobStatus && (
-            <BlobDeliveryCard
-              status={vm.blobStatus}
-              error={vm.blobErrorMessage}
-              retrying={retryingBlobDelivery}
-              onRetry={() => void handleRetryBlobDelivery()}
-            />
-          )}
           <ParticipantsCard vm={vm} onName={handleName} />
           <Card>
             <SectionHeader icon={Sparkles} title="Summary" meta="AI-generated" />
@@ -448,44 +380,6 @@ function FailedCard({ onRetry }: { onRetry: () => void }): JSX.Element {
       >
         Retry processing
       </button>
-    </Card>
-  )
-}
-
-function BlobDeliveryCard({
-  status,
-  error,
-  retrying,
-  onRetry
-}: {
-  status: BlobStatus
-  error: string | null
-  retrying: boolean
-  onRetry: () => void
-}): JSX.Element {
-  const failed = status === 'failed'
-  const message =
-    status === 'uploaded'
-      ? 'Meeting record saved to secure storage.'
-      : status === 'pending'
-        ? 'Saving meeting record to secure storage…'
-        : error ?? 'Secure storage upload failed. Retry when connected.'
-
-  return (
-    <Card className="flex items-center justify-between gap-3">
-      <div className={failed ? 'text-[13px] text-content-danger' : 'text-[13px] text-content-primary'}>
-        {message}
-      </div>
-      {failed && (
-        <button
-          type="button"
-          disabled={retrying}
-          onClick={onRetry}
-          className="shrink-0 rounded-md border-[0.5px] border-edge-secondary px-3 py-1.5 text-[12px] text-content-primary hover:bg-bg-secondary focus:border-brand-blue focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
-        >
-          {retrying ? 'Retrying…' : 'Retry upload'}
-        </button>
-      )}
     </Card>
   )
 }
