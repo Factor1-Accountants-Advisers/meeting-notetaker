@@ -50,6 +50,34 @@ assert.equal(
 )
 assert.equal(
   isStorageRoute({
+    method: 'POST',
+    path: '/api/v1/meetings/9ab402de-a57f-45a6-8cde-4f89902f5d0b/finalize'
+  }),
+  true
+)
+assert.equal(
+  isStorageRoute({
+    method: 'POST',
+    path: '/api/v1/meetings/9ab402de-a57f-45a6-8cde-4f89902f5d0b/blob/retry'
+  }),
+  true
+)
+assert.equal(
+  isStorageRoute({
+    method: 'GET',
+    path: '/api/v1/meetings/9ab402de-a57f-45a6-8cde-4f89902f5d0b/blob/retry'
+  }),
+  false
+)
+assert.equal(
+  isStorageRoute({
+    method: 'POST',
+    path: '/api/v1/meetings/9ab402de-a57f-45a6-8cde-4f89902f5d0b/email'
+  }),
+  false
+)
+assert.equal(
+  isStorageRoute({
     method: 'GET',
     path: '/api/v1/meetings/9ab402de-a57f-45a6-8cde-4f89902f5d0b'
   }),

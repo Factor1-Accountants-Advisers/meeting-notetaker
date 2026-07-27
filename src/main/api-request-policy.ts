@@ -19,11 +19,11 @@ export function timeoutMsFor(req: ApiRequest): number {
 
 export function isStorageRoute(req: Pick<ApiRequest, 'method' | 'path'>): boolean {
   const path = loggablePath(req.path)
-  const meetingProcessingRoute =
+  const storageBackedMeetingRoute =
     req.method === 'POST' &&
-    /^\/api\/v1\/meetings\/[^/]+\/(?:audio|retry)$/.test(path)
+    /^\/api\/v1\/meetings\/[^/]+\/(?:audio|retry|finalize|blob\/retry)$/.test(path)
   return (
-    meetingProcessingRoute ||
+    storageBackedMeetingRoute ||
     (req.method === 'GET' && path === '/api/v1/people/me/enrolment-status') ||
     (req.method === 'POST' && /^\/api\/v1\/people\/[^/]+\/enroll$/.test(path))
   )
