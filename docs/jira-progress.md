@@ -473,7 +473,8 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     `codex/in-386-meeting-blob-delivery` contains, in order,
     `8ffc2a9`, `e15ddf7`, `865856e`, `78bb74c`, `207f58b`, `6de4f92`,
     `c57e40e`, `1c82d74`, `dcb2332`, `e2a5f47`, `98dd1ff`, `976de81`,
-    `3704e0a`, `17d5b5e`, and `845e737` (the current tip). These cover the
+    `3704e0a`, `17d5b5e`, and `845e737` (the final implementation commit
+    before this evidence entry). These cover the
     typed Storage API seam, safe streamed audio upload, non-blocking persisted
     delivery state, guarded delivery generations, pipeline/finalisation/retry
     wiring and audit truthfulness, exact Electron token routing, and the
