@@ -5,6 +5,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import get_type_hints
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -244,6 +245,28 @@ class BlobDeliveryTests(unittest.IsolatedAsyncioTestCase):
             include_audio=include_audio,
             client=client,
         )
+
+    async def test_unknown_meeting_returns_none_without_side_effects(self):
+        client = CaptureStorageClient()
+        unknown_id = uuid4()
+
+        with patch("app.services.blob_delivery.store.save_snapshot") as save:
+            result = await deliver_meeting_to_blob(
+                unknown_id,
+                access_token="access-token",
+                actor="Joseph",
+                include_audio=True,
+                client=client,
+            )
+
+        self.assertIsNone(result)
+        self.assertEqual(
+            get_type_hints(deliver_meeting_to_blob)["return"],
+            Meeting | None,
+        )
+        self.assertEqual(client.calls, [])
+        self.assertEqual(store.AUDIT_LOG, [])
+        save.assert_not_called()
 
     async def test_full_delivery_orders_sas_audio_then_export(self):
         client = CaptureStorageClient()

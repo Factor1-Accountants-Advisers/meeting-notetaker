@@ -23,7 +23,7 @@ EXPORT_FAILURE = (
 INTERRUPTED_FAILURE = (
     "Secure storage upload was interrupted. Retry when connected."
 )
-_BLOB_DELIVERY_TASKS: set[asyncio.Task[Meeting]] = set()
+_BLOB_DELIVERY_TASKS: set[asyncio.Task[Meeting | None]] = set()
 
 
 def meeting_time_basis_utc(meeting: Meeting, export_payload: dict) -> datetime:
@@ -94,11 +94,11 @@ async def deliver_meeting_to_blob(
     actor: str,
     include_audio: bool,
     client: StorageApiClient | None = None,
-) -> Meeting:
+) -> Meeting | None:
     """Upload one ready meeting without allowing delivery failures to escape."""
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is None:
-        return None  # type: ignore[return-value]
+        return None
 
     try:
         settings = get_settings()
@@ -197,7 +197,7 @@ def kick_blob_delivery(
     actor: str,
     include_audio: bool,
     client: StorageApiClient | None = None,
-) -> asyncio.Task[Meeting] | None:
+) -> asyncio.Task[Meeting | None] | None:
     """Launch retained background delivery and expose pending immediately."""
     if not get_settings().storage_api_enabled:
         return None
