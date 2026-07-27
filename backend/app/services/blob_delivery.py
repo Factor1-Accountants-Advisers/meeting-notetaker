@@ -1,7 +1,12 @@
 """Non-blocking delivery of processed meeting artifacts to secure storage."""
 
 import asyncio
+import os
+import shutil
+import tempfile
+from copy import deepcopy
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import UUID
 
 from app import store
@@ -24,6 +29,7 @@ INTERRUPTED_FAILURE = (
     "Secure storage upload was interrupted. Retry when connected."
 )
 _BLOB_DELIVERY_TASKS: set[asyncio.Task[Meeting | None]] = set()
+_DELIVERY_LOCKS: dict[UUID, asyncio.Lock] = {}
 
 
 def meeting_time_basis_utc(meeting: Meeting, export_payload: dict) -> datetime:
@@ -52,22 +58,76 @@ def _safe_snapshot() -> None:
         pass
 
 
-def _set_pending(meeting: Meeting) -> None:
+def _set_pending(meeting: Meeting) -> datetime:
+    started_at = datetime.now(timezone.utc)
     meeting.blob_status = BlobStatus.pending
     meeting.blob_error_message = None
+    store.BLOB_DELIVERY_STARTED_AT[meeting.id] = started_at
     _safe_snapshot()
+    return started_at
+
+
+def _clear_started_marker(meeting_id: UUID, started_at: datetime | None) -> bool:
+    if (
+        started_at is not None
+        and store.BLOB_DELIVERY_STARTED_AT.get(meeting_id) == started_at
+    ):
+        store.BLOB_DELIVERY_STARTED_AT.pop(meeting_id, None)
+        return True
+    return False
+
+
+def _current_run(
+    meeting_id: UUID,
+    processing_attempt: int,
+    started_at: datetime,
+) -> Meeting | None:
+    meeting = store.MEETINGS.get(meeting_id)
+    if (
+        meeting is None
+        or meeting.processing_attempt != processing_attempt
+        or meeting.pipeline_status is not PipelineStatus.ready
+        or store.BLOB_DELIVERY_STARTED_AT.get(meeting_id) != started_at
+    ):
+        return None
+    return meeting
+
+
+def _abort_superseded(
+    meeting_id: UUID,
+    started_at: datetime | None,
+) -> Meeting | None:
+    if _clear_started_marker(meeting_id, started_at):
+        _safe_snapshot()
+    return store.MEETINGS.get(meeting_id)
 
 
 def _finish(
-    meeting: Meeting,
+    meeting_id: UUID,
     *,
+    processing_attempt: int,
+    started_at: datetime | None,
     status: BlobStatus,
     error_message: str | None,
     actor: str,
-) -> Meeting:
+    require_ready: bool = True,
+) -> Meeting | None:
+    meeting = store.MEETINGS.get(meeting_id)
+    if (
+        meeting is None
+        or meeting.processing_attempt != processing_attempt
+        or (require_ready and meeting.pipeline_status is not PipelineStatus.ready)
+        or (
+            started_at is not None
+            and store.BLOB_DELIVERY_STARTED_AT.get(meeting_id) != started_at
+        )
+    ):
+        return _abort_superseded(meeting_id, started_at)
+
     before = meeting.blob_status.value
     meeting.blob_status = status
     meeting.blob_error_message = error_message
+    _clear_started_marker(meeting_id, started_at)
     try:
         store.add_audit(
             actor,
@@ -87,6 +147,30 @@ def _finish(
     return meeting
 
 
+def _snapshot_audio(source: Path, meeting_id: UUID) -> Path:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f"mn-blob-{meeting_id}-",
+        suffix=".webm",
+    )
+    os.close(descriptor)
+    snapshot = Path(temporary_name)
+    try:
+        shutil.copyfile(source, snapshot)
+    except Exception:
+        snapshot.unlink(missing_ok=True)
+        raise
+    return snapshot
+
+
+async def _remove_audio_snapshot(snapshot: Path | None) -> None:
+    if snapshot is None:
+        return
+    try:
+        await asyncio.to_thread(snapshot.unlink, missing_ok=True)
+    except Exception:
+        pass
+
+
 async def deliver_meeting_to_blob(
     meeting_id: UUID,
     *,
@@ -96,98 +180,148 @@ async def deliver_meeting_to_blob(
     client: StorageApiClient | None = None,
 ) -> Meeting | None:
     """Upload one ready meeting without allowing delivery failures to escape."""
-    meeting = store.MEETINGS.get(meeting_id)
-    if meeting is None:
-        return None
+    lock = _DELIVERY_LOCKS.setdefault(meeting_id, asyncio.Lock())
+    async with lock:
+        meeting = store.MEETINGS.get(meeting_id)
+        if meeting is None:
+            return None
 
-    try:
-        settings = get_settings()
-        if not settings.storage_api_enabled:
-            return meeting
+        processing_attempt = meeting.processing_attempt
+        started_at: datetime | None = None
+        audio_snapshot: Path | None = None
+        try:
+            settings = get_settings()
+            if not settings.storage_api_enabled:
+                return meeting
 
-        export_payload = store.MEETING_EXPORTS.get(meeting_id)
-        if (
-            meeting.pipeline_status is not PipelineStatus.ready
-            or export_payload is None
-        ):
-            return _finish(
-                meeting,
-                status=BlobStatus.failed,
-                error_message=PREREQUISITE_FAILURE,
-                actor=actor,
-            )
+            stored_export = store.MEETING_EXPORTS.get(meeting_id)
+            if (
+                meeting.pipeline_status is not PipelineStatus.ready
+                or stored_export is None
+            ):
+                return _finish(
+                    meeting_id,
+                    processing_attempt=processing_attempt,
+                    started_at=store.BLOB_DELIVERY_STARTED_AT.get(meeting_id),
+                    status=BlobStatus.failed,
+                    error_message=PREREQUISITE_FAILURE,
+                    actor=actor,
+                    require_ready=False,
+                )
 
-        _set_pending(meeting)
+            export_payload = deepcopy(stored_export)
+            started_at = _set_pending(meeting)
 
-        if settings.storage_api_url and not (access_token or "").strip():
-            return _finish(
-                meeting,
-                status=BlobStatus.failed,
-                error_message=SIGN_IN_FAILURE,
-                actor=actor,
-            )
+            if settings.storage_api_url and not (access_token or "").strip():
+                return _finish(
+                    meeting_id,
+                    processing_attempt=processing_attempt,
+                    started_at=started_at,
+                    status=BlobStatus.failed,
+                    error_message=SIGN_IN_FAILURE,
+                    actor=actor,
+                )
 
-        resolved_client = client if client is not None else get_storage_api_client()
-        time_basis_utc = meeting_time_basis_utc(meeting, export_payload)
+            resolved_client = client if client is not None else get_storage_api_client()
+            time_basis_utc = meeting_time_basis_utc(meeting, export_payload)
 
-        if include_audio:
-            try:
-                audio_path = audio_dir() / f"{meeting_id}.webm"
-                if not audio_path.is_file():
+            if include_audio:
+                try:
+                    if _current_run(
+                        meeting_id,
+                        processing_attempt,
+                        started_at,
+                    ) is None:
+                        return _abort_superseded(meeting_id, started_at)
+                    source_audio = audio_dir() / f"{meeting_id}.webm"
+                    audio_snapshot = await asyncio.to_thread(
+                        _snapshot_audio,
+                        source_audio,
+                        meeting_id,
+                    )
+                    if _current_run(
+                        meeting_id,
+                        processing_attempt,
+                        started_at,
+                    ) is None:
+                        return _abort_superseded(meeting_id, started_at)
+                    grant = await asyncio.to_thread(
+                        resolved_client.request_audio_upload_sas,
+                        meeting_id,
+                        time_basis_utc,
+                        access_token,
+                    )
+                    if _current_run(
+                        meeting_id,
+                        processing_attempt,
+                        started_at,
+                    ) is None:
+                        return _abort_superseded(meeting_id, started_at)
+                    await asyncio.to_thread(
+                        resolved_client.upload_audio_to_grant,
+                        grant,
+                        audio_snapshot,
+                    )
+                    if _current_run(
+                        meeting_id,
+                        processing_attempt,
+                        started_at,
+                    ) is None:
+                        return _abort_superseded(meeting_id, started_at)
+                except Exception:
                     return _finish(
-                        meeting,
+                        meeting_id,
+                        processing_attempt=processing_attempt,
+                        started_at=started_at,
                         status=BlobStatus.failed,
                         error_message=AUDIO_FAILURE,
                         actor=actor,
                     )
-                grant = await asyncio.to_thread(
-                    resolved_client.request_audio_upload_sas,
+
+            if _current_run(
+                meeting_id,
+                processing_attempt,
+                started_at,
+            ) is None:
+                return _abort_superseded(meeting_id, started_at)
+            try:
+                await asyncio.to_thread(
+                    resolved_client.upload_meeting_export,
                     meeting_id,
                     time_basis_utc,
+                    export_payload,
                     access_token,
-                )
-                await asyncio.to_thread(
-                    resolved_client.upload_audio_to_grant,
-                    grant,
-                    audio_path,
                 )
             except Exception:
                 return _finish(
-                    meeting,
+                    meeting_id,
+                    processing_attempt=processing_attempt,
+                    started_at=started_at,
                     status=BlobStatus.failed,
-                    error_message=AUDIO_FAILURE,
+                    error_message=EXPORT_FAILURE,
                     actor=actor,
                 )
 
-        try:
-            await asyncio.to_thread(
-                resolved_client.upload_meeting_export,
+            return _finish(
                 meeting_id,
-                time_basis_utc,
-                export_payload,
-                access_token,
+                processing_attempt=processing_attempt,
+                started_at=started_at,
+                status=BlobStatus.uploaded,
+                error_message=None,
+                actor=actor,
             )
         except Exception:
             return _finish(
-                meeting,
+                meeting_id,
+                processing_attempt=processing_attempt,
+                started_at=started_at,
                 status=BlobStatus.failed,
                 error_message=EXPORT_FAILURE,
                 actor=actor,
+                require_ready=started_at is not None,
             )
-
-        return _finish(
-            meeting,
-            status=BlobStatus.uploaded,
-            error_message=None,
-            actor=actor,
-        )
-    except Exception:
-        return _finish(
-            meeting,
-            status=BlobStatus.failed,
-            error_message=EXPORT_FAILURE,
-            actor=actor,
-        )
+        finally:
+            await _remove_audio_snapshot(audio_snapshot)
 
 
 def kick_blob_delivery(
@@ -222,13 +356,15 @@ def kick_blob_delivery(
 def reconcile_interrupted_blob_deliveries() -> int:
     """Make orphaned ready/pending deliveries honest and retryable."""
     changed = 0
-    for meeting in store.MEETINGS.values():
+    for meeting_id, meeting in store.MEETINGS.items():
         if (
             meeting.pipeline_status is PipelineStatus.ready
             and meeting.blob_status is BlobStatus.pending
+            and meeting_id in store.BLOB_DELIVERY_STARTED_AT
         ):
             meeting.blob_status = BlobStatus.failed
             meeting.blob_error_message = INTERRUPTED_FAILURE
+            store.BLOB_DELIVERY_STARTED_AT.pop(meeting_id, None)
             changed += 1
     if changed:
         _safe_snapshot()

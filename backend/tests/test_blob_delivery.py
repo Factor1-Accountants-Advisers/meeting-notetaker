@@ -1,6 +1,7 @@
 import asyncio
 import json
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -104,6 +105,55 @@ class CaptureStorageClient:
         self._maybe_fail("export")
 
 
+class BlockingExportClient(CaptureStorageClient):
+    def __init__(self):
+        super().__init__()
+        self.guard = threading.Lock()
+        self.first_entered = threading.Event()
+        self.release = threading.Event()
+        self.active = 0
+        self.max_active = 0
+
+    def upload_meeting_export(
+        self,
+        meeting_id,
+        time_basis_utc,
+        export_payload,
+        access_token,
+    ):
+        with self.guard:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            self.first_entered.set()
+        try:
+            self.release.wait(timeout=5)
+            super().upload_meeting_export(
+                meeting_id,
+                time_basis_utc,
+                export_payload,
+                access_token,
+            )
+        finally:
+            with self.guard:
+                self.active -= 1
+
+
+class BlockingAudioClient(CaptureStorageClient):
+    def __init__(self):
+        super().__init__()
+        self.audio_started = threading.Event()
+        self.release = threading.Event()
+        self.audio_path = None
+        self.audio_bytes = None
+
+    def upload_audio_to_grant(self, grant, audio_path):
+        self.calls.append(("audio", grant, audio_path))
+        self.audio_path = audio_path
+        self.audio_bytes = audio_path.read_bytes()
+        self.audio_started.set()
+        self.release.wait(timeout=5)
+
+
 class BlobStateSchemaTests(unittest.TestCase):
     def test_enum_and_meeting_defaults(self):
         meeting = _meeting()
@@ -117,25 +167,56 @@ class BlobStateSchemaTests(unittest.TestCase):
 
     def test_legacy_snapshot_without_blob_fields_loads_with_defaults(self):
         old_meetings = dict(store.MEETINGS)
+        old_markers = dict(store.BLOB_DELIVERY_STARTED_AT)
         old_snapshot = snapshot_path().read_bytes() if snapshot_path().exists() else None
         meeting = _meeting()
         try:
             store.MEETINGS.clear()
+            store.BLOB_DELIVERY_STARTED_AT.clear()
             store.MEETINGS[meeting.id] = meeting
             store.save_snapshot()
             raw = json.loads(snapshot_path().read_text(encoding="utf-8"))
             raw["meetings"][str(meeting.id)].pop("blob_status")
             raw["meetings"][str(meeting.id)].pop("blob_error_message")
+            raw.pop("blob_delivery_started_at")
             snapshot_path().write_text(json.dumps(raw), encoding="utf-8")
 
             store.MEETINGS.clear()
+            store.BLOB_DELIVERY_STARTED_AT[uuid4()] = datetime.now(timezone.utc)
             self.assertTrue(store.load_snapshot())
             loaded = store.MEETINGS[meeting.id]
             self.assertEqual(loaded.blob_status, BlobStatus.pending)
             self.assertIsNone(loaded.blob_error_message)
+            self.assertEqual(store.BLOB_DELIVERY_STARTED_AT, {})
         finally:
             store.MEETINGS.clear()
             store.MEETINGS.update(old_meetings)
+            store.BLOB_DELIVERY_STARTED_AT.clear()
+            store.BLOB_DELIVERY_STARTED_AT.update(old_markers)
+            if old_snapshot is None:
+                snapshot_path().unlink(missing_ok=True)
+            else:
+                snapshot_path().write_bytes(old_snapshot)
+
+    def test_blob_delivery_started_markers_round_trip_in_snapshot(self):
+        old_markers = dict(store.BLOB_DELIVERY_STARTED_AT)
+        old_snapshot = snapshot_path().read_bytes() if snapshot_path().exists() else None
+        meeting_id = uuid4()
+        started_at = datetime(2026, 7, 27, 4, 5, tzinfo=timezone.utc)
+        try:
+            store.BLOB_DELIVERY_STARTED_AT.clear()
+            store.BLOB_DELIVERY_STARTED_AT[meeting_id] = started_at
+            store.save_snapshot()
+
+            store.BLOB_DELIVERY_STARTED_AT.clear()
+            self.assertTrue(store.load_snapshot())
+            self.assertEqual(
+                store.BLOB_DELIVERY_STARTED_AT,
+                {meeting_id: started_at},
+            )
+        finally:
+            store.BLOB_DELIVERY_STARTED_AT.clear()
+            store.BLOB_DELIVERY_STARTED_AT.update(old_markers)
             if old_snapshot is None:
                 snapshot_path().unlink(missing_ok=True)
             else:
@@ -191,10 +272,12 @@ class BlobDeliveryTests(unittest.IsolatedAsyncioTestCase):
             "meetings": dict(store.MEETINGS),
             "exports": dict(store.MEETING_EXPORTS),
             "audit": list(store.AUDIT_LOG),
+            "blob_started": dict(store.BLOB_DELIVERY_STARTED_AT),
         }
         store.MEETINGS.clear()
         store.MEETING_EXPORTS.clear()
         store.AUDIT_LOG.clear()
+        store.BLOB_DELIVERY_STARTED_AT.clear()
         self.temporary = tempfile.TemporaryDirectory()
         self.audio_root = Path(self.temporary.name)
         self.audio_patch = patch(
@@ -236,6 +319,8 @@ class BlobDeliveryTests(unittest.IsolatedAsyncioTestCase):
         store.MEETING_EXPORTS.clear()
         store.MEETING_EXPORTS.update(self.old_state["exports"])
         store.AUDIT_LOG[:] = self.old_state["audit"]
+        store.BLOB_DELIVERY_STARTED_AT.clear()
+        store.BLOB_DELIVERY_STARTED_AT.update(self.old_state["blob_started"])
 
     async def _deliver(self, client, include_audio=True, token="access-token"):
         return await deliver_meeting_to_blob(
@@ -276,11 +361,109 @@ class BlobDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([call[0] for call in client.calls], ["sas", "audio", "export"])
         expected_time = datetime(2026, 7, 27, 3, 30, tzinfo=timezone.utc)
         self.assertEqual(client.calls[0][2], expected_time)
-        self.assertEqual(client.calls[1][2], self.audio_path)
+        self.assertNotEqual(client.calls[1][2], self.audio_path)
         self.assertEqual(client.calls[2][2], expected_time)
-        self.assertIs(client.calls[2][3], store.MEETING_EXPORTS[self.meeting.id])
+        self.assertEqual(client.calls[2][3], store.MEETING_EXPORTS[self.meeting.id])
+        self.assertIsNot(client.calls[2][3], store.MEETING_EXPORTS[self.meeting.id])
         self.assertEqual(result.blob_status, BlobStatus.uploaded)
         self.assertIsNone(result.blob_error_message)
+
+    async def test_concurrent_deliveries_serialize_provider_operations(self):
+        client = BlockingExportClient()
+        with patch("app.services.blob_delivery.store.save_snapshot"):
+            first = asyncio.create_task(
+                self._deliver(client, include_audio=False)
+            )
+            self.assertTrue(
+                await asyncio.to_thread(client.first_entered.wait, 2)
+            )
+            second = asyncio.create_task(
+                self._deliver(client, include_audio=False)
+            )
+            await asyncio.sleep(0.1)
+            observed_max = client.max_active
+            client.release.set()
+            await asyncio.gather(first, second)
+
+        self.assertEqual(observed_max, 1)
+        self.assertEqual(client.max_active, 1)
+        self.assertEqual(
+            [call[0] for call in client.calls],
+            ["export", "export"],
+        )
+
+    async def test_audio_uses_unique_snapshot_then_cleans_it(self):
+        client = BlockingAudioClient()
+        client.release.set()
+
+        result = await self._deliver(client)
+
+        self.assertEqual(result.blob_status, BlobStatus.uploaded)
+        self.assertIsNotNone(client.audio_path)
+        self.assertNotEqual(client.audio_path, self.audio_path)
+        self.assertEqual(client.audio_path.suffix, ".webm")
+        self.assertEqual(client.audio_bytes, b"private audio")
+        self.assertFalse(client.audio_path.exists())
+
+    async def test_reprocessing_during_audio_aborts_stale_run(self):
+        client = BlockingAudioClient()
+        with patch("app.services.blob_delivery.store.save_snapshot"):
+            task = asyncio.create_task(self._deliver(client))
+            self.assertTrue(
+                await asyncio.to_thread(client.audio_started.wait, 2)
+            )
+            replacement = self.meeting.model_copy(
+                update={
+                    "processing_attempt": self.meeting.processing_attempt + 1,
+                    "pipeline_status": PipelineStatus.processing,
+                    "blob_status": BlobStatus.pending,
+                    "blob_error_message": None,
+                }
+            )
+            store.MEETINGS[self.meeting.id] = replacement
+            store.MEETING_EXPORTS[self.meeting.id] = _export_payload(
+                self.meeting.id,
+                scheduled_start=None,
+            )
+            store.MEETING_EXPORTS[self.meeting.id]["summary"] = (
+                "Replacement processing output"
+            )
+            client.release.set()
+            await task
+
+        self.assertEqual(
+            [call[0] for call in client.calls],
+            ["sas", "audio"],
+        )
+        self.assertIs(store.MEETINGS[self.meeting.id], replacement)
+        self.assertEqual(replacement.pipeline_status, PipelineStatus.processing)
+        self.assertEqual(replacement.blob_status, BlobStatus.pending)
+        self.assertIsNone(replacement.blob_error_message)
+        self.assertNotIn(self.meeting.id, store.BLOB_DELIVERY_STARTED_AT)
+        self.assertFalse(client.audio_path.exists())
+
+    async def test_export_payload_is_frozen_before_provider_phases(self):
+        client = CaptureStorageClient()
+        original_summary = store.MEETING_EXPORTS[self.meeting.id]["summary"]
+
+        def mutate_after_freeze(meeting_id, time_basis_utc, access_token):
+            client.calls.append(
+                ("sas", meeting_id, time_basis_utc, access_token)
+            )
+            store.MEETING_EXPORTS[meeting_id]["summary"] = "New generation"
+            return AudioUploadGrant(
+                upload_url="stub://opaque-secret",
+                blob_path="private/blob/path",
+                expires_at=datetime(2026, 7, 27, 4, 0, tzinfo=timezone.utc),
+            )
+
+        client.request_audio_upload_sas = mutate_after_freeze
+
+        await self._deliver(client)
+
+        export_call = client.calls[-1]
+        self.assertEqual(export_call[0], "export")
+        self.assertEqual(export_call[3]["summary"], original_summary)
 
     async def test_json_only_delivery_skips_audio_operations(self):
         client = CaptureStorageClient()
@@ -463,11 +646,37 @@ class BlobDeliveryTests(unittest.IsolatedAsyncioTestCase):
             else:
                 snapshot_path().write_bytes(old_snapshot)
 
+    async def test_started_marker_is_present_in_pending_snapshot_and_cleared_terminally(self):
+        marker_snapshots = []
+
+        def capture_marker():
+            marker_snapshots.append(dict(store.BLOB_DELIVERY_STARTED_AT))
+
+        with patch(
+            "app.services.blob_delivery.store.save_snapshot",
+            side_effect=capture_marker,
+        ):
+            result = await self._deliver(
+                CaptureStorageClient(),
+                include_audio=False,
+            )
+
+        self.assertEqual(result.blob_status, BlobStatus.uploaded)
+        self.assertIn(self.meeting.id, marker_snapshots[0])
+        self.assertEqual(
+            marker_snapshots[0][self.meeting.id].tzinfo,
+            timezone.utc,
+        )
+        self.assertNotIn(self.meeting.id, marker_snapshots[-1])
+        self.assertNotIn(self.meeting.id, store.BLOB_DELIVERY_STARTED_AT)
+
 
 class BlobDeliveryLauncherTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.old_meetings = dict(store.MEETINGS)
+        self.old_markers = dict(store.BLOB_DELIVERY_STARTED_AT)
         store.MEETINGS.clear()
+        store.BLOB_DELIVERY_STARTED_AT.clear()
         self.meeting = _meeting(
             pipeline_status=PipelineStatus.ready,
             blob_status=BlobStatus.failed,
@@ -488,6 +697,8 @@ class BlobDeliveryLauncherTests(unittest.IsolatedAsyncioTestCase):
         blob_delivery._BLOB_DELIVERY_TASKS.clear()
         store.MEETINGS.clear()
         store.MEETINGS.update(self.old_meetings)
+        store.BLOB_DELIVERY_STARTED_AT.clear()
+        store.BLOB_DELIVERY_STARTED_AT.update(self.old_markers)
 
     async def test_kick_sets_pending_synchronously_and_retains_task_until_done(self):
         release = asyncio.Event()
@@ -554,11 +765,15 @@ class BlobDeliveryLauncherTests(unittest.IsolatedAsyncioTestCase):
 class BlobDeliveryReconciliationTests(unittest.TestCase):
     def setUp(self):
         self.old_meetings = dict(store.MEETINGS)
+        self.old_markers = dict(store.BLOB_DELIVERY_STARTED_AT)
         store.MEETINGS.clear()
+        store.BLOB_DELIVERY_STARTED_AT.clear()
 
     def tearDown(self):
         store.MEETINGS.clear()
         store.MEETINGS.update(self.old_meetings)
+        store.BLOB_DELIVERY_STARTED_AT.clear()
+        store.BLOB_DELIVERY_STARTED_AT.update(self.old_markers)
 
     def test_startup_reconcile_marks_only_ready_pending_blob_delivery_failed(self):
         ready_pending = _meeting(
@@ -566,7 +781,12 @@ class BlobDeliveryReconciliationTests(unittest.TestCase):
             blob_status=BlobStatus.pending,
             action_item_count=4,
         )
+        legacy_ready_pending = _meeting(
+            pipeline_status=PipelineStatus.ready,
+            blob_status=BlobStatus.pending,
+        )
         untouched = [
+            legacy_ready_pending,
             _meeting(
                 pipeline_status=PipelineStatus.ready,
                 blob_status=BlobStatus.uploaded,
@@ -585,6 +805,14 @@ class BlobDeliveryReconciliationTests(unittest.TestCase):
             ),
         ]
         store.MEETINGS[ready_pending.id] = ready_pending
+        store.BLOB_DELIVERY_STARTED_AT[ready_pending.id] = datetime(
+            2026,
+            7,
+            27,
+            4,
+            5,
+            tzinfo=timezone.utc,
+        )
         for meeting in untouched:
             store.MEETINGS[meeting.id] = meeting
         untouched_before = {
@@ -602,6 +830,7 @@ class BlobDeliveryReconciliationTests(unittest.TestCase):
         )
         self.assertEqual(ready_pending.pipeline_status, PipelineStatus.ready)
         self.assertEqual(ready_pending.action_item_count, 4)
+        self.assertNotIn(ready_pending.id, store.BLOB_DELIVERY_STARTED_AT)
         save.assert_called_once_with()
         for meeting in untouched:
             self.assertEqual(meeting.model_dump(), untouched_before[meeting.id])

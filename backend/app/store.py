@@ -92,6 +92,11 @@ PEOPLE: list[PersonEnrollment] = []
 # post-ready edits; IN-386 uploads these to Azure Blob.
 MEETING_EXPORTS: dict[UUID, dict] = {}
 
+# Internal durable marker for Blob deliveries that were actually launched.
+# Kept separate from Meeting so legacy ready meetings whose new blob_status
+# defaults to pending are not mistaken for interrupted uploads at startup.
+BLOB_DELIVERY_STARTED_AT: dict[UUID, datetime] = {}
+
 
 # ---------------------------------------------------------------------------
 # Snapshot persistence (Postgres stand-in durability)
@@ -116,6 +121,9 @@ def save_snapshot() -> None:
         "people": [p.model_dump(mode="json") for p in PEOPLE],
         "audit_log": [e.model_dump(mode="json") for e in AUDIT_LOG],
         "meeting_exports": {str(k): v for k, v in MEETING_EXPORTS.items()},
+        "blob_delivery_started_at": {
+            str(k): v.isoformat() for k, v in BLOB_DELIVERY_STARTED_AT.items()
+        },
     }
     tmp = snapshot_path().with_suffix(".tmp")
     tmp.write_text(json.dumps(payload), encoding="utf-8")
@@ -149,6 +157,10 @@ def load_snapshot() -> bool:
         )
         people = [PersonEnrollment.model_validate(p) for p in raw["people"]]
         audit = [AuditEntry.model_validate(e) for e in raw["audit_log"]]
+        blob_delivery_started_at = {
+            UUID(k): datetime.fromisoformat(v.replace("Z", "+00:00"))
+            for k, v in raw.get("blob_delivery_started_at", {}).items()
+        }
         # Older snapshots predate the IN-384 export artifact: default empty.
         # Exports are validated individually against the v1.0 contract; a
         # corrupt entry is dropped (the artifact is derived and rebuildable)
@@ -184,6 +196,8 @@ def load_snapshot() -> bool:
     AUDIT_LOG[:] = audit
     MEETING_EXPORTS.clear()
     MEETING_EXPORTS.update(exports)
+    BLOB_DELIVERY_STARTED_AT.clear()
+    BLOB_DELIVERY_STARTED_AT.update(blob_delivery_started_at)
     return True
 
 
