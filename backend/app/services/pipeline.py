@@ -21,6 +21,7 @@ from app import store
 from app.config import get_settings
 from app.schemas import (
     AccessRole,
+    BlobStatus,
     DeliveryStatus,
     MeetingAccessEntry,
     MeetingSource,
@@ -29,6 +30,7 @@ from app.schemas import (
 )
 from app.paths import audio_dir
 from app.services import audio_checks
+from app.services.blob_delivery import deliver_meeting_to_blob
 from app.services.llm import get_llm_provider
 from app.services.meeting_export import refresh_meeting_export
 from app.services.meeting_voiceprints import resolve_meeting_voiceprints
@@ -266,6 +268,7 @@ async def run_pipeline(
     audio_path: Path,
     *,
     storage_token: str | None = None,
+    storage_actor: str = "Unknown user",
     recorder_email: str | None = None,
 ) -> None:
     meeting = store.MEETINGS.get(meeting_id)
@@ -374,6 +377,20 @@ async def run_pipeline(
         # Canonical IN-384 artifact for Blob upload/downstream consumers,
         # built from the just-stored transcript/summary/action items.
         refresh_meeting_export(meeting_id)
+        # Blob delivery is a non-blocking post-processing concern. Its service
+        # contains normal failure handling; this boundary also protects ready
+        # pipeline outputs if a future delivery bug unexpectedly escapes.
+        try:
+            await deliver_meeting_to_blob(
+                meeting_id,
+                access_token=storage_token,
+                actor=storage_actor,
+                include_audio=True,
+            )
+        except Exception:
+            # Do not log the exception: a provider bug could embed the
+            # delegated token or a short-lived SAS URL in its message.
+            logger.error("meeting Blob delivery failed unexpectedly for %s", meeting_id)
         logger.info("pipeline ready for %s at %s", meeting_id, _now())
     except Exception as exc:
         logger.exception("pipeline failed for %s", meeting_id)
@@ -395,12 +412,18 @@ def kick_pipeline(
     audio_path: Path,
     *,
     storage_token: str | None = None,
+    storage_actor: str = "Unknown user",
     recorder_email: str | None = None,
 ) -> None:
     _increment_attempt(meeting_id)
     # The canonical export describes outputs this run is about to replace;
     # IN-386 must not be able to upload a stale artifact mid-reprocess.
     store.MEETING_EXPORTS.pop(meeting_id, None)
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is not None:
+        meeting.blob_status = BlobStatus.pending
+        meeting.blob_error_message = None
+    store.BLOB_DELIVERY_STARTED_AT.pop(meeting_id, None)
     set_delivery_state(meeting_id, DeliveryStatus.not_started)
     set_pipeline_state(
         meeting_id,
@@ -413,6 +436,7 @@ def kick_pipeline(
             meeting_id,
             audio_path,
             storage_token=storage_token,
+            storage_actor=storage_actor,
             recorder_email=recorder_email,
         )
     )

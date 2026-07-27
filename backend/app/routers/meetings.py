@@ -21,6 +21,7 @@ from app.services.audio_checks import find_ffmpeg
 logger = logging.getLogger(__name__)
 from app.schemas import (
     AccessRole,
+    BlobStatus,
     AuditEntry,
     DeliveryStatus,
     EditSegmentRequest,
@@ -45,6 +46,7 @@ from app.services.email import (
     get_email_provider,
 )
 from app.services.meeting_export import refresh_meeting_export
+from app.services.blob_delivery import kick_blob_delivery
 from app.services.sharepoint import get_sharepoint_provider, safe_transcript_filename
 from app.services.pipeline import (
     audio_path_for,
@@ -416,6 +418,7 @@ async def upload_audio(
         meeting_id,
         path,
         storage_token=_clean_optional_header(storage_token),
+        storage_actor=actor,
         recorder_email=_clean_optional_header(user_email, casefold=True),
     )
     return store.MEETINGS[meeting_id]
@@ -442,7 +445,29 @@ async def retry_pipeline(
         meeting_id,
         path,
         storage_token=_clean_optional_header(storage_token),
+        storage_actor=actor,
         recorder_email=_clean_optional_header(user_email, casefold=True),
+    )
+    return store.MEETINGS[meeting_id]
+
+
+@router.post("/{meeting_id}/blob/retry", response_model=Meeting)
+async def retry_blob_delivery(
+    meeting_id: UUID,
+    actor: str = Actor,
+    storage_token: str | None = Header(None, alias="X-MN-Storage-Token"),
+) -> Meeting:
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.editor)
+    if meeting.pipeline_status is not PipelineStatus.ready:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Transcript is not ready yet")
+    kick_blob_delivery(
+        meeting_id,
+        access_token=_clean_optional_header(storage_token),
+        actor=actor,
+        include_audio=True,
     )
     return store.MEETINGS[meeting_id]
 
@@ -1013,7 +1038,11 @@ def _extract_next_meeting_from_summary(summary_text: str | None) -> list[str]:
 
 
 @router.post("/{meeting_id}/finalize", response_model=Meeting)
-async def finalize_meeting(meeting_id: UUID, actor: str = Actor) -> Meeting:
+async def finalize_meeting(
+    meeting_id: UUID,
+    actor: str = Actor,
+    storage_token: str | None = Header(None, alias="X-MN-Storage-Token"),
+) -> Meeting:
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
@@ -1040,4 +1069,16 @@ async def finalize_meeting(meeting_id: UUID, actor: str = Actor) -> Meeting:
         after="finalized",
         meeting_id=meeting_id,
     )
+    refresh_meeting_export(meeting_id)
+    try:
+        kick_blob_delivery(
+            meeting_id,
+            access_token=_clean_optional_header(storage_token),
+            actor=actor,
+            include_audio=updated.blob_status is not BlobStatus.uploaded,
+        )
+    except Exception:
+        # Finalisation is a local state change and remains successful when a
+        # background delivery launcher fails unexpectedly.
+        logger.error("could not launch meeting Blob delivery for %s", meeting_id)
     return updated

@@ -96,6 +96,7 @@ class PipelineVoiceprintTests(unittest.IsolatedAsyncioTestCase):
                 self.meeting.id,
                 Path("meeting.webm"),
                 storage_token="token-123",
+                storage_actor="Joseph",
                 recorder_email="recorder@example.com",
             )
 
@@ -147,6 +148,7 @@ class PipelineVoiceprintTests(unittest.IsolatedAsyncioTestCase):
                 self.meeting.id,
                 Path("meeting.webm"),
                 storage_token="token-123",
+                storage_actor="Joseph",
                 recorder_email="recorder@example.com",
             )
             await asyncio.gather(*pipeline._PIPELINE_TASKS)
@@ -155,6 +157,7 @@ class PipelineVoiceprintTests(unittest.IsolatedAsyncioTestCase):
             self.meeting.id,
             Path("meeting.webm"),
             storage_token="token-123",
+            storage_actor="Joseph",
             recorder_email="recorder@example.com",
         )
         serialized = store.MEETINGS[self.meeting.id].model_dump_json()

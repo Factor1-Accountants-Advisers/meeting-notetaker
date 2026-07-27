@@ -7,22 +7,36 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import get_type_hints
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
+
+from fastapi import HTTPException
 
 import tests.conftest_env  # noqa: F401
 
 from app import store
 from app.paths import snapshot_path
 from app.schemas import (
+    AccessRole,
+    ActionItem,
+    ActionItemStatus,
+    ActionItemUpdate,
     BlobStatus,
+    EditSegmentRequest,
     Meeting,
+    MeetingAccessEntry,
+    MeetingParticipant,
     MeetingSource,
     MeetingStatus,
+    NameSpeakerRequest,
     PipelineStage,
     PipelineStatus,
+    TranscriptSegment,
 )
+from app.routers import meetings as meetings_router
+from app.routers import action_items as action_items_router
 from app.services import blob_delivery
+from app.services import pipeline
 from app.services.blob_delivery import (
     deliver_meeting_to_blob,
     kick_blob_delivery,
@@ -834,6 +848,285 @@ class BlobDeliveryReconciliationTests(unittest.TestCase):
         save.assert_called_once_with()
         for meeting in untouched:
             self.assertEqual(meeting.model_dump(), untouched_before[meeting.id])
+
+
+class BlobDeliveryTriggerTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.old_state = {
+            "meetings": dict(store.MEETINGS),
+            "access": {key: list(value) for key, value in store.ACCESS.items()},
+            "exports": dict(store.MEETING_EXPORTS),
+            "transcripts": {key: list(value) for key, value in store.TRANSCRIPTS.items()},
+            "participants": {key: list(value) for key, value in store.PARTICIPANTS.items()},
+            "summaries": dict(store.SUMMARIES),
+            "summary_html": dict(store.SUMMARY_HTML),
+            "actions": dict(store.ACTION_ITEMS),
+            "audit": list(store.AUDIT_LOG),
+            "blob_started": dict(store.BLOB_DELIVERY_STARTED_AT),
+        }
+        store.MEETINGS.clear()
+        store.ACCESS.clear()
+        store.MEETING_EXPORTS.clear()
+        store.TRANSCRIPTS.clear()
+        store.PARTICIPANTS.clear()
+        store.SUMMARIES.clear()
+        store.SUMMARY_HTML.clear()
+        store.ACTION_ITEMS.clear()
+        store.AUDIT_LOG.clear()
+        store.BLOB_DELIVERY_STARTED_AT.clear()
+
+    def tearDown(self):
+        for name, target in (
+            ("meetings", store.MEETINGS),
+            ("access", store.ACCESS),
+            ("exports", store.MEETING_EXPORTS),
+            ("transcripts", store.TRANSCRIPTS),
+            ("participants", store.PARTICIPANTS),
+            ("summaries", store.SUMMARIES),
+            ("summary_html", store.SUMMARY_HTML),
+            ("actions", store.ACTION_ITEMS),
+            ("blob_started", store.BLOB_DELIVERY_STARTED_AT),
+        ):
+            target.clear()
+            target.update(self.old_state[name])
+        store.AUDIT_LOG[:] = self.old_state["audit"]
+
+    def _ready_meeting(self, *, blob_status=BlobStatus.pending) -> Meeting:
+        meeting = _meeting(
+            pipeline_status=PipelineStatus.ready,
+            pipeline_stage=PipelineStage.ready,
+            unknown_speaker_count=0,
+            blob_status=blob_status,
+        )
+        store.MEETINGS[meeting.id] = meeting
+        store.ACCESS[meeting.id] = [
+            MeetingAccessEntry(user="Joseph", role=AccessRole.owner),
+            MeetingAccessEntry(user="Editor", role=AccessRole.editor),
+            MeetingAccessEntry(user="Viewer", role=AccessRole.viewer),
+        ]
+        return meeting
+
+    async def test_pipeline_ready_delivers_full_export_after_refresh(self):
+        meeting = _meeting(pipeline_status=PipelineStatus.queued)
+        store.MEETINGS[meeting.id] = meeting
+
+        async def delivery_side_effect(*args, **kwargs):
+            self.assertIn(meeting.id, store.MEETING_EXPORTS)
+            self.assertEqual(store.MEETINGS[meeting.id].pipeline_status, PipelineStatus.ready)
+
+        deliver = AsyncMock(side_effect=delivery_side_effect)
+        with patch.object(pipeline, "STAGE_DELAY_S", 0), patch(
+            "app.services.pipeline.deliver_meeting_to_blob", new=deliver
+        ):
+            await pipeline.run_pipeline(
+                meeting.id,
+                Path("meeting.webm"),
+                storage_token="token",
+                storage_actor="Joseph",
+            )
+
+        deliver.assert_awaited_once_with(
+            meeting.id,
+            access_token="token",
+            actor="Joseph",
+            include_audio=True,
+        )
+        self.assertEqual(store.MEETINGS[meeting.id].pipeline_status, PipelineStatus.ready)
+
+    async def test_unexpected_pipeline_delivery_error_preserves_ready_outputs(self):
+        meeting = _meeting(pipeline_status=PipelineStatus.queued)
+        store.MEETINGS[meeting.id] = meeting
+        deliver = AsyncMock(side_effect=RuntimeError("unexpected delivery failure"))
+
+        with patch.object(pipeline, "STAGE_DELAY_S", 0), patch(
+            "app.services.pipeline.deliver_meeting_to_blob", new=deliver
+        ), patch.object(pipeline.logger, "error"):
+            await pipeline.run_pipeline(meeting.id, Path("meeting.webm"))
+
+        self.assertEqual(store.MEETINGS[meeting.id].pipeline_status, PipelineStatus.ready)
+        self.assertIn(meeting.id, store.MEETING_EXPORTS)
+
+    async def test_reprocess_resets_blob_state_invalidates_export_and_clears_marker(self):
+        meeting = self._ready_meeting(blob_status=BlobStatus.uploaded)
+        meeting.blob_error_message = "old error"
+        meeting.processing_attempt = 4
+        store.MEETING_EXPORTS[meeting.id] = _export_payload(meeting.id)
+        store.BLOB_DELIVERY_STARTED_AT[meeting.id] = datetime.now(timezone.utc)
+        runner = AsyncMock()
+
+        with patch.object(pipeline, "run_pipeline", runner):
+            pipeline.kick_pipeline(
+                meeting.id,
+                Path("meeting.webm"),
+                storage_token="token",
+                storage_actor="Joseph",
+                recorder_email="recorder@example.com",
+            )
+            await asyncio.gather(*pipeline._PIPELINE_TASKS)
+
+        updated = store.MEETINGS[meeting.id]
+        self.assertEqual(updated.processing_attempt, 5)
+        self.assertEqual(updated.blob_status, BlobStatus.pending)
+        self.assertIsNone(updated.blob_error_message)
+        self.assertNotIn(meeting.id, store.MEETING_EXPORTS)
+        self.assertNotIn(meeting.id, store.BLOB_DELIVERY_STARTED_AT)
+        runner.assert_awaited_once_with(
+            meeting.id,
+            Path("meeting.webm"),
+            storage_token="token",
+            storage_actor="Joseph",
+            recorder_email="recorder@example.com",
+        )
+
+    async def test_finalise_refreshes_then_schedules_json_only_after_uploaded_delivery(self):
+        meeting = self._ready_meeting(blob_status=BlobStatus.uploaded)
+        events = []
+
+        def refresh(meeting_id):
+            self.assertEqual(store.MEETINGS[meeting_id].status, MeetingStatus.finalized)
+            self.assertEqual(store.AUDIT_LOG[-1].action, "meeting.finalize")
+            events.append(("refresh", meeting_id))
+
+        with patch(
+            "app.routers.meetings.refresh_meeting_export",
+            side_effect=refresh,
+        ), patch(
+            "app.routers.meetings.kick_blob_delivery",
+            side_effect=lambda *args, **kwargs: events.append(("kick", args, kwargs)),
+        ):
+            result = await meetings_router.finalize_meeting(
+                meeting.id,
+                actor="Joseph",
+                storage_token=" token ",
+            )
+
+        self.assertEqual(result.status, MeetingStatus.finalized)
+        self.assertEqual(events[0], ("refresh", meeting.id))
+        self.assertEqual(
+            events[1],
+            ("kick", (meeting.id,), {"access_token": "token", "actor": "Joseph", "include_audio": False}),
+        )
+
+    async def test_finalise_uses_full_delivery_for_pending_or_failed_and_resists_launcher_errors(self):
+        for blob_status in (BlobStatus.pending, BlobStatus.failed):
+            with self.subTest(blob_status=blob_status):
+                meeting = self._ready_meeting(blob_status=blob_status)
+                with patch("app.routers.meetings.refresh_meeting_export"), patch(
+                    "app.routers.meetings.kick_blob_delivery"
+                ) as kick:
+                    result = await meetings_router.finalize_meeting(meeting.id, actor="Joseph")
+                self.assertEqual(result.status, MeetingStatus.finalized)
+                self.assertEqual(kick.call_args.kwargs["include_audio"], True)
+
+        meeting = self._ready_meeting(blob_status=BlobStatus.uploaded)
+        with patch("app.routers.meetings.refresh_meeting_export"), patch(
+            "app.routers.meetings.kick_blob_delivery", side_effect=RuntimeError("launch failed")
+        ), patch.object(meetings_router.logger, "error"):
+            result = await meetings_router.finalize_meeting(meeting.id, actor="Joseph")
+        self.assertEqual(result.status, MeetingStatus.finalized)
+
+    async def test_blob_retry_requires_ready_editor_and_returns_pending_without_sas(self):
+        meeting = self._ready_meeting(blob_status=BlobStatus.failed)
+        def launch_retry(*args, **kwargs):
+            store.MEETINGS[meeting.id].blob_status = BlobStatus.pending
+            store.MEETINGS[meeting.id].blob_error_message = None
+
+        with patch("app.routers.meetings.kick_blob_delivery", side_effect=launch_retry) as kick:
+            with self.assertRaises(HTTPException) as missing:
+                await meetings_router.retry_blob_delivery(uuid4(), actor="Editor")
+            self.assertEqual(missing.exception.status_code, 404)
+
+            with self.assertRaises(HTTPException) as denied:
+                await meetings_router.retry_blob_delivery(meeting.id, actor="Viewer")
+            self.assertEqual(denied.exception.status_code, 403)
+
+            store.MEETINGS[meeting.id] = meeting.model_copy(
+                update={"pipeline_status": PipelineStatus.processing}
+            )
+            with self.assertRaises(HTTPException) as unready:
+                await meetings_router.retry_blob_delivery(meeting.id, actor="Editor")
+            self.assertEqual(unready.exception.status_code, 409)
+
+            store.MEETINGS[meeting.id] = meeting
+            result = await meetings_router.retry_blob_delivery(
+                meeting.id,
+                actor="Editor",
+                storage_token=" retry-token ",
+            )
+
+        kick.assert_called_once_with(
+            meeting.id,
+            access_token="retry-token",
+            actor="Editor",
+            include_audio=True,
+        )
+        self.assertEqual(result.blob_status, BlobStatus.pending)
+        self.assertNotIn("retry-token", result.model_dump_json())
+
+    async def test_edits_refresh_local_export_without_scheduling_blob_delivery(self):
+        meeting = self._ready_meeting()
+        store.TRANSCRIPTS[meeting.id] = [
+            TranscriptSegment(
+                speaker="Speaker 1",
+                speaker_known=True,
+                text="before",
+                start_ms=0,
+                end_ms=1000,
+                raw_speaker="SPEAKER_00",
+            )
+        ]
+        with patch("app.routers.meetings.kick_blob_delivery") as kick:
+            await meetings_router.edit_segment(
+                meeting.id,
+                0,
+                EditSegmentRequest(text="after"),
+                actor="Editor",
+            )
+
+        self.assertEqual(store.TRANSCRIPTS[meeting.id][0].text, "after")
+        self.assertIn(meeting.id, store.MEETING_EXPORTS)
+        kick.assert_not_called()
+
+    async def test_naming_and_action_mutations_refresh_without_scheduling_blob_delivery(self):
+        meeting = self._ready_meeting()
+        meeting.unknown_speaker_count = 1
+        store.PARTICIPANTS[meeting.id] = [
+            MeetingParticipant(name="Speaker 1", known=False)
+        ]
+        store.TRANSCRIPTS[meeting.id] = [
+            TranscriptSegment(
+                speaker="Speaker 1",
+                speaker_known=False,
+                text="before",
+                start_ms=0,
+                end_ms=1000,
+                raw_speaker="SPEAKER_00",
+            )
+        ]
+        action = ActionItem(
+            id=uuid4(),
+            meeting_id=meeting.id,
+            description="Follow up",
+        )
+        store.ACTION_ITEMS[action.id] = action
+
+        with patch("app.routers.meetings.kick_blob_delivery") as meeting_kick, patch(
+            "app.services.blob_delivery.kick_blob_delivery"
+        ) as service_kick:
+            await meetings_router.name_speaker(
+                meeting.id,
+                NameSpeakerRequest(label="Speaker 1", name="Avery"),
+                actor="Editor",
+            )
+            await action_items_router.update_action_item(
+                action.id,
+                ActionItemUpdate(status=ActionItemStatus.done),
+                actor="Editor",
+            )
+
+        self.assertIn(meeting.id, store.MEETING_EXPORTS)
+        meeting_kick.assert_not_called()
+        service_kick.assert_not_called()
 
 
 if __name__ == "__main__":

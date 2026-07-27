@@ -60,6 +60,7 @@ class MeetingProcessingAuthTests(unittest.IsolatedAsyncioTestCase):
             self.meeting.id,
             prepared,
             storage_token="token-123",
+            storage_actor="Joseph",
             recorder_email="recorder@example.com",
         )
 
@@ -85,6 +86,7 @@ class MeetingProcessingAuthTests(unittest.IsolatedAsyncioTestCase):
             self.meeting.id,
             audio,
             storage_token="retry-token",
+            storage_actor="Joseph",
             recorder_email="recorder@example.com",
         )
 
