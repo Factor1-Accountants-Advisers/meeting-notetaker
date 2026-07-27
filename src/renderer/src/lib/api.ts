@@ -3,6 +3,7 @@ import type { Tone } from '@renderer/components/ui/tones'
 import type { Priority, Status } from '@renderer/components/ui/Pill'
 import type {
   ActionItem,
+  BlobStatus,
   DeliveryStatus,
   EnrollmentState,
   Meeting,
@@ -44,6 +45,8 @@ export interface MeetingDto {
   sharepoint_status: SharePointStatus
   sharepoint_error_message: string | null
   sharepoint_web_url: string | null
+  blob_status: BlobStatus
+  blob_error_message: string | null
   graph_metadata?: GraphMeetingMetadataDto | null
   manual_attendees: ManualMeetingAttendee[]
 }
@@ -178,6 +181,8 @@ function mapMeeting(dto: MeetingDto): Meeting {
     sharePointStatus: dto.sharepoint_status,
     sharePointErrorMessage: dto.sharepoint_error_message,
     sharePointWebUrl: dto.sharepoint_web_url,
+    blobStatus: dto.blob_status,
+    blobErrorMessage: dto.blob_error_message,
     source: dto.source
   }
 }
@@ -326,6 +331,10 @@ function toGraphMetadataDto(metadata: GraphMeetingMetadata): GraphMeetingMetadat
 
 export async function retryPipeline(meetingId: string): Promise<MeetingDto | null> {
   return call<MeetingDto>('POST', `/meetings/${meetingId}/retry`)
+}
+
+export async function retryBlobDelivery(meetingId: string): Promise<MeetingDto | null> {
+  return call<MeetingDto>('POST', `/meetings/${meetingId}/blob/retry`)
 }
 
 export async function editSegment(

@@ -50,6 +50,7 @@ export type PipelineStage =
   | 'failed'
 export type DeliveryStatus = 'not_started' | 'emailing' | 'emailed' | 'unconfirmed' | 'failed'
 export type SharePointStatus = 'not_started' | 'saving' | 'saved' | 'failed'
+export type BlobStatus = 'pending' | 'uploaded' | 'failed'
 
 export interface Meeting {
   id: string
@@ -72,6 +73,8 @@ export interface Meeting {
   sharePointStatus: SharePointStatus
   sharePointErrorMessage: string | null
   sharePointWebUrl: string | null
+  blobStatus: BlobStatus
+  blobErrorMessage: string | null
   source: 'online' | 'in_person' | 'upload'
 }
 
