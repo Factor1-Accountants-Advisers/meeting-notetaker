@@ -5,7 +5,9 @@ implemented and live. The voiceprint GET/PUT resource described in section 5
 was implemented under IN-377 and verified live on 23 July 2026. The IN-378
 meeting-candidate operation was deployed and verified live on 24 July 2026.
 The additive IN-381 event taxonomy and administrator audit-read operation are
-implemented on their feature branch and are not deployed. Sections marked
+implemented on their feature branch and are not deployed. The section 7
+meeting JSON/audio delivery endpoints were ratified and implemented under
+IN-386 on their feature branch and are not yet deployed. Sections marked
 "reserved" describe future work only.
 
 Mirrored copy: `meeting-notetaker-2/docs/storage-api/rest-contract-v1.md`
@@ -65,6 +67,7 @@ exactly this envelope:
 | `auth_unavailable` | 503 | The Entra JWKS (signing-key) endpoint could not be reached while validating the token. Distinct from `unauthenticated` so clients don't treat a transient Entra/network outage as an invalid-credential re-auth loop. | **Yes** — retry with backoff. |
 | `storage_unavailable` | 503 | Azure Blob Storage returned a non-404 failure (throttling, transient network error, service outage). | **Yes** — retry with backoff. |
 | `validation_error` | 422 | The request body failed schema validation. | No (fix the request). |
+| `payload_too_large` | 413 | A request document exceeds a documented size cap — currently only the section 7 meeting export document (50 MiB). | No (reduce the document). |
 | `http_error` | 404 / 405 / other | Generic HTTP-level failures that aren't one of the above — e.g. unmatched route (404), disallowed method (405). The `message` field carries the underlying HTTP reason where available. | Depends on status. |
 | `internal_error` | 500 | Any unhandled exception. Sanitized — no stack trace, no internal detail. The full exception is recorded server-side in Application Insights only, keyed by `correlation_id`. | Situational — safe to retry once. |
 
@@ -336,6 +339,8 @@ New events use these exact underscore-separated action names:
 | An existing PUT changes status to `disabled` | `voiceprint_disabled` | Target person OID | `status` |
 | An existing PUT changes status to `deleted` | `voiceprint_deleted` | Target person OID | `status` |
 | Any other existing-record PUT | `voiceprint_updated` | Target person OID | `status` |
+| A section 7 export PUT stores meeting JSON | `meeting_json_written` | Current meeting JSON blob path | `meeting_id`, `schema_version`, `revision` |
+| A section 7 audio upload SAS is issued | `meeting_audio_sas_issued` | Audio blob path | `meeting_id` |
 
 The validated caller's `oid` and `name` claims are always the event's
 `actor_oid` and `actor_name`. This identifies the responsible actor for
@@ -424,19 +429,172 @@ Example response:
 }
 ```
 
-## 7. Reserved for IN-386 — meeting JSON/audio (sketch, not implemented)
+## 7. Meeting JSON/audio delivery — ratified for IN-386
 
-Not implemented anywhere in this repo yet; documented here as the agreed
-future shape so nothing downstream has to guess.
+**Status: ratified and implemented** under IN-386 on its feature branch; not
+yet deployed. These two endpoints deliver the finished meeting record: the
+meeting JSON export goes through the API, the audio recording goes directly
+to Blob Storage under a short-lived SAS issued by the API.
 
-- Path: `notetaker/meetings/{yyyy}/{mm}/{meeting_id}/` in the `notetaker`
-  container (`NSA_NOTETAKER_CONTAINER`, default `notetaker`). The
-  `{yyyy}/{mm}` prefix is derived from the meeting's `scheduled_start`,
-  **in UTC**.
-- Retention: audio blobs are deleted after 12 months; the meeting JSON
-  (transcript/summary/metadata) is kept forever.
-- No endpoints, request/response shapes, or auth rules are ratified yet —
-  IN-386 will extend this document when they are.
+Rules shared by both endpoints:
+
+- **Auth:** a delegated token carrying the exact `access_as_user` scope, or
+  an app-role token carrying `StorageApi.Admin`. A valid token with neither
+  → `403 forbidden`; no valid token → `401 unauthenticated`.
+- **Trust model:** `meeting_id` and `time_basis_utc` are assertions by the
+  authenticated employee caller — the server does not verify them against a
+  calendar or recording system. This is the same bounded employee-trust
+  model as the section 5 meeting-candidates operation; Joseph accepted it on
+  24 Jul 2026. The operations are write-only into the private `notetaker`
+  container (`NSA_NOTETAKER_CONTAINER`, default `notetaker`) — nothing here
+  can read, list, or enumerate meeting data.
+- **`meeting_id`** is a typed UUID path parameter. A non-UUID value is
+  rejected as `422 validation_error` before any storage access.
+- **`time_basis_utc`** (required in both request bodies): an ISO-8601
+  timestamp **with an explicit offset**, normalised server-side to UTC.
+  Semantically it is the meeting's `scheduled_start`, or the recording start
+  for ad-hoc meetings with no schedule. Naive timestamps (no offset) →
+  `422 validation_error`. The `{yyyy}/{mm}` blob prefix below is derived
+  server-side from this value **in UTC** — a `+10:00` timestamp near local
+  midnight files under the UTC month, not the local one.
+- Unknown request-body fields are ignored (v1 additive tolerance, section 8).
+
+### `PUT /api/v1/meetings/{meeting_id}/export`
+
+Store the meeting's export document (transcript/summary/metadata) as the
+meeting's current JSON record.
+
+- **Auth / trust:** per the shared rules above.
+- Request envelope — exactly two documented fields:
+  - `time_basis_utc` — required, per the shared rules above.
+  - `export` — required object: the schema-1.0 `MeetingExport` document.
+- **Server-side validation is deliberately shallow** (thin-gateway stance —
+  deep validation of the export is owned by the desktop's IN-384
+  `MeetingExport` builder, and the server must not fork that contract):
+  - `export.schema_version` must be the string `"1.0"` →
+    `422 validation_error` otherwise.
+  - `export.meeting_id` must equal the path `meeting_id`, compared
+    case-insensitively → `422 validation_error` otherwise.
+  - The serialized **export document** (the `export` object, not the whole
+    envelope) is capped at 50 MiB → `413 payload_too_large` beyond that.
+  - Everything else inside `export` is opaque to the server.
+- **200** — **always** returns a receipt; the response body is never empty
+  (same hard rule as the section 5 voiceprint PUT):
+  `meeting_id`, `blob_path` (the current JSON blob), `revision`
+  (`"created"` on first write, `"updated"` on re-upload), and `updated_at`
+  (server clock, UTC).
+- **401 / 403 / 413 / 422 / 503** — per the tables above.
+
+Example response:
+
+```json
+{
+  "meeting_id": "9ab402de-a57f-45a6-8cde-4f89902f5d0b",
+  "blob_path": "meetings/2026/07/9ab402de-a57f-45a6-8cde-4f89902f5d0b/meeting.json",
+  "revision": "created",
+  "updated_at": "2026-07-24T04:31:07.123456Z"
+}
+```
+
+#### Blob layout and write-once/history semantics
+
+The current record and its history live in the `notetaker` container as:
+
+```
+meetings/{yyyy}/{mm}/{meeting_id}/meeting.json                    (current)
+meetings/{yyyy}/{mm}/{meeting_id}/history/{server-utc-ts}.json    (history)
+```
+
+`{server-utc-ts}` is the server clock formatted `YYYYMMDDTHHMMSSffffffZ` —
+filename-safe and lexically sortable, so history snapshots list in
+chronological order.
+
+The first write for a meeting is a **conditional create** (`revision:
+"created"`). A re-upload first snapshots the prior current record to
+`history/`, then overwrites the current blob (`revision: "updated"`). The
+snapshot and the overwrite are separate Blob operations and cannot be
+committed atomically — same stance as the section 6 record-write/audit-append
+disclosure: a failure between the two can leave a history snapshot without
+the matching overwrite, and a retry can add a redundant identical snapshot.
+Last-writer-wins between concurrent re-uploads of the same meeting is
+accepted for v1; no meeting JSON content is ever deleted by this API.
+Because the `{yyyy}/{mm}` prefix is derived from `time_basis_utc`, the
+storage identity of a meeting is effectively UTC-month + `meeting_id`, not
+`meeting_id` alone: a re-upload that asserts a different `time_basis_utc`
+files under a different `{yyyy}/{mm}` prefix and therefore creates an
+independent current record for the same `meeting_id`, rather than updating
+the original one. Clients must keep `time_basis_utc` stable across
+re-uploads of the same meeting.
+
+### `POST /api/v1/meetings/{meeting_id}/audio/upload-sas`
+
+Issue a short-lived upload URL for the meeting's audio recording.
+
+- **Auth / trust:** per the shared rules above.
+- Request body: `{"time_basis_utc": ...}` — same rules as above.
+- **200** — grants a **create+write-only** user-delegation SAS (never an
+  account key), with a TTL of `sas_ttl_minutes` (`NSA_SAS_TTL_MINUTES`,
+  default 10 minutes), scoped to exactly one blob in the `notetaker`
+  container:
+
+  ```
+  meetings-audio/{yyyy}/{mm}/{meeting_id}/audio.webm
+  ```
+
+  The content contract is fixed: `audio/webm`, at the fixed name
+  `audio.webm`. **`.webm` is a recorded deviation from David's brief**, which
+  assumed `.m4a` at §7; `.webm` is what the desktop app actually records —
+  decision Joseph, 24 Jul 2026. Transcoding to another container format
+  remains a possible additive change later and is not part of this contract.
+  Re-requesting a SAS for the same meeting is allowed (retry after expiry or
+  failure); an overwrite via a fresh SAS is idempotent by construction, since
+  the recording is immutable content.
+- **401 / 403 / 422 / 503** — per the tables above.
+
+Example response:
+
+```json
+{
+  "upload_url": "https://<account>.blob.core.windows.net/notetaker/meetings-audio/2026/07/9ab402de-a57f-45a6-8cde-4f89902f5d0b/audio.webm?<sas-token>",
+  "blob_path": "meetings-audio/2026/07/9ab402de-a57f-45a6-8cde-4f89902f5d0b/audio.webm",
+  "expires_at": "2026-07-24T04:41:07Z"
+}
+```
+
+**Note on `expires_at`:** it is advisory/approximate. It is computed
+independently of the SAS signature's own expiry and is always at-or-after
+it (it may trail the signature expiry by up to about a second on a cold
+delegation-key fetch); the SAS token itself is authoritative. Clients must
+not time retry logic to the last moment of `expires_at`.
+
+#### Audio layout note (recorded deviation)
+
+Audio deliberately lives under the `meetings-audio/` sibling prefix, **not**
+the meeting's JSON directory. Azure lifecycle-management filters are
+prefixMatch-only and blob index tags are unsupported on HNS accounts, so the
+retention split below is only implementable with a dedicated audio prefix.
+This is a recorded deviation from the earlier sketch/brief single-directory
+layout.
+
+#### Retention
+
+Audio is tiered to Cool at 30 days and deleted at 365 days via a storage
+lifecycle policy on the `meetings-audio/` prefix. Meeting JSON and its
+history are kept forever.
+
+#### Accepted v1 gap — no upload-completion confirmation
+
+There is no upload-completion confirmation call, and therefore no
+"audio uploaded" audit event. SAS issuance is the audited fact, and the
+blob's existence is the evidence of completion.
+
+### Audit
+
+Both operations append section 6 audit events (`meeting_json_written` on
+every successful export write; `meeting_audio_sas_issued` on every SAS
+grant) — see the section 6 event-actions table for the exact `target` and
+`details` shapes. The SAS URL never appears in audit events or logs; it is
+returned in the response body only.
 
 ## 8. Versioning
 

@@ -457,3 +457,57 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     the stale §3 `require_admin` sentence is corrected. No Jira change,
     merge, push, deployment, production write, or production smoke was
     performed.
+
+- [ ] IN-386 — Deliver processed meeting JSON and audio to private Blob storage
+  - **Server contract reviewed, not changed here:** the Storage API branch
+    `in386-meeting-blob-delivery` was reviewed at `4dc0736` and remains
+    unmerged and undeployed. Its `docs/jira-progress.md` already records the
+    server implementation evidence, so this task makes no Storage API
+    repository edit. The desktop mirror
+    `docs/storage-api/rest-contract-v1.md` was copied byte-for-byte from that
+    branch; SHA-256 for both files is
+    `0521A7848AE7413AD0D746DB89E8716953EDC274802E72D587B1C1377ECEBBD9`.
+    This carries the ratified §7 meeting endpoints and the corrected stale §3
+    `require_admin` sentence.
+  - **Desktop branch and commit evidence:**
+    `codex/in-386-meeting-blob-delivery` contains, in order,
+    `8ffc2a9`, `e15ddf7`, `865856e`, `78bb74c`, `207f58b`, `6de4f92`,
+    `c57e40e`, `1c82d74`, `dcb2332`, `e2a5f47`, `98dd1ff`, `976de81`,
+    `3704e0a`, `17d5b5e`, and `845e737` (the current tip). These cover the
+    typed Storage API seam, safe streamed audio upload, non-blocking persisted
+    delivery state, guarded delivery generations, pipeline/finalisation/retry
+    wiring and audit truthfulness, exact Electron token routing, and the
+    reachable Home notices.
+  - **Contract and lifecycle:** the consumer uses
+    `PUT /api/v1/meetings/{meeting_id}/export` and
+    `POST /api/v1/meetings/{meeting_id}/audio/upload-sas`. Pipeline-ready
+    attempts audio then canonical export; state is only `pending`, `uploaded`,
+    or `failed`, with a fixed safe error message. The authenticated retry
+    endpoint re-attempts a failed/pending delivery. A prior successful delivery
+    followed by finalisation uploads JSON only; it does not request another
+    audio SAS or send audio again. Blob failure is non-blocking for local
+    processing, finalisation, SharePoint, email, and local review.
+  - **UI boundary:** Home is the reachable renderer flow and shows only safe
+    delivery status/actionable retry notices. `MeetingReviewScreen` remains
+    deliberately unrouted and contains no IN-386 UI because Slice 1 removed
+    the meeting-detail screen; routing it would expand scope. The renderer
+    receives only `blob_status` and a fixed safe `blob_error_message`.
+  - **Privacy/security boundary:** Electron main acquires and owns the
+    delegated Storage API token, forwarding it only for the allowlisted
+    delivery/retry operations. The renderer never receives a token, SAS URL,
+    Blob path, raw export, or audio bytes; no SAS is returned by the desktop
+    backend. Audio is streamed by the backend directly to the scoped upload
+    grant, while persisted state/audit output contains only safe status
+    metadata.
+  - **Evidence recorded before Task 7:** TDD introduced focused client,
+    delivery-state, trigger/retry/finalisation, token-route, and Home-notice
+    coverage; review fixes include malformed-target redaction, delivery
+    generation guards, truthful retry audits, concurrent notice handling, and
+    restoring actionable notices. Prior Storage API evidence records `214`
+    tests; the desktop's current evidence records `219` tests. These are not a
+    final full-verification claim: Task 7 must rerun and refresh the complete
+    verification counts, lint/review, local wire smoke, and privacy review.
+  - **Release/operations state:** no Jira transition, merge, push, deployment,
+    or production smoke was performed. A production meeting smoke remains
+    pending and is an approval-gated production write. The Storage API Bicep
+    lifecycle policy has not been applied.
