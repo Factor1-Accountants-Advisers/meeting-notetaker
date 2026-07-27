@@ -8,6 +8,7 @@ import { RecordingScreen, type RecordingSession } from './screens/RecordingScree
 import { createMeeting, emailNotes, ensureCurrentPerson, fetchEnrolmentStatus, fetchMeetingReview, retryPipeline, saveTranscriptToSharePoint, uploadAudio, type EnrolmentStatus, type GraphMeetingMetadata, type ManualMeetingAttendee, type SystemAudioSegmentUpload } from './lib/api'
 import { capture, type CaptureStatus, type SystemSegment } from './lib/capture'
 import { emailFailureMessage } from './lib/deliveryNotice'
+import notificationChimeUrl from './assets/notification.wav'
 import { loadPrefs } from './lib/prefs'
 import { useNotifications } from './lib/useNotifications'
 import { audioDurationSeconds, blobToBase64 } from './lib/recorder'
@@ -179,6 +180,18 @@ function App(): JSX.Element {
   useEffect(() => {
     capture.setStatusListener((status) => setCaptureStatus(status))
     return () => capture.setStatusListener(null)
+  }, [])
+
+  // OS toasts are shown silent; the renderer owns the Notetaker chime so the
+  // bundled wav works in an unpackaged win32 app (IN-477). The window only
+  // hides to the tray, so this listener stays alive while "closed".
+  useEffect(() => {
+    if (typeof window.api?.onNotificationChime !== 'function') return
+    const chime = new Audio(notificationChimeUrl)
+    return window.api.onNotificationChime(() => {
+      chime.currentTime = 0
+      void chime.play().catch(() => undefined)
+    })
   }, [])
 
   // Required staff voiceprint gate after Microsoft sign-in.

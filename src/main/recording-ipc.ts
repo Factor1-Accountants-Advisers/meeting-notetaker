@@ -1,6 +1,7 @@
 import { BrowserWindow, Notification, powerSaveBlocker } from 'electron'
 import { createRecordingStateMachine, type ActiveRecording, type RecordingStateMachine } from './recording-state'
 import { logger } from './logger'
+import { buildEndingSoonToastXml } from './toast-xml'
 
 // IN-129: while recording, hold the system awake so an idle timeout can't
 // sleep the machine mid-meeting. (Lid-close sleep is OS power policy and
@@ -46,15 +47,30 @@ function notifyAutoRecordingStarted(recording: ActiveRecording): void {
   if (!Notification?.isSupported?.()) return
   const title = meetingTitleFrom(recording.metadata)
   try {
+    // Silent: the renderer plays the Notetaker chime instead (IN-477).
     new Notification({
       title: 'Meeting Notetaker',
-      body: title ? `Recording: ${title}` : 'Auto-recording started'
+      body: title ? `Recording: ${title}` : 'Auto-recording started',
+      silent: true
     }).show()
+    playNotificationChime()
   } catch (err) {
     logger().warn('[recording] could not show auto-record notification', {
       message: err instanceof Error ? err.message : String(err)
     })
   }
+}
+
+/**
+ * Cue the renderer to play the bundled notification chime (IN-477). OS toasts
+ * are shown silent because toast XML cannot reference a bundled audio file in
+ * an unpackaged win32 app; the renderer owns the wav asset instead. The main
+ * window hides to the tray but is never destroyed, so the cue normally lands —
+ * if the window is gone the toast still shows, only the chime is lost.
+ */
+function playNotificationChime(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  mainWindow.webContents.send('notification:chime')
 }
 
 let mainWindow: BrowserWindow | null = null
@@ -384,14 +400,6 @@ export function extendAutoStop(incrementMs: number = EXTEND_INCREMENT_MS): { end
   return { endTimeUtc }
 }
 
-function xmlEscape(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
-
 function sendEndingSoonReminder(
   recording: ActiveRecording,
   scheduledEndMs: number,
@@ -424,25 +432,17 @@ function notifyMeetingEndingSoon(recording: ActiveRecording): void {
     : 'Recording is scheduled to end in 5 minutes.'
   try {
     if (process.platform === 'win32') {
-      // Windows ignores the cross-platform `actions` array (macOS-only), so an
-      // Extend button requires raw toast XML. The button activates the app with
-      // `mn-extend`, handled by the single-instance hook in index.ts.
-      const toastXml =
-        '<toast activationType="foreground" launch="mn-open">' +
-        '<visual><binding template="ToastGeneric">' +
-        '<text>Meeting Notetaker</text>' +
-        `<text>${xmlEscape(body)}</text>` +
-        '</binding></visual>' +
-        '<actions>' +
-        '<action content="Extend 10 min" activationType="foreground" arguments="mn-extend"/>' +
-        '</actions>' +
-        '</toast>'
-      new Notification({ toastXml }).show()
+      // Sticky reminder toast with Extend/Dismiss buttons (IN-124, IN-477).
+      // The Extend button activates the app with `mn-extend`, handled by the
+      // single-instance hook in index.ts.
+      new Notification({ toastXml: buildEndingSoonToastXml(body) }).show()
       logger().info('[recording] ending-soon Windows toast requested')
     } else {
-      new Notification({ title: 'Meeting Notetaker', body }).show()
+      // Silent: the renderer plays the Notetaker chime instead (IN-477).
+      new Notification({ title: 'Meeting Notetaker', body, silent: true }).show()
       logger().info('[recording] ending-soon notification requested')
     }
+    playNotificationChime()
   } catch (err) {
     logger().warn('[recording] could not show ending-soon notification', {
       message: err instanceof Error ? err.message : String(err)

@@ -184,6 +184,14 @@ const api = {
   notifyRecordingPausedChanged: (paused: boolean): void =>
     ipcRenderer.send('recording:paused-changed', paused),
 
+  /** Listen for the notification chime cue (IN-477): main shows OS toasts
+   * silent and the renderer plays the bundled alert sound. Returns unsubscribe. */
+  onNotificationChime: (callback: () => void): (() => void) => {
+    const handler = (): void => callback()
+    ipcRenderer.on('notification:chime', handler)
+    return () => ipcRenderer.removeListener('notification:chime', handler)
+  },
+
   /** Listen for extends triggered from the tray menu or toast button (IN-124),
    * so the on-screen countdown updates. Returns unsubscribe. */
   onRecordingEndExtended: (
