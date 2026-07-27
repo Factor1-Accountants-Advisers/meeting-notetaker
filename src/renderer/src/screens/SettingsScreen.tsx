@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Download, Languages, LogOut, Mic, Moon, Sun, User } from 'lucide-react'
+import { Download, Languages, Loader2, LogOut, Megaphone, Mic, Moon, Sun, User, X } from 'lucide-react'
 import { Card, SectionHeader } from '@renderer/components/ui/Card'
 import { Avatar } from '@renderer/components/ui/Avatar'
 import { Pill } from '@renderer/components/ui/Pill'
@@ -32,6 +32,11 @@ export function SettingsScreen({
   const [devices, setDevices] = useState<{ id: string; label: string }[]>([])
   const [autoLaunch, setAutoLaunch] = useState<AutoLaunchStatus | null>(null)
   const [autoLaunchBusy, setAutoLaunchBusy] = useState(false)
+  const [reportOpen, setReportOpen] = useState(false)
+  const [reportIssue, setReportIssue] = useState('')
+  const [reportSending, setReportSending] = useState(false)
+  const [reportDone, setReportDone] = useState(false)
+  const [reportError, setReportError] = useState<string | null>(null)
 
   useEffect(() => {
     void window.api?.getAutoLaunch?.().then(setAutoLaunch).catch(() =>
@@ -190,8 +195,117 @@ export function SettingsScreen({
         <SettingRow label="Version" hint="Updates download in the background and install on restart">
           <UpdateCheck />
         </SettingRow>
+        <SettingRow label="Report a problem" hint="Send issue details to the Notetaker team">
+          <button
+            type="button"
+            onClick={() => {
+              setReportOpen(true)
+              setReportDone(false)
+              setReportError(null)
+              setReportIssue('')
+            }}
+            className="flex items-center gap-1.5 rounded-md border-[0.5px] border-edge-secondary px-2.5 py-1.5 text-[12px] text-content-primary hover:bg-bg-secondary"
+          >
+            <Megaphone size={13} strokeWidth={1.75} />
+            Report
+          </button>
+        </SettingRow>
       </Card>
+
+      {reportOpen && (
+        <ReportProblemModal
+          issue={reportIssue}
+          onChangeIssue={setReportIssue}
+          sending={reportSending}
+          done={reportDone}
+          error={reportError}
+          onSend={async () => {
+            setReportSending(true)
+            setReportError(null)
+            try {
+              const res = await window.api.request<{ ok: boolean; error?: string }>(
+                'POST',
+                '/api/v1/report-problem',
+                { issue: reportIssue }
+              )
+              if (res.ok && res.body?.ok) {
+                setReportDone(true)
+              } else {
+                setReportError(res.body?.error || 'Failed to send report.')
+              }
+            } catch {
+              setReportError('Could not reach the backend. Check that the app is running.')
+            } finally {
+              setReportSending(false)
+            }
+          }}
+          onClose={() => setReportOpen(false)}
+        />
+      )}
     </div>
+  )
+}
+
+function ReportProblemModal({
+  issue,
+  onChangeIssue,
+  sending,
+  done,
+  error,
+  onSend,
+  onClose
+}: {
+  issue: string
+  onChangeIssue: (v: string) => void
+  sending: boolean
+  done: boolean
+  error: string | null
+  onSend: () => void
+  onClose: () => void
+}): JSX.Element {
+  return (
+    <Card>
+      <div className="flex items-center justify-between">
+        <SectionHeader icon={Megaphone} title="Report a problem" />
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded p-1 text-content-tertiary hover:text-content-primary"
+        >
+          <X size={16} strokeWidth={1.75} />
+        </button>
+      </div>
+
+      {done ? (
+        <div className="rounded-md border-[0.5px] border-edge-success bg-bg-success px-3 py-2.5 text-[14px] text-content-success">
+          Report sent. Thank you — we will look into it.
+        </div>
+      ) : (
+        <>
+          <textarea
+            value={issue}
+            onChange={(e) => onChangeIssue(e.target.value)}
+            placeholder="Describe what happened — include any error messages or unexpected behaviour."
+            rows={4}
+            className="w-full resize-none rounded-md border-[0.5px] border-edge-tertiary bg-bg-primary px-3 py-2 text-[14px] text-content-primary placeholder:text-content-tertiary focus:border-brand-blue focus:outline-none"
+          />
+          {error && (
+            <div className="rounded-md border-[0.5px] border-edge-danger bg-bg-danger px-3 py-2 text-[12px] text-content-danger">
+              {error}
+            </div>
+          )}
+          <button
+            type="button"
+            disabled={!issue.trim() || sending}
+            onClick={onSend}
+            className="flex items-center justify-center gap-1.5 rounded-md bg-[#CC6A38] px-4 py-2.5 text-[14px] font-medium text-white transition-colors hover:bg-[#B95D2F] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {sending && <Loader2 size={14} strokeWidth={2} className="animate-spin" />}
+            {sending ? 'Sending…' : 'Send report'}
+          </button>
+        </>
+      )}
+    </Card>
   )
 }
 

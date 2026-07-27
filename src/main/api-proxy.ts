@@ -1,4 +1,6 @@
-import { ipcMain } from 'electron'
+import { app, ipcMain } from 'electron'
+import { existsSync, readFileSync } from 'fs'
+import { join } from 'path'
 import {
   getCurrentUser,
   getCurrentUserEmail,
@@ -50,6 +52,22 @@ export function registerApiProxyIpc(): void {
       if (req.path.includes('/sharepoint') && req.method === 'POST') {
         const token = await getGraphAccessToken(GRAPH_SHAREPOINT_SCOPES)
         if (token) headers['X-MN-Graph-Token'] = token
+      }
+
+      // IN-473: inject Graph token, user email, and recent log context.
+      if (req.path.includes('/report-problem') && req.method === 'POST') {
+        const token = await getGraphAccessToken(GRAPH_EMAIL_SCOPES)
+        if (token) headers['X-MN-Graph-Token'] = token
+        headers['X-MN-User-Email'] = getCurrentUserEmail() ?? ''
+        try {
+          const logPath = join(app.getPath('userData'), 'logs', 'main.log')
+          if (existsSync(logPath)) {
+            const lines = readFileSync(logPath, 'utf-8').split('\n').slice(-30)
+            headers['X-MN-Recent-Logs'] = Buffer.from(lines.join('\n'), 'utf-8').toString('base64')
+          }
+        } catch {
+          // Best-effort; report still sends without logs.
+        }
       }
 
       // IN-476: email remains the local person key; Entra oid is the central
