@@ -463,13 +463,26 @@ async def retry_blob_delivery(
     require(meeting_id, actor, AccessRole.editor)
     if meeting.pipeline_status is not PipelineStatus.ready:
         raise HTTPException(status.HTTP_409_CONFLICT, "Transcript is not ready yet")
+    before_blob_status = meeting.blob_status.value
     kick_blob_delivery(
         meeting_id,
         access_token=_clean_optional_header(storage_token),
         actor=actor,
         include_audio=True,
     )
-    return store.MEETINGS[meeting_id]
+    current = store.MEETINGS[meeting_id]
+    store.add_audit(
+        actor,
+        "meeting.blob_retry",
+        meeting.title,
+        before=before_blob_status,
+        after=BlobStatus.pending.value,
+        meeting_id=meeting_id,
+    )
+    # Persist the independent retry intent before the retained background task
+    # can complete and append its terminal success/failure audit.
+    store.save_snapshot()
+    return current
 
 
 def _delivery_artifacts(meeting_id: UUID) -> tuple[Meeting, list, list, str, list]:
@@ -1081,4 +1094,4 @@ async def finalize_meeting(
         # Finalisation is a local state change and remains successful when a
         # background delivery launcher fails unexpectedly.
         logger.error("could not launch meeting Blob delivery for %s", meeting_id)
-    return updated
+    return store.MEETINGS[meeting_id]

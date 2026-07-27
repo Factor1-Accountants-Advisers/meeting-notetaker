@@ -15,6 +15,7 @@ from fastapi import HTTPException
 import tests.conftest_env  # noqa: F401
 
 from app import store
+from app.main import create_app
 from app.paths import snapshot_path
 from app.schemas import (
     AccessRole,
@@ -79,6 +80,60 @@ def _export_payload(meeting_id, scheduled_start="2026-07-27T13:30:00+10:00"):
         "graph_ical_uid": None,
         "graph_online_meeting_id": None,
     }
+
+
+class _AsgiResponse:
+    def __init__(self, status_code: int, body: bytes):
+        self.status_code = status_code
+        self.text = body.decode("utf-8")
+
+    def json(self):
+        return json.loads(self.text)
+
+
+async def _asgi_post(app, path: str, headers: dict[str, str]) -> _AsgiResponse:
+    request_sent = False
+    messages = []
+
+    async def receive():
+        nonlocal request_sent
+        if not request_sent:
+            request_sent = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        messages.append(message)
+
+    encoded_headers = [
+        (name.lower().encode("latin-1"), value.encode("latin-1"))
+        for name, value in headers.items()
+    ]
+    await app(
+        {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode("ascii"),
+            "query_string": b"",
+            "headers": encoded_headers,
+            "client": ("test", 50000),
+            "server": ("testserver", 80),
+            "root_path": "",
+        },
+        receive,
+        send,
+    )
+    status_code = next(message["status"] for message in messages if message["type"] == "http.response.start")
+    body = b"".join(
+        message.get("body", b"")
+        for message in messages
+        if message["type"] == "http.response.body"
+    )
+    return _AsgiResponse(status_code, body)
 
 
 class CaptureStorageClient:
@@ -1127,6 +1182,187 @@ class BlobDeliveryTriggerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(meeting.id, store.MEETING_EXPORTS)
         meeting_kick.assert_not_called()
         service_kick.assert_not_called()
+
+
+class BlobDeliveryHttpTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.old_state = {
+            "meetings": dict(store.MEETINGS),
+            "access": {key: list(value) for key, value in store.ACCESS.items()},
+            "exports": dict(store.MEETING_EXPORTS),
+            "audit": list(store.AUDIT_LOG),
+        }
+        store.MEETINGS.clear()
+        store.ACCESS.clear()
+        store.MEETING_EXPORTS.clear()
+        store.AUDIT_LOG.clear()
+        self.app = create_app()
+
+    def tearDown(self):
+        store.MEETINGS.clear()
+        store.MEETINGS.update(self.old_state["meetings"])
+        store.ACCESS.clear()
+        store.ACCESS.update(self.old_state["access"])
+        store.MEETING_EXPORTS.clear()
+        store.MEETING_EXPORTS.update(self.old_state["exports"])
+        store.AUDIT_LOG[:] = self.old_state["audit"]
+
+    def _ready_meeting(self, *, blob_status=BlobStatus.failed) -> Meeting:
+        meeting = _meeting(
+            pipeline_status=PipelineStatus.ready,
+            pipeline_stage=PipelineStage.ready,
+            unknown_speaker_count=0,
+            blob_status=blob_status,
+        )
+        store.MEETINGS[meeting.id] = meeting
+        store.ACCESS[meeting.id] = [
+            MeetingAccessEntry(user="Joseph", role=AccessRole.owner),
+            MeetingAccessEntry(user="Editor", role=AccessRole.editor),
+            MeetingAccessEntry(user="Viewer", role=AccessRole.viewer),
+        ]
+        return meeting
+
+    async def test_http_finalize_propagates_token_and_returns_canonical_pending_after_launcher_error(self):
+        meeting = self._ready_meeting(blob_status=BlobStatus.uploaded)
+
+        def launch_then_fail(*args, **kwargs):
+            current = store.MEETINGS[meeting.id]
+            store.MEETINGS[meeting.id] = current.model_copy(
+                update={"blob_status": BlobStatus.pending, "blob_error_message": None}
+            )
+            raise RuntimeError("launcher failed after pending transition")
+
+        with patch(
+            "app.routers.meetings.kick_blob_delivery",
+            side_effect=launch_then_fail,
+        ) as kick, patch(
+            "app.routers.meetings.refresh_meeting_export"
+        ), patch.object(
+            meetings_router.logger, "error"
+        ), patch(
+            "app.store.save_snapshot"
+        ):
+            response = await _asgi_post(
+                self.app,
+                f"/api/v1/meetings/{meeting.id}/finalize",
+                {
+                    "X-MN-User": "Joseph",
+                    "X-MN-Storage-Token": "finalize-token",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], MeetingStatus.finalized.value)
+        self.assertEqual(payload["blob_status"], BlobStatus.pending.value)
+        self.assertNotIn("finalize-token", response.text)
+        self.assertNotIn("sig=", response.text)
+        kick.assert_called_once_with(
+            meeting.id,
+            access_token="finalize-token",
+            actor="Joseph",
+            include_audio=False,
+        )
+
+    async def test_http_finalize_enforces_owner_acl_and_readiness(self):
+        meeting = self._ready_meeting()
+        with patch("app.routers.meetings.kick_blob_delivery") as kick, patch(
+            "app.store.save_snapshot"
+        ):
+            denied = await _asgi_post(
+                self.app,
+                f"/api/v1/meetings/{meeting.id}/finalize",
+                {"X-MN-User": "Editor", "X-MN-Storage-Token": "secret"},
+            )
+            self.assertEqual(denied.status_code, 403)
+
+            store.MEETINGS[meeting.id] = meeting.model_copy(
+                update={"pipeline_status": PipelineStatus.processing}
+            )
+            unready = await _asgi_post(
+                self.app,
+                f"/api/v1/meetings/{meeting.id}/finalize",
+                {"X-MN-User": "Joseph", "X-MN-Storage-Token": "secret"},
+            )
+
+        self.assertEqual(unready.status_code, 409)
+        self.assertNotIn("secret", denied.text + unready.text)
+        kick.assert_not_called()
+
+    async def test_http_blob_retry_propagates_token_audits_and_returns_pending(self):
+        meeting = self._ready_meeting(blob_status=BlobStatus.failed)
+        saved_audit_actions = []
+
+        def launch_pending(*args, **kwargs):
+            current = store.MEETINGS[meeting.id]
+            store.MEETINGS[meeting.id] = current.model_copy(
+                update={"blob_status": BlobStatus.pending, "blob_error_message": None}
+            )
+
+        def capture_snapshot():
+            saved_audit_actions.append([entry.action for entry in store.AUDIT_LOG])
+
+        with patch(
+            "app.routers.meetings.kick_blob_delivery",
+            side_effect=launch_pending,
+        ) as kick, patch(
+            "app.store.save_snapshot", side_effect=capture_snapshot
+        ):
+            response = await _asgi_post(
+                self.app,
+                f"/api/v1/meetings/{meeting.id}/blob/retry",
+                {
+                    "X-MN-User": "Editor",
+                    "X-MN-Storage-Token": "retry-token",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["blob_status"], BlobStatus.pending.value)
+        self.assertNotIn("retry-token", response.text)
+        self.assertNotIn("sig=", response.text)
+        kick.assert_called_once_with(
+            meeting.id,
+            access_token="retry-token",
+            actor="Editor",
+            include_audio=True,
+        )
+        retry_audit = [entry for entry in store.AUDIT_LOG if entry.action == "meeting.blob_retry"]
+        self.assertEqual(len(retry_audit), 1)
+        self.assertEqual(retry_audit[0].actor, "Editor")
+        self.assertEqual(retry_audit[0].target, meeting.title)
+        self.assertEqual(retry_audit[0].before, BlobStatus.failed.value)
+        self.assertEqual(retry_audit[0].after, BlobStatus.pending.value)
+        self.assertEqual(retry_audit[0].meeting_id, meeting.id)
+        self.assertIn("meeting.blob_retry", saved_audit_actions[-1])
+        serialized = retry_audit[0].model_dump_json()
+        self.assertNotIn("retry-token", serialized)
+        self.assertNotIn("sig=", serialized)
+
+    async def test_http_blob_retry_enforces_editor_acl_and_readiness(self):
+        meeting = self._ready_meeting()
+        with patch("app.routers.meetings.kick_blob_delivery") as kick, patch(
+            "app.store.save_snapshot"
+        ):
+            denied = await _asgi_post(
+                self.app,
+                f"/api/v1/meetings/{meeting.id}/blob/retry",
+                {"X-MN-User": "Viewer", "X-MN-Storage-Token": "secret"},
+            )
+            self.assertEqual(denied.status_code, 403)
+
+            store.MEETINGS[meeting.id] = meeting.model_copy(
+                update={"pipeline_status": PipelineStatus.processing}
+            )
+            unready = await _asgi_post(
+                self.app,
+                f"/api/v1/meetings/{meeting.id}/blob/retry",
+                {"X-MN-User": "Editor", "X-MN-Storage-Token": "secret"},
+            )
+
+        self.assertEqual(unready.status_code, 409)
+        self.assertNotIn("secret", denied.text + unready.text)
+        kick.assert_not_called()
 
 
 if __name__ == "__main__":
