@@ -179,11 +179,16 @@ def reconcile_interrupted_pipelines() -> int:
         # An in-flight email send also only exists as in-process work. A restart
         # mid-send would otherwise leave delivery_status=emailing forever, and
         # the idempotency guard would then block every future email attempt.
+        # The outcome is unknowable — Graph may have delivered before the
+        # restart — so this must NOT become `failed` ("resend safe"): that is
+        # exactly the duplicate-email path (IN-478). `unconfirmed` keeps the
+        # retry open behind a check-your-inbox warning.
         if meeting.delivery_status is DeliveryStatus.emailing:
             set_delivery_state(
                 meeting_id,
-                DeliveryStatus.failed,
-                "Email delivery was interrupted by a backend restart. Retry email.",
+                DeliveryStatus.unconfirmed,
+                "Email delivery was interrupted by a backend restart — the email "
+                "may already have been delivered. Check your inbox before resending.",
             )
             changed += 1
         if meeting.pipeline_status not in (PipelineStatus.queued, PipelineStatus.processing):

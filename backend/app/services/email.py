@@ -5,10 +5,13 @@ passes the MSAL access token as X-MN-Graph-Token. No app-only credentials
 or client secrets are held by the backend.
 """
 
+import asyncio
 import base64
 import html
 import json
 import logging
+import urllib.error
+import urllib.request
 from typing import Protocol
 
 from app.config import get_settings
@@ -16,6 +19,16 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 GRAPH_SEND_MAIL_URL = "https://graph.microsoft.com/v1.0/me/sendMail"
+
+
+class EmailDeliveryUnconfirmed(RuntimeError):
+    """A send attempt whose outcome is unknown (IN-478).
+
+    Raised when the request may have reached Graph but no definitive answer
+    came back (timeout, connection error, 5xx). The message may already have
+    been delivered — callers must record an informed-retry state, never a
+    definitive "not sent" that invites a duplicate resend.
+    """
 
 # Inline styling only — Outlook and other clients strip <style>/<head> blocks.
 _FONT = "Segoe UI, Arial, sans-serif"
@@ -99,8 +112,6 @@ class GraphEmailProvider:
             "saveToSentItems": "true",
         }
 
-        import urllib.request
-
         req = urllib.request.Request(
             GRAPH_SEND_MAIL_URL,
             data=json.dumps(payload).encode("utf-8"),
@@ -111,6 +122,25 @@ class GraphEmailProvider:
             method="POST",
         )
 
+        # The blocking urlopen runs in a worker thread so a slow Graph
+        # response cannot stall the event loop (health checks, other API
+        # requests) for its full 30s timeout.
+        await asyncio.to_thread(self._post_send_mail, req)
+
+        logger.info(
+            "graph email sent: '%s' -> %s (%d chars, %d attachments, %s)",
+            subject, recipients, len(body), len(attachments or []), normalized_type,
+        )
+
+    @staticmethod
+    def _post_send_mail(req: urllib.request.Request) -> None:
+        """POST to Graph, classifying failures as definitive vs unconfirmed.
+
+        Only an HTTP 4xx response proves Graph rejected the message. A
+        timeout, connection error, or 5xx may occur *after* Graph accepted
+        it — reporting those as definitive failure is what produced duplicate
+        transcript emails (IN-478: user retries a send that was delivered).
+        """
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 if resp.status not in (200, 201, 202):
@@ -120,12 +150,12 @@ class GraphEmailProvider:
         except urllib.error.HTTPError as e:
             body_text = e.read().decode()
             logger.error("Graph sendMail HTTP error %s: %s", e.code, body_text[:200])
-            raise RuntimeError(f"Graph sendMail failed: {e.code}") from e
-
-        logger.info(
-            "graph email sent: '%s' -> %s (%d chars, %d attachments, %s)",
-            subject, recipients, len(body), len(attachments or []), normalized_type,
-        )
+            if 400 <= e.code < 500:
+                raise RuntimeError(f"Graph sendMail failed: {e.code}") from e
+            raise EmailDeliveryUnconfirmed(f"Graph sendMail returned {e.code}") from e
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            logger.error("Graph sendMail transport error: %s", e)
+            raise EmailDeliveryUnconfirmed(f"Graph sendMail transport error: {e}") from e
 
 
 def _plain_text_to_html(text: str) -> str:

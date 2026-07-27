@@ -7,6 +7,7 @@ import { LoginScreen, type User } from './screens/LoginScreen'
 import { RecordingScreen, type RecordingSession } from './screens/RecordingScreen'
 import { createMeeting, emailNotes, ensureCurrentPerson, fetchEnrolmentStatus, fetchMeetingReview, retryPipeline, saveTranscriptToSharePoint, uploadAudio, type EnrolmentStatus, type GraphMeetingMetadata, type ManualMeetingAttendee, type SystemAudioSegmentUpload } from './lib/api'
 import { capture, type CaptureStatus, type SystemSegment } from './lib/capture'
+import { emailFailureMessage } from './lib/deliveryNotice'
 import { loadPrefs } from './lib/prefs'
 import { useNotifications } from './lib/useNotifications'
 import { audioDurationSeconds, blobToBase64 } from './lib/recorder'
@@ -550,6 +551,10 @@ function App(): JSX.Element {
         })
         const sharePointResult = await saveTranscriptToSharePoint(meetingId)
         const emailResult = await emailNotes(meetingId, null, user.email)
+        // IN-478: a failed email call may still have delivered (transport
+        // error or backend restart mid-send). Re-check delivery state so the
+        // notice warns "check your inbox" instead of inviting a blind resend.
+        const deliveryAfterFailure = emailResult ? null : (await fetchMeetingReview(meetingId))?.meeting
         if (emailResult && sharePointResult?.sharepoint_web_url) {
           setPostCaptureNotice({
             state: 'ready',
@@ -569,14 +574,22 @@ function App(): JSX.Element {
             state: 'email_failed',
             meetingId,
             title,
-            message: 'Transcript saved to SharePoint, but email was not sent. Sign in to Outlook, then retry email.'
+            message: emailFailureMessage(
+              deliveryAfterFailure?.delivery_status,
+              deliveryAfterFailure?.delivery_error_message,
+              'Transcript saved to SharePoint, but email was not sent. Sign in to Outlook, then retry email.'
+            )
           })
         } else {
           setPostCaptureNotice({
             state: 'email_failed',
             meetingId,
             title,
-            message: 'Notes are ready, but SharePoint save and transcript email failed. Sign in to Microsoft, then retry delivery.'
+            message: emailFailureMessage(
+              deliveryAfterFailure?.delivery_status,
+              deliveryAfterFailure?.delivery_error_message,
+              'Notes are ready, but SharePoint save and transcript email failed. Sign in to Microsoft, then retry delivery.'
+            )
           })
         }
         return
@@ -650,6 +663,9 @@ function App(): JSX.Element {
     })
     const sharePointResult = await saveTranscriptToSharePoint(meetingId)
     const emailResult = await emailNotes(meetingId, null, recorderEmail)
+    // IN-478: same as the post-capture watcher — a failed call may still have
+    // delivered, so let the backend's unconfirmed warning replace "failed".
+    const deliveryAfterFailure = emailResult ? null : (await fetchMeetingReview(meetingId))?.meeting
     setPostCaptureNotice({
       state: emailResult && sharePointResult?.sharepoint_web_url ? 'ready' : 'email_failed',
       meetingId,
@@ -659,8 +675,16 @@ function App(): JSX.Element {
         : emailResult
           ? 'Transcript email was sent, but SharePoint save still failed.'
           : sharePointResult?.sharepoint_web_url
-            ? 'Transcript saved to SharePoint, but email still failed.'
-            : 'SharePoint save and email still failed. The notes are ready and the recording is safe.'
+            ? emailFailureMessage(
+                deliveryAfterFailure?.delivery_status,
+                deliveryAfterFailure?.delivery_error_message,
+                'Transcript saved to SharePoint, but email still failed.'
+              )
+            : emailFailureMessage(
+                deliveryAfterFailure?.delivery_status,
+                deliveryAfterFailure?.delivery_error_message,
+                'SharePoint save and email still failed. The notes are ready and the recording is safe.'
+              )
     })
   }
 

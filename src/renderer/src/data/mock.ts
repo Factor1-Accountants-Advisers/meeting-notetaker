@@ -48,7 +48,7 @@ export type PipelineStage =
   | 'extracting_notes'
   | 'ready'
   | 'failed'
-export type DeliveryStatus = 'not_started' | 'emailing' | 'emailed' | 'failed'
+export type DeliveryStatus = 'not_started' | 'emailing' | 'emailed' | 'unconfirmed' | 'failed'
 export type SharePointStatus = 'not_started' | 'saving' | 'saved' | 'failed'
 
 export interface Meeting {

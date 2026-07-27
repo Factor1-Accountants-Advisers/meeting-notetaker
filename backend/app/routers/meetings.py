@@ -39,6 +39,7 @@ from app.schemas import (
     UploadAudioRequest,
 )
 from app.services.email import (
+    EmailDeliveryUnconfirmed,
     build_meeting_notes_email_html,
     build_transcript_attachment,
     get_email_provider,
@@ -510,6 +511,12 @@ async def email_notes(
         )
 
     set_delivery_state(meeting_id, DeliveryStatus.emailing)
+    # Durability before the side effect (IN-478): the snapshot middleware only
+    # persists after the response, so a crash mid-send used to restart into a
+    # fully re-armed not_started — and the post-capture watcher then sent a
+    # second real email. With `emailing` on disk, startup reconcile flips it
+    # to `unconfirmed` instead.
+    store.save_snapshot()
     email_body = build_meeting_notes_email_html(
         meeting_title=meeting.title,
         summary_html=store.SUMMARY_HTML.get(meeting_id),
@@ -540,6 +547,22 @@ async def email_notes(
             access_token=graph_token or None,
             content_type="HTML",
         )
+    except EmailDeliveryUnconfirmed as exc:
+        # The message may have reached Graph (timeout/5xx/connection drop
+        # after send). Recording `failed` here invited a duplicate resend
+        # (IN-478); `unconfirmed` keeps retry open but warns the user first.
+        logger.exception("Email delivery unconfirmed for %s", meeting_id)
+        set_delivery_state(
+            meeting_id,
+            DeliveryStatus.unconfirmed,
+            "The transcript email attempt was not confirmed — it may already "
+            "have been delivered. Check your inbox before resending.",
+        )
+        store.save_snapshot()
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Email delivery unconfirmed: {exc}",
+        )
     except Exception as exc:
         logger.exception("Email delivery failed for %s", meeting_id)
         set_delivery_state(meeting_id, DeliveryStatus.failed, f"Email delivery failed: {exc}")
@@ -551,6 +574,9 @@ async def email_notes(
 
     sent_at = datetime.now(timezone.utc)
     set_delivery_state(meeting_id, DeliveryStatus.emailed, recipients=recipients, emailed_at=sent_at)
+    # Persist success before anything else can fail — a crash between the
+    # send and the middleware snapshot would forget the email was ever sent.
+    store.save_snapshot()
     store.add_audit(
         actor,
         "meeting.email",

@@ -46,6 +46,10 @@ class DeliveryStatus(str, Enum):
     not_started = "not_started"
     emailing = "emailing"
     emailed = "emailed"
+    # Send attempt with an unknown outcome (transport error after the request
+    # may have reached Graph, or a restart mid-send). Resend is allowed, but
+    # the UI warns the user to check their inbox first (IN-478).
+    unconfirmed = "unconfirmed"
     failed = "failed"
 
 
