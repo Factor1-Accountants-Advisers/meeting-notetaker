@@ -10,6 +10,7 @@ import {
   emailNotes,
   ensureCurrentPerson,
   fetchEnrolmentStatus,
+  fetchMeetings,
   fetchMeetingReview,
   retryBlobDelivery,
   retryPipeline,
@@ -86,6 +87,8 @@ type BlobDeliveryNotice = {
   retrying: boolean
 }
 
+type BlobDeliveryState = Pick<MeetingDto, 'blob_status' | 'blob_error_message'>
+
 const BLOB_DELIVERY_FALLBACK = 'Secure storage upload failed. Retry when connected.'
 const BLOB_DELIVERY_TAKING_LONGER =
   'Secure storage is taking longer than expected. You can continue working while it finishes.'
@@ -94,7 +97,7 @@ const BLOB_DELIVERY_SLOW_POLL_AFTER_MS = 10 * 60 * 1000
 function blobDeliveryNotice(
   meetingId: string,
   title: string,
-  meeting: MeetingDto,
+  meeting: BlobDeliveryState,
   retrying: boolean,
   pendingMessage = 'Saving meeting record to secure storage…'
 ): BlobDeliveryNotice {
@@ -163,6 +166,7 @@ function App(): JSX.Element {
     Record<string, BlobDeliveryNotice>
   >({})
   const blobDeliveryEpochSequenceRef = useRef(0)
+  const blobDeliveryHydrationSessionRef = useRef(0)
   const blobDeliveryEpochsRef = useRef(new Map<string, number>())
   const blobDeliveryTimersRef = useRef(new Map<string, number>())
   const [interrupted, setInterrupted] = useState<SpillEntry[]>([])
@@ -538,6 +542,64 @@ function App(): JSX.Element {
     }
   }, [user, enrolmentSatisfied])
 
+  useEffect(() => {
+    const hydrationSession = ++blobDeliveryHydrationSessionRef.current
+    let cancelled = false
+
+    if (user) {
+      void (async () => {
+        try {
+          const meetings = await fetchMeetings()
+          if (
+            cancelled ||
+            blobDeliveryHydrationSessionRef.current !== hydrationSession ||
+            !meetings
+          ) {
+            return
+          }
+
+          for (const meeting of meetings) {
+            if (
+              cancelled ||
+              blobDeliveryHydrationSessionRef.current !== hydrationSession
+            ) {
+              return
+            }
+            if (
+              meeting.pipelineStatus !== 'ready' ||
+              (meeting.blobStatus !== 'pending' && meeting.blobStatus !== 'failed') ||
+              blobDeliveryEpochsRef.current.has(meeting.id)
+            ) {
+              continue
+            }
+
+            const epoch = nextBlobDeliveryEpoch(meeting.id)
+            const delivery: BlobDeliveryState = {
+              blob_status: meeting.blobStatus,
+              blob_error_message: meeting.blobErrorMessage
+            }
+            if (meeting.blobStatus === 'pending') {
+              watchBlobDelivery(meeting.id, meeting.title, delivery, epoch, false)
+            } else {
+              upsertBlobDeliveryNotice(
+                blobDeliveryNotice(meeting.id, meeting.title, delivery, false)
+              )
+            }
+          }
+        } catch {
+          // Hydration is best-effort. Never create sample or technical-error notices.
+        }
+      })()
+    }
+
+    return () => {
+      cancelled = true
+      if (blobDeliveryHydrationSessionRef.current === hydrationSession) {
+        blobDeliveryHydrationSessionRef.current += 1
+      }
+    }
+  }, [user?.email])
+
   if (!authChecked) {
     return <div className="flex h-full items-center justify-center bg-page"><span className="h-5 w-5 animate-spin rounded-full border-2 border-edge-tertiary border-t-brand-blue" /></div>
   }
@@ -637,13 +699,13 @@ function App(): JSX.Element {
   const watchBlobDelivery = (
     meetingId: string,
     title: string,
-    initialMeeting: MeetingDto,
+    initialMeeting: BlobDeliveryState,
     epoch: number,
     retrying: boolean
   ): void => {
     const startedAt = Date.now()
 
-    const applyAndSchedule = (meeting: MeetingDto): void => {
+    const applyAndSchedule = (meeting: BlobDeliveryState): void => {
       if (!blobDeliveryIsCurrent(meetingId, epoch)) return
       clearBlobDeliveryTimer(meetingId)
 
@@ -996,6 +1058,8 @@ function App(): JSX.Element {
 
     const review = await fetchMeetingReview(meetingId)
     if (review?.meeting.pipeline_status === 'ready') {
+      const blobDeliveryEpoch = nextBlobDeliveryEpoch(meetingId)
+      watchBlobDelivery(meetingId, title, review.meeting, blobDeliveryEpoch, false)
       await retryTranscriptEmail(meetingId, title)
       return
     }
@@ -1125,6 +1189,7 @@ function App(): JSX.Element {
     // onEnrolled refetch below) can detect this logout and discard its
     // result instead of landing a stale status into the next session.
     enrolmentEpochRef.current += 1
+    blobDeliveryHydrationSessionRef.current += 1
     for (const timer of blobDeliveryTimersRef.current.values()) {
       window.clearTimeout(timer)
     }
