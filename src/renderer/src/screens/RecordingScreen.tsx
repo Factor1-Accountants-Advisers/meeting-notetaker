@@ -247,8 +247,46 @@ export function RecordingScreen({
               Backend unavailable — this meeting is not saved yet.
             </span>
           )}
+          {/* Audio input level meters (IN-128) */}
+          {captureStatus?.mic === 'active' && captureStatus.micLevel !== null && (
+            <LevelMeter label="Microphone" level={captureStatus.micLevel} tone="mic" />
+          )}
+          {session.source === 'online' &&
+            captureStatus?.loopback === 'active' &&
+            captureStatus.loopbackLevel !== null && (
+              <LevelMeter label="System audio" level={captureStatus.loopbackLevel} tone="loopback" />
+            )}
         </div>
       </Card>
+    </div>
+  )
+}
+
+/** Live audio input meter bar (IN-128). Fills smoothly with the RMS level. */
+function LevelMeter({
+  label,
+  level,
+  tone
+}: {
+  label: string
+  level: number
+  tone: 'mic' | 'loopback'
+}): JSX.Element {
+  // Clamp and scale: 0–0.05 = barely visible, 0.5 = half full, 1.0 = full.
+  // Use a non-linear curve so quiet signals still show movement.
+  const visual = Math.min(1, Math.pow(level / 0.05, 0.45) * 0.15)
+  const barColor =
+    tone === 'mic' ? 'bg-[#CC6A38]' : 'bg-[#2F6F95]'
+
+  return (
+    <div className="flex items-center gap-2">
+      <span className="w-[88px] shrink-0 text-[11px] text-content-tertiary">{label}</span>
+      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[#E8EDF3]">
+        <div
+          className={`h-full rounded-full transition-[width] duration-75 ease-linear ${barColor}`}
+          style={{ width: `${Math.round(visual * 100)}%` }}
+        />
+      </div>
     </div>
   )
 }

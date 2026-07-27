@@ -49,6 +49,10 @@ export interface CaptureStatus {
   mic: StreamState
   loopback: StreamState
   recording: boolean
+  /** RMS level 0–1 for the mic stream, updated ~10x/sec. null when no monitor is running. */
+  micLevel: number | null
+  /** RMS level 0–1 for the system-audio loopback stream. null = no loopback or no monitor. */
+  loopbackLevel: number | null
 }
 
 export interface SystemSegment {
@@ -69,7 +73,7 @@ export interface CaptureResult {
   systemSegments?: SystemSegment[]
 }
 
-const IDLE: CaptureStatus = { mic: 'off', loopback: 'off', recording: false }
+const IDLE: CaptureStatus = { mic: 'off', loopback: 'off', recording: false, micLevel: null, loopbackLevel: null }
 
 /** Session details persisted alongside the spill so an interrupted recording is recoverable (IN-129). */
 export interface SpillSessionMeta {
@@ -130,6 +134,8 @@ class CaptureController {
   private micMonitorStop: (() => void) | null = null
   private loopbackMonitorStop: (() => void) | null = null
   private statusListener: ((status: CaptureStatus) => void) | null = null
+  /** Optional high-frequency listener for live audio levels (IN-128). */
+  private levelListener: ((micLevel: number | null, loopbackLevel: number | null) => void) | null = null
   private spillKey: string | null = null
   // Segmented system capture (IN-468): earlier segments are finalized when a
   // device switch swaps the loopback stream; the current one lives in
@@ -162,6 +168,13 @@ class CaptureController {
     this.statusListener = listener
   }
 
+  /** Receive live RMS levels ~10x/sec for the audio input meter (IN-128). */
+  setLevelListener(
+    listener: ((micLevel: number | null, loopbackLevel: number | null) => void) | null
+  ): void {
+    this.levelListener = listener
+  }
+
   async start(
     source: 'online' | 'in_person',
     micDeviceId = '',
@@ -169,7 +182,7 @@ class CaptureController {
   ): Promise<CaptureStatus> {
     this.releaseAll()
 
-    const status: CaptureStatus = { mic: 'off', loopback: 'off', recording: false }
+    const status: CaptureStatus = { mic: 'off', loopback: 'off', recording: false, micLevel: null, loopbackLevel: null }
     this.openSpillSession(source, spillMeta)
 
     try {
@@ -194,6 +207,10 @@ class CaptureController {
           this.status = { ...this.status, mic: 'active' }
           window.api?.debugLog?.('mic capture recovered', { rms })
           this.statusListener?.({ ...this.status })
+        },
+        (rms) => {
+          this.status = { ...this.status, micLevel: rms }
+          this.levelListener?.(rms, this.status.loopbackLevel)
         }
       )
     } catch {
@@ -519,10 +536,11 @@ class CaptureController {
   }
 
   /**
-   * RMS silence watchdog. onSilent fires once when the stream has been under
-   * the silence floor for warnAfterS consecutive seconds; onRecovered fires
-   * once when signal returns. Best-effort: a monitor failure must never break
-   * capture. Returns a cleanup function (or null if monitoring is impossible).
+   * RMS silence watchdog + audio level meter (IN-128). onSilent fires once
+   * when the stream has been under the silence floor for warnAfterS
+   * consecutive seconds; onRecovered fires once when signal returns.
+   * onLevel fires ~10×/sec with the current RMS (smoothed) for a live
+   * input meter. Returns a cleanup function (or null if monitoring fails).
    *
    * The mic stream is observed directly (safe — the enrollment recorder does
    * the same). Loopback streams must go through startLoopbackSilenceMonitor,
@@ -532,7 +550,8 @@ class CaptureController {
     stream: MediaStream,
     warnAfterS: number,
     onSilent: (rms: number, silentSeconds: number) => void,
-    onRecovered: (rms: number) => void
+    onRecovered: (rms: number) => void,
+    onLevel?: (rms: number) => void
   ): (() => void) | null {
     try {
       const ctx = new AudioContext()
@@ -542,6 +561,20 @@ class CaptureController {
       const samples = new Float32Array(analyser.fftSize)
       let silentSeconds = 0
       let flagged = false
+      // Fast level poll ~10×/sec for the audio meter (IN-128).
+      let levelTimer: ReturnType<typeof setInterval> | null = null
+      if (onLevel) {
+        let smoothed = 0
+        levelTimer = setInterval(() => {
+          analyser.getFloatTimeDomainData(samples)
+          let sum = 0
+          for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i]
+          const rms = Math.sqrt(sum / samples.length)
+          // Exponential smoothing to avoid jitter in the meter bar.
+          smoothed = smoothed * 0.7 + rms * 0.3
+          onLevel(Math.min(smoothed, 1))
+        }, 100)
+      }
       const timer = setInterval(() => {
         analyser.getFloatTimeDomainData(samples)
         let sum = 0
@@ -563,6 +596,7 @@ class CaptureController {
       }, 1000)
       return () => {
         clearInterval(timer)
+        if (levelTimer) clearInterval(levelTimer)
         ctx.close().catch(() => {})
       }
     } catch {
@@ -597,6 +631,10 @@ class CaptureController {
         this.status = { ...this.status, loopback: 'active' }
         window.api?.debugLog?.('system audio capture recovered', { rms })
         this.statusListener?.({ ...this.status })
+      },
+      (rms) => {
+        this.status = { ...this.status, loopbackLevel: rms }
+        this.levelListener?.(this.status.micLevel, rms)
       }
     )
     return () => {

@@ -252,6 +252,16 @@ function App(): JSX.Element {
     return () => capture.setStatusListener(null)
   }, [])
 
+  // Live audio levels for the input meter (IN-128).
+  useEffect(() => {
+    capture.setLevelListener((micLevel, loopbackLevel) =>
+      setCaptureStatus((prev) =>
+        prev ? { ...prev, micLevel, loopbackLevel } : prev
+      )
+    )
+    return () => capture.setLevelListener(null)
+  }, [])
+
   // OS toasts are shown silent; the renderer owns the Notetaker chime so the
   // bundled wav works in an unpackaged win32 app (IN-477). The window only
   // hides to the tray, so this listener stays alive while "closed".
