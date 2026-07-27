@@ -1339,6 +1339,34 @@ class BlobDeliveryHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("retry-token", serialized)
         self.assertNotIn("sig=", serialized)
 
+    async def test_http_blob_retry_disabled_storage_audits_actual_unchanged_state(self):
+        meeting = self._ready_meeting(blob_status=BlobStatus.failed)
+        disabled_settings = SimpleNamespace(
+            storage_api_enabled=False,
+            storage_api_url="",
+        )
+
+        with patch(
+            "app.services.blob_delivery.get_settings",
+            return_value=disabled_settings,
+        ), patch("app.store.save_snapshot"):
+            response = await _asgi_post(
+                self.app,
+                f"/api/v1/meetings/{meeting.id}/blob/retry",
+                {
+                    "X-MN-User": "Editor",
+                    "X-MN-Storage-Token": "retry-token",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["blob_status"], BlobStatus.failed.value)
+        retry_audit = [entry for entry in store.AUDIT_LOG if entry.action == "meeting.blob_retry"]
+        self.assertEqual(len(retry_audit), 1)
+        self.assertEqual(retry_audit[0].before, BlobStatus.failed.value)
+        self.assertEqual(retry_audit[0].after, BlobStatus.failed.value)
+        self.assertNotIn("retry-token", retry_audit[0].model_dump_json())
+
     async def test_http_blob_retry_enforces_editor_acl_and_readiness(self):
         meeting = self._ready_meeting()
         with patch("app.routers.meetings.kick_blob_delivery") as kick, patch(

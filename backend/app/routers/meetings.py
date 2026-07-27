@@ -476,7 +476,7 @@ async def retry_blob_delivery(
         "meeting.blob_retry",
         meeting.title,
         before=before_blob_status,
-        after=BlobStatus.pending.value,
+        after=current.blob_status.value,
         meeting_id=meeting_id,
     )
     # Persist the independent retry intent before the retained background task
