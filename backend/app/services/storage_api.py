@@ -13,7 +13,10 @@ Never log tokens or voiceprint values.
 
 import http.client
 import json
+import os
 import shutil
+import tempfile
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -101,9 +104,18 @@ class BlobExportReceipt(BaseModel):
 
 
 class AudioUploadGrant(BaseModel):
-    upload_url: str
+    upload_url: str = Field(repr=False)
     blob_path: str
     expires_at: datetime
+
+
+_MEETING_LOCKS_GUARD = threading.Lock()
+_MEETING_LOCKS: dict[UUID, threading.Lock] = {}
+
+
+def _meeting_lock(meeting_id: UUID) -> threading.Lock:
+    with _MEETING_LOCKS_GUARD:
+        return _MEETING_LOCKS.setdefault(meeting_id, threading.Lock())
 
 
 class StorageApiClient(Protocol):
@@ -165,9 +177,20 @@ class StubStorageApiClient:
     @staticmethod
     def _write_json(path: Path, value: dict) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(value), encoding="utf-8")
-        tmp.replace(path)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        )
+        os.close(descriptor)
+        temporary = Path(temporary_name)
+        try:
+            temporary.write_text(json.dumps(value), encoding="utf-8")
+            temporary.replace(path)
+        except (OSError, TypeError, ValueError):
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
     def register_voiceprint(self, enrolment: CentralEnrolment, access_token: str | None) -> CentralEnrolment:
         self._fail_if_injected(self)
@@ -230,25 +253,40 @@ class StubStorageApiClient:
         access_token: str | None,
     ) -> BlobExportReceipt:
         self._fail_if_injected(self)
-        meeting_dir = central_meetings_dir() / str(meeting_id)
-        current = meeting_dir / "meeting.json"
-        now = datetime.now(timezone.utc)
-        revision: Literal["created", "updated"] = "created"
-        if current.exists():
-            revision = "updated"
-            history_name = now.strftime("%Y%m%dT%H%M%S%fZ") + ".json"
-            history = meeting_dir / "history" / history_name
-            history.parent.mkdir(parents=True, exist_ok=True)
-            tmp_history = history.with_suffix(".tmp")
-            shutil.copyfile(current, tmp_history)
-            tmp_history.replace(history)
-        self._write_json(current, export_payload)
-        return BlobExportReceipt(
-            meeting_id=meeting_id,
-            blob_path=f"central-meetings/{meeting_id}/meeting.json",
-            revision=revision,
-            updated_at=now,
-        )
+        with _meeting_lock(meeting_id):
+            meeting_dir = central_meetings_dir() / str(meeting_id)
+            current = meeting_dir / "meeting.json"
+            now = datetime.now(timezone.utc)
+            revision: Literal["created", "updated"] = "created"
+            try:
+                if current.exists():
+                    revision = "updated"
+                    history_name = now.strftime("%Y%m%dT%H%M%S%fZ") + ".json"
+                    history = meeting_dir / "history" / history_name
+                    history.parent.mkdir(parents=True, exist_ok=True)
+                    descriptor, temporary_name = tempfile.mkstemp(
+                        prefix=f".{history.name}.", suffix=".tmp", dir=history.parent
+                    )
+                    os.close(descriptor)
+                    temporary = Path(temporary_name)
+                    try:
+                        shutil.copyfile(current, temporary)
+                        temporary.replace(history)
+                    except OSError:
+                        try:
+                            temporary.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                        raise
+                self._write_json(current, export_payload)
+            except (OSError, TypeError, ValueError) as exc:
+                raise StorageApiUnavailable("stub meeting export could not be written") from exc
+            return BlobExportReceipt(
+                meeting_id=meeting_id,
+                blob_path=f"central-meetings/{meeting_id}/meeting.json",
+                revision=revision,
+                updated_at=now,
+            )
 
     def request_audio_upload_sas(
         self,
@@ -265,23 +303,37 @@ class StubStorageApiClient:
 
     def upload_audio_to_grant(self, grant: AudioUploadGrant, audio_path: Path) -> None:
         self._fail_if_injected(self)
-        parsed = urllib.parse.urlsplit(grant.upload_url)
+        try:
+            parsed = urllib.parse.urlsplit(grant.upload_url)
+        except ValueError:
+            raise StorageApiContractError("stub audio upload grant was invalid") from None
         if parsed.scheme != "stub" or parsed.netloc != "meeting-upload":
             raise StorageApiContractError("stub audio upload grant was invalid")
         try:
             meeting_id = UUID(parsed.path.lstrip("/"))
-        except ValueError as exc:
-            raise StorageApiContractError("stub audio upload grant was invalid") from exc
+        except ValueError:
+            raise StorageApiContractError("stub audio upload grant was invalid") from None
         destination = central_meetings_dir() / str(meeting_id) / "audio.webm"
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary = destination.with_suffix(".tmp")
-        try:
-            with audio_path.open("rb") as source, temporary.open("wb") as target:
-                shutil.copyfileobj(source, target, length=1024 * 1024)
-            temporary.replace(destination)
-        except OSError as exc:
-            temporary.unlink(missing_ok=True)
-            raise StorageApiUnavailable("stub audio upload could not read the recording") from exc
+        with _meeting_lock(meeting_id):
+            try:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                descriptor, temporary_name = tempfile.mkstemp(
+                    prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
+                )
+                os.close(descriptor)
+                temporary = Path(temporary_name)
+                try:
+                    with audio_path.open("rb") as source, temporary.open("wb") as target:
+                        shutil.copyfileobj(source, target, length=1024 * 1024)
+                    temporary.replace(destination)
+                except OSError:
+                    try:
+                        temporary.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    raise
+            except OSError as exc:
+                raise StorageApiUnavailable("stub audio upload could not read the recording") from exc
 
 
 class RestStorageApiClient:
@@ -436,10 +488,10 @@ class RestStorageApiClient:
         try:
             grant = AudioUploadGrant.model_validate(raw)
             self._blob_upload_target(grant.upload_url)
-        except (pydantic.ValidationError, ValueError) as exc:
+        except (pydantic.ValidationError, ValueError):
             raise StorageApiContractError(
                 "storage API returned a malformed audio upload grant"
-            ) from exc
+            ) from None
         return grant
 
     @staticmethod
@@ -449,8 +501,8 @@ class RestStorageApiClient:
             parsed = urllib.parse.urlsplit(upload_url)
             hostname = parsed.hostname
             port = parsed.port
-        except ValueError as exc:
-            raise StorageApiContractError("audio upload grant target was invalid") from exc
+        except ValueError:
+            raise StorageApiContractError("audio upload grant target was invalid") from None
         if (
             parsed.scheme != "https"
             or not hostname
@@ -486,22 +538,24 @@ class RestStorageApiClient:
                 while chunk := audio.read(1024 * 1024):
                     connection.send(chunk)
             response = connection.getresponse()
-            response.read()
+            response.read(64 * 1024)
             if not 200 <= response.status < 300:
                 if response.status >= 500:
                     raise StorageApiUnavailable("blob storage was unavailable for audio upload")
                 raise StorageApiRejected("blob storage rejected the audio upload")
         except (StorageApiRejected, StorageApiUnavailable):
             raise
-        except (http.client.InvalidURL, ValueError) as exc:
-            raise StorageApiContractError("audio upload grant target was invalid") from exc
+        except (http.client.InvalidURL, ValueError):
+            raise StorageApiContractError("audio upload grant target was invalid") from None
+        except http.client.HTTPException:
+            raise StorageApiUnavailable("audio upload was unavailable") from None
         except OSError as exc:
             raise StorageApiUnavailable("audio upload was unavailable") from exc
         finally:
             if connection is not None:
                 try:
                     connection.close()
-                except OSError:
+                except (OSError, http.client.HTTPException):
                     pass
 
 

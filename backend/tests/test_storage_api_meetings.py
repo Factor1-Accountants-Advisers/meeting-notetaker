@@ -1,9 +1,12 @@
 """IN-386 meeting export and audio delivery through the Storage API seam."""
 
+import http.client
 import json
 import tempfile
+import traceback
 import unittest
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
@@ -53,17 +56,22 @@ class _FakeHttpResponse:
 
 
 class _BlobResponse:
-    def __init__(self, status: int):
+    def __init__(self, status: int, read_error=None):
         self.status = status
+        self.read_error = read_error
         self.read_called = False
+        self.read_amount = None
 
-    def read(self):
+    def read(self, amount=-1):
         self.read_called = True
+        self.read_amount = amount
+        if self.read_error:
+            raise self.read_error
         return b""
 
 
 class _BlobConnection:
-    def __init__(self, host, port=None, timeout=None, status=201):
+    def __init__(self, host, port=None, timeout=None, status=201, response_error=None, read_error=None):
         self.host = host
         self.port = port
         self.timeout = timeout
@@ -73,7 +81,8 @@ class _BlobConnection:
         self.headers = {}
         self.sent = []
         self.closed = False
-        self.response = _BlobResponse(status)
+        self.response_error = response_error
+        self.response = _BlobResponse(status, read_error=read_error)
 
     def putrequest(self, method, target):
         self.method = method
@@ -89,6 +98,8 @@ class _BlobConnection:
         self.sent.append(data)
 
     def getresponse(self):
+        if self.response_error:
+            raise self.response_error
         return self.response
 
     def close(self):
@@ -187,6 +198,7 @@ class RestMeetingDeliveryTests(unittest.TestCase):
         self.assertEqual(connection.headers["Content-Length"], str((1024 * 1024 * 2) + 13))
         self.assertEqual([len(chunk) for chunk in connection.sent], [1024 * 1024, 1024 * 1024, 13])
         self.assertTrue(connection.response.read_called)
+        self.assertEqual(connection.response.read_amount, 64 * 1024)
         self.assertTrue(connection.closed)
 
     def test_audio_upload_rejects_invalid_or_stub_targets_and_maps_failures_without_url(self):
@@ -222,6 +234,63 @@ class RestMeetingDeliveryTests(unittest.TestCase):
 
         self.assertNotIn("TOPSECRET", str(error.exception))
         self.assertNotIn(malformed_url, str(error.exception))
+
+    def test_audio_upload_grant_secrets_are_absent_from_repr_and_tracebacks(self):
+        malformed_url = "https://acct.blob.core.windows.net/bad path?sig=TOPSECRET"
+        grant = AudioUploadGrant(**dict(GRANT, upload_url=malformed_url))
+        self.assertNotIn("TOPSECRET", repr(grant))
+        self.assertNotIn(malformed_url, repr(grant))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio_path = Path(tmp) / "audio.webm"
+            audio_path.write_bytes(b"a")
+            with self.assertRaises(StorageApiContractError) as malformed_url_error:
+                RestStorageApiClient("https://storage.example").upload_audio_to_grant(grant, audio_path)
+
+        def opener(req, timeout=30):
+            return _FakeHttpResponse(
+                {"upload_url": malformed_url, "blob_path": "x", "expires_at": "not-a-date"}
+            )
+
+        with self.assertRaises(StorageApiContractError) as malformed_grant_error:
+            RestStorageApiClient("https://storage.example", opener=opener).request_audio_upload_sas(
+                MEETING_ID, TIME_BASIS, "token-value"
+            )
+
+        for error in (malformed_url_error.exception, malformed_grant_error.exception):
+            formatted = "".join(traceback.format_exception(error))
+            self.assertNotIn("TOPSECRET", formatted)
+            self.assertNotIn(malformed_url, formatted)
+
+    def test_audio_upload_maps_bad_status_line_to_safe_unavailable_error(self):
+        connection = _BlobConnection(
+            "stf1nt.blob.core.windows.net",
+            response_error=http.client.BadStatusLine("malformed response"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            audio_path = Path(tmp) / "audio.webm"
+            audio_path.write_bytes(b"a")
+            with self.assertRaises(StorageApiUnavailable):
+                RestStorageApiClient(
+                    "https://storage.example",
+                    connection_factory=lambda *args, **kwargs: connection,
+                ).upload_audio_to_grant(AudioUploadGrant(**GRANT), audio_path)
+        self.assertTrue(connection.closed)
+
+    def test_audio_upload_maps_incomplete_response_to_safe_unavailable_error(self):
+        connection = _BlobConnection(
+            "stf1nt.blob.core.windows.net",
+            read_error=http.client.IncompleteRead(b"partial", 64),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            audio_path = Path(tmp) / "audio.webm"
+            audio_path.write_bytes(b"a")
+            with self.assertRaises(StorageApiUnavailable):
+                RestStorageApiClient(
+                    "https://storage.example",
+                    connection_factory=lambda *args, **kwargs: connection,
+                ).upload_audio_to_grant(AudioUploadGrant(**GRANT), audio_path)
+        self.assertTrue(connection.closed)
 
 
 class StubMeetingDeliveryTests(unittest.TestCase):
@@ -272,3 +341,35 @@ class StubMeetingDeliveryTests(unittest.TestCase):
             source.write_bytes(b"recording")
             with self.assertRaises(StorageApiError):
                 self.client.upload_audio_to_grant(grant, source)
+
+    def test_stub_serializes_concurrent_exports_for_one_meeting(self):
+        def export(revision):
+            return self.client.upload_meeting_export(
+                MEETING_ID,
+                TIME_BASIS,
+                {"revision": revision, "padding": "x" * 8192},
+                None,
+            )
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(export, range(16)))
+
+        meeting_dir = central_meetings_dir() / str(MEETING_ID)
+        self.assertEqual(len(results), 16)
+        self.assertEqual(sum(result.revision == "created" for result in results), 1)
+        self.assertEqual(len(list((meeting_dir / "history").glob("*.json"))), 15)
+        self.assertIn(json.loads((meeting_dir / "meeting.json").read_text(encoding="utf-8"))["revision"], range(16))
+
+    def test_stub_serializes_concurrent_audio_copies_for_one_meeting(self):
+        grant = self.client.request_audio_upload_sas(MEETING_ID, TIME_BASIS, None)
+        with tempfile.TemporaryDirectory() as tmp:
+            sources = []
+            for number in range(8):
+                source = Path(tmp) / f"source-{number}.webm"
+                source.write_bytes(f"recording-{number}".encode("utf-8"))
+                sources.append(source)
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                list(pool.map(lambda source: self.client.upload_audio_to_grant(grant, source), sources))
+
+        stored = (central_meetings_dir() / str(MEETING_ID) / "audio.webm").read_bytes()
+        self.assertIn(stored, {f"recording-{number}".encode("utf-8") for number in range(8)})
