@@ -675,14 +675,15 @@ async def save_transcript_to_sharepoint(
         }
     )
     try:
-        upload = await get_sharepoint_provider(graph_token or None).save_transcript(
+        provider = get_sharepoint_provider(graph_token or None)
+        upload = await provider.save_transcript(
             meeting=meeting,
             filename=filename,
             content=transcript_text,
             access_token=graph_token or None,
         )
         recipients = _sharepoint_recipients(meeting)
-        await get_sharepoint_provider(graph_token or None).grant_view(
+        await provider.grant_view(
             item_id=upload.item_id,
             recipients=recipients,
             access_token=graph_token or None,
