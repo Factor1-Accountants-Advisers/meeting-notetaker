@@ -44,6 +44,15 @@ class SharePointProvider(Protocol):
     ) -> SharePointUploadResult:
         ...
 
+    async def grant_view(
+        self,
+        *,
+        item_id: str,
+        recipients: list[str],
+        access_token: str | None = None,
+    ) -> None:
+        ...
+
 
 def safe_transcript_filename(title: str, meeting_id: object) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_. -]+", "-", title).strip(" .-")
@@ -69,6 +78,16 @@ class LocalSharePointProvider:
         path.write_text(content, encoding="utf-8")
         logger.info("local SharePoint transcript saved for %s: %s", meeting.id, path)
         return SharePointUploadResult(web_url=path.as_uri(), item_id=str(path))
+
+    async def grant_view(
+        self,
+        *,
+        item_id: str,
+        recipients: list[str],
+        access_token: str | None = None,
+    ) -> None:
+        """Local stub mode has no real permission system; nothing to grant."""
+        return
 
 
 class GraphSharePointProvider:
@@ -110,6 +129,41 @@ class GraphSharePointProvider:
             raise RuntimeError("Graph upload completed but returned no item id")
         logger.info("SharePoint transcript saved for %s", meeting.id)
         return SharePointUploadResult(web_url=web_url, item_id=item_id)
+
+    async def grant_view(
+        self,
+        *,
+        item_id: str,
+        recipients: list[str],
+        access_token: str | None = None,
+    ) -> None:
+        if not recipients:
+            return
+        if not access_token:
+            raise ValueError("SharePoint permission grant requires a delegated Graph token")
+        url = f"{GRAPH_DRIVE_BASE}/{self._drive_id}/items/{item_id}/invite"
+        payload = {
+            "recipients": [{"email": email} for email in recipients],
+            "requireSignIn": True,
+            "sendInvitation": False,
+            "roles": ["read"],
+        }
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            resp.read()
+        logger.info(
+            "SharePoint view access granted for item %s to %d recipient(s)",
+            item_id,
+            len(recipients),
+        )
 
 
 def get_sharepoint_provider(access_token: str | None = None) -> SharePointProvider:

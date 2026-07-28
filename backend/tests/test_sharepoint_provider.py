@@ -94,6 +94,57 @@ class SharePointProviderTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsInstance(provider, GraphSharePointProvider)
 
+    async def test_graph_provider_grants_view_access_to_recipients(self):
+        captured = {}
+
+        def fake_urlopen(req, timeout=0):
+            captured["url"] = req.full_url
+            captured["method"] = req.get_method()
+            captured["body"] = json.loads(req.data.decode("utf-8"))
+            return _Response()
+
+        provider = GraphSharePointProvider("drive-123", "")
+        with patch("urllib.request.urlopen", fake_urlopen):
+            await provider.grant_view(
+                item_id="item-abc-123",
+                recipients=["bb@factor1.com.au", "jt@factor1.com.au"],
+                access_token="token",
+            )
+
+        self.assertEqual(
+            captured["url"],
+            "https://graph.microsoft.com/v1.0/drives/drive-123/items/item-abc-123/invite",
+        )
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(captured["body"]["roles"], ["read"])
+        self.assertEqual(captured["body"]["sendInvitation"], False)
+        self.assertEqual(
+            captured["body"]["recipients"],
+            [{"email": "bb@factor1.com.au"}, {"email": "jt@factor1.com.au"}],
+        )
+
+    async def test_graph_provider_grant_view_is_noop_for_empty_recipients(self):
+        def fake_urlopen(req, timeout=0):
+            raise AssertionError("should not call Graph when there are no recipients")
+
+        provider = GraphSharePointProvider("drive-123", "")
+        with patch("urllib.request.urlopen", fake_urlopen):
+            await provider.grant_view(item_id="item-abc-123", recipients=[], access_token="token")
+
+    async def test_graph_provider_grant_view_requires_token(self):
+        provider = GraphSharePointProvider("drive-123", "")
+        with self.assertRaises(ValueError):
+            await provider.grant_view(
+                item_id="item-abc-123", recipients=["bb@factor1.com.au"], access_token=None
+            )
+
+    async def test_local_provider_grant_view_is_noop(self):
+        provider = sharepoint.LocalSharePointProvider()
+        # Should not raise even with no real permission system behind it.
+        await provider.grant_view(
+            item_id="anything", recipients=["bb@factor1.com.au"], access_token=None
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
