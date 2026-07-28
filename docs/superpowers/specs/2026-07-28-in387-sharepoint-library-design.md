@@ -102,7 +102,7 @@ directly under the library root.
 | Party | Access | Source of identity |
 |---|---|---|
 | Recording owner | Implicit (creator access from the identity used to upload) | The signed-in user whose delegated token performed the write |
-| Calendar meeting invitees | View only | `meeting.attendees[].email` (`GraphMeetingAttendeeMetadata`, already on the Meeting model) |
+| Calendar meeting invitees | View only | `meeting.graph_metadata.attendees[].email` (`GraphMeetingAttendeeMetadata`, already on the Meeting model) plus `meeting.graph_metadata.organizer_email` (see organizer note below) |
 | Manual/ad-hoc recording attendees | View only | `meeting.manual_attendees[].email` (`ManualMeetingAttendee`, already on the Meeting model, originally added for voiceprint hints) |
 
 No party other than the owner receives edit access. Grants use Microsoft
