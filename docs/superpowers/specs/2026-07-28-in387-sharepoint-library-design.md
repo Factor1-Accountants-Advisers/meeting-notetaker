@@ -49,11 +49,23 @@ IN-377/378/381/386 built on it.
    access); invitees/attendees get an explicit view-only grant.
 4. Add a Graph "grant view access" capability to the SharePoint service layer
    (an `invite` action call), usable by both calendar and manual/ad-hoc
-   recordings.
+   recordings, **wired into the existing atomic delivery path** in
+   `save_transcript_to_sharepoint` (`backend/app/routers/meetings.py`) so
+   that upload and permission-granting share one `SharePointStatus`
+   transition and one retry — not a disconnected helper method called from
+   nowhere.
 5. Update configuration defaults (`sharepoint_drive_id`,
    `sharepoint_folder_path`) once the real drive ID is known.
 6. Confirm live write access and permission-granting against the real
    library with a delegated token (manual smoke, not automated).
+
+**Definition of done for this ticket:** items 1-4 (identity confirmed,
+structure/naming/permission model documented, and the `invite` capability
+implemented and unit-tested) are the mergeable deliverable. Items 5-6 are
+gated on a human completing the interactive drive-ID lookup and cannot be
+finished in the same sitting as 1-4; they are tracked as an explicit,
+documented follow-up rather than blocking the rest of the ticket from being
+considered complete.
 
 ## Out of scope
 
@@ -96,16 +108,38 @@ directly under the library root.
 No party other than the owner receives edit access. Grants use Microsoft
 Graph's `POST /drives/{drive-id}/items/{item-id}/invite` action with
 `roles: ["read"]` and `sendInvitation: false` (a silent direct grant — no
-email is sent). This action is covered by the delegated `Files.ReadWrite.All`
-scope the desktop already requests via `GRAPH_SHAREPOINT_SCOPES`
-(`src/main/auth-msal.ts`) — no new Azure AD app permission or admin consent
-is required.
+email is sent). This action is believed covered by the delegated
+`Files.ReadWrite.All` scope the desktop already requests via
+`GRAPH_SHAREPOINT_SCOPES` (`src/main/auth-msal.ts`) — no new Azure AD app
+permission or admin consent is expected to be required, but this must be
+confirmed against the actual tenant during implementation (some tenant
+configurations require `Sites.ReadWrite.All` for the `invite` action on a
+SharePoint-backed drive specifically); do not treat "no new permission
+needed" as settled until the live smoke test in "Testing" confirms it.
 
-If a manual recording has an empty `manual_attendees` list, delivery still
-succeeds with only the owner having access — this is not a failure case.
+**Recipients with no usable email are skipped, not a failure.** If a manual
+recording has an empty `manual_attendees` list, delivery still succeeds with
+only the owner having access — this is not a failure case.
 (`ManualMeetingAttendee` already requires a valid email per its existing
-validator, so a malformed-email failure mode does not need separate handling
-here.)
+validator, so a malformed-email failure mode does not arise for manual
+attendees.) Calendar attendees are different: `GraphMeetingAttendeeMetadata.email`
+is `str | None` and is not guaranteed populated (rooms, resources, and
+unresolved external attendees commonly have no email). When building the
+invite recipient list, skip any calendar attendee whose `email` is `None` or
+blank — do not fail the whole delivery over it. This is the same
+degraded-but-successful behavior as the empty-manual-attendees case, applied
+consistently to both recipient sources.
+
+**Idempotency assumption:** both the file upload (`PUT .../content`, which
+overwrites) and the `invite` action (granting a role a recipient already
+has is a no-op, not an error) are believed safe to blindly re-run in full on
+retry. This is what makes the atomic full-retry approach below sound rather
+than merely convenient — if either call were to have ambiguous partial-effect
+semantics on timeout (the way Graph's mail-send transport does, per IN-478),
+atomic full-retry could double-invite or mis-order operations. This
+assumption should be spot-checked against Graph's documented behavior during
+implementation, not just assumed from the analogy to other delivery
+channels.
 
 ## Error handling
 
@@ -116,8 +150,14 @@ safe, fixed error message, and a retry re-runs the entire sequence from
 scratch (re-upload, then re-invite everyone). This reuses the existing
 `SharePointStatus` enum (`not_started` / `saving` / `saved` / `failed`)
 already on the Meeting model — no schema change is needed. It also matches
-the failed-only-retry pattern already established for Blob delivery (IN-386)
-and email delivery (IN-94, hardened further in IN-478).
+the failed-only-retry pattern established for Blob delivery (IN-386). Note
+that email delivery (IN-94) is a related but not identical precedent: IN-478
+added a distinct `unconfirmed` state specifically because Graph's mail-send
+transport has ambiguous-on-timeout semantics, which plain failed-only-retry
+cannot represent safely. This design's atomic full-retry is only correct if
+the idempotency assumption above holds; if implementation finds otherwise,
+follow IN-478's precedent (an intermediate/unconfirmed state) rather than
+this one.
 
 ### Rejected alternative
 
