@@ -225,6 +225,17 @@ class SharePointProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("2024-01-15", filename)
         self.assertNotIn("2026-07-28", filename)
 
+    def test_safe_transcript_filename_treats_naive_created_at_as_utc(self):
+        # Mirrors test_legacy_naive_created_at_is_treated_as_utc in
+        # test_blob_delivery.py for meeting_time_basis_utc: a naive (no
+        # tzinfo) created_at must be treated as already-UTC, not
+        # misinterpreted as local time or rejected.
+        filename = sharepoint.safe_transcript_filename(
+            "Legacy meeting", datetime(2026, 7, 27, 3, 4)
+        )
+
+        self.assertIn("2026-07-27", filename)
+
 
 if __name__ == "__main__":
     unittest.main()
