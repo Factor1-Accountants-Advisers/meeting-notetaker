@@ -675,10 +675,16 @@ async def save_transcript_to_sharepoint(
         }
     )
     try:
-        web_url = await get_sharepoint_provider(graph_token or None).save_transcript(
+        upload = await get_sharepoint_provider(graph_token or None).save_transcript(
             meeting=meeting,
             filename=filename,
             content=transcript_text,
+            access_token=graph_token or None,
+        )
+        recipients = _sharepoint_recipients(meeting)
+        await get_sharepoint_provider(graph_token or None).grant_view(
+            item_id=upload.item_id,
+            recipients=recipients,
             access_token=graph_token or None,
         )
     except Exception as exc:
@@ -701,7 +707,7 @@ async def save_transcript_to_sharepoint(
         update={
             "sharepoint_status": SharePointStatus.saved,
             "sharepoint_error_message": None,
-            "sharepoint_web_url": web_url,
+            "sharepoint_web_url": upload.web_url,
         }
     )
     store.MEETINGS[meeting_id] = updated
@@ -709,7 +715,7 @@ async def save_transcript_to_sharepoint(
         actor,
         "meeting.sharepoint_save",
         meeting.title,
-        after=web_url,
+        after=upload.web_url,
         meeting_id=meeting_id,
     )
     store.save_snapshot()

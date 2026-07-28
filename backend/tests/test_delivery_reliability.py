@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from app import store
 from app.routers import meetings as meetings_router
+from app.services import sharepoint
 from app.schemas import (
     AccessRole,
     ActionItem,
@@ -28,12 +29,22 @@ class FailingEmailProvider:
 
 
 class CaptureSharePointProvider:
-    def __init__(self, uploads):
+    def __init__(self, uploads, grants, fail_grant=False):
         self.uploads = uploads
+        self.grants = grants
+        self.fail_grant = fail_grant
 
     async def save_transcript(self, *, meeting, filename, content, access_token=None):
         self.uploads.append({"meeting": meeting, "filename": filename, "content": content, "token": access_token})
-        return f"https://sharepoint.example/{filename}"
+        return sharepoint.SharePointUploadResult(
+            web_url=f"https://sharepoint.example/{filename}",
+            item_id="item-test-1",
+        )
+
+    async def grant_view(self, *, item_id, recipients, access_token=None):
+        if self.fail_grant:
+            raise RuntimeError("simulated Graph invite failure")
+        self.grants.append({"item_id": item_id, "recipients": recipients, "token": access_token})
 
 
 class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
@@ -113,7 +124,8 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_sharepoint_save_writes_transcript_and_records_location(self):
         uploads = []
-        meetings_router.get_sharepoint_provider = lambda token=None: CaptureSharePointProvider(uploads)
+        grants = []
+        meetings_router.get_sharepoint_provider = lambda token=None: CaptureSharePointProvider(uploads, grants)
 
         result = await meetings_router.save_transcript_to_sharepoint(
             self.meeting_id,
@@ -128,6 +140,39 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(uploads), 1)
         self.assertIn("--- TRANSCRIPT ---", uploads[0]["content"])
         self.assertIn("Summary survives delivery failure.", uploads[0]["content"])
+        self.assertEqual(len(grants), 1)
+        self.assertEqual(grants[0]["item_id"], "item-test-1")
+        self.assertEqual(grants[0]["recipients"], [])
+
+    async def test_sharepoint_grant_failure_marks_whole_delivery_failed_and_retry_recovers(self):
+        uploads = []
+        grants = []
+        meetings_router.get_sharepoint_provider = lambda token=None: CaptureSharePointProvider(
+            uploads, grants, fail_grant=True
+        )
+
+        with self.assertRaises(HTTPException) as raised:
+            await meetings_router.save_transcript_to_sharepoint(
+                self.meeting_id,
+                actor="Joseph",
+                graph_token="token",
+            )
+        self.assertEqual(raised.exception.status_code, 502)
+        self.assertEqual(store.MEETINGS[self.meeting_id].sharepoint_status, SharePointStatus.failed)
+        self.assertIn("simulated Graph invite failure", store.MEETINGS[self.meeting_id].sharepoint_error_message or "")
+        self.assertEqual(len(uploads), 1)
+        self.assertEqual(len(grants), 0)
+
+        # Retry with a working provider re-runs both steps from scratch.
+        meetings_router.get_sharepoint_provider = lambda token=None: CaptureSharePointProvider(uploads, grants)
+        result = await meetings_router.save_transcript_to_sharepoint(
+            self.meeting_id,
+            actor="Joseph",
+            graph_token="token",
+        )
+        self.assertEqual(result.sharepoint_status, SharePointStatus.saved)
+        self.assertEqual(len(uploads), 2)
+        self.assertEqual(len(grants), 1)
 
     async def test_email_acl_rejects_viewer(self):
         """D2: viewer-role actor cannot send email."""
