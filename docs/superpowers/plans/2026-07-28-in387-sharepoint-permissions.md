@@ -23,7 +23,7 @@ cd meeting-notetaker-2
 PYTHONPATH=backend backend/.venv/Scripts/python.exe -m unittest discover -s backend/tests -t backend -v
 ```
 
-Expected: `Ran 228 tests` / `OK` (as of 28 July 2026 — if this drifts, something on `main` changed since this plan was written; proceed but note the new baseline).
+Expected: `Ran 228 tests`. **Known pre-existing flake, unrelated to this plan:** `test_stub_serializes_concurrent_exports_for_one_meeting` in `backend/tests/test_storage_api_meetings.py` fails intermittently (confirmed flaky as of 28 July 2026 — 3 consecutive runs gave 11/14/8 vs. an expected 15 on `assertEqual(len(list((meeting_dir / "history").glob("*.json"))), 15)`, a filesystem-timing race in concurrent history-file writes). If your baseline run shows exactly this one failure, that's expected — proceed. Any *other* failure, or this same failure with a materially different assertion message, means something else changed on `main` since this plan was written; stop and figure out what before continuing.
 
 ---
 
@@ -98,12 +98,11 @@ Expected: FAIL — `AttributeError: 'str' object has no attribute 'web_url'`
 
 In `backend/app/services/sharepoint.py`:
 
-1. Add near the top (after the imports, before `SharePointProvider`):
+1. Change the existing `from typing import Protocol` line to
+   `from typing import NamedTuple, Protocol`, and add this class definition
+   after the imports, before `SharePointProvider`:
 
 ```python
-from typing import NamedTuple
-
-
 class SharePointUploadResult(NamedTuple):
     web_url: str
     item_id: str
@@ -144,7 +143,7 @@ Expected: PASS, all tests in the file green.
 - [ ] **Step 5: Run the full suite to check for other breakage**
 
 Run the full-suite command from "Before you start".
-Expected: `OK` — `test_delivery_reliability.py`'s `CaptureSharePointProvider` and its `test_sharepoint_save_writes_transcript_and_records_location` will very likely now fail (it returns a bare string, and the router will break trying to read `.web_url`/`.item_id` off it) — that's expected and is fixed in Task 4. Confirm the *only* new failures are in `test_delivery_reliability.py`.
+Expected: the known pre-existing `test_stub_serializes_concurrent_exports_for_one_meeting` flake from "Before you start" (unrelated, ignore it), plus `test_delivery_reliability.py`'s `CaptureSharePointProvider` and its `test_sharepoint_save_writes_transcript_and_records_location` will very likely now fail too (it returns a bare string, and the router will break trying to read `.web_url`/`.item_id` off it) — that's expected and is fixed in Task 4. Confirm the *only new* failures beyond the known flake are in `test_delivery_reliability.py`.
 
 - [ ] **Step 6: Commit**
 
@@ -390,9 +389,12 @@ class SharePointRecipientTests(unittest.TestCase):
             ],
         )
         recipients = _sharepoint_recipients(_meeting(meta))
+        # Attendees are processed before the organiser is added (matching
+        # _email_recipients' order), so a valid attendee lands first and the
+        # organiser last — not alphabetical or input order.
         self.assertEqual(
             recipients,
-            ["organizer@factor1.com.au", "jt@factor1.com.au"],
+            ["jt@factor1.com.au", "organizer@factor1.com.au"],
         )
 
     def test_all_calendar_attendees_missing_email_still_succeeds_empty(self):
@@ -617,7 +619,28 @@ In `backend/app/routers/meetings.py`, update `save_transcript_to_sharepoint` (th
         )
 ```
 
-And update the success block right after it to read `upload.web_url` instead of the old bare `web_url`:
+And update the success block right after it — **both** the `model_copy` update dict AND the `store.add_audit` call below it reference the old bare `web_url` variable, which no longer exists once Task 1 renamed it to the `upload` tuple. Miss the `add_audit` line and you'll get a `NameError: name 'web_url' is not defined` on every successful save, since `try`/`except` around the upload+grant calls has already exited by the time this code runs. The current code (unchanged by earlier tasks) is:
+
+```python
+    current = store.MEETINGS[meeting_id]
+    updated = current.model_copy(
+        update={
+            "sharepoint_status": SharePointStatus.saved,
+            "sharepoint_error_message": None,
+            "sharepoint_web_url": web_url,
+        }
+    )
+    store.MEETINGS[meeting_id] = updated
+    store.add_audit(
+        actor,
+        "meeting.sharepoint_save",
+        meeting.title,
+        after=web_url,
+        meeting_id=meeting_id,
+    )
+```
+
+Replace it with:
 
 ```python
     current = store.MEETINGS[meeting_id]
@@ -628,7 +651,17 @@ And update the success block right after it to read `upload.web_url` instead of 
             "sharepoint_web_url": upload.web_url,
         }
     )
+    store.MEETINGS[meeting_id] = updated
+    store.add_audit(
+        actor,
+        "meeting.sharepoint_save",
+        meeting.title,
+        after=upload.web_url,
+        meeting_id=meeting_id,
+    )
 ```
+
+(Only `web_url` → `upload.web_url` changes, in both places — nothing else in this block moves.)
 
 Note: `get_sharepoint_provider(graph_token or None)` is called twice (once for the upload, once for the grant) purely because that's how the existing code already resolves the provider — check `get_sharepoint_provider`'s implementation (`sharepoint.py`) before assuming this is wasteful: it's a plain function that returns a new stateless provider instance each call (no caching, no connection to close), so calling it twice has no observable cost or side effect. If a future reviewer flags this as duplication, resolving it once into a local variable is a safe simplification, but it isn't required for correctness.
 
@@ -640,7 +673,7 @@ Expected: PASS, all tests in the file green.
 - [ ] **Step 5: Run the full suite**
 
 Run the full-suite command from "Before you start".
-Expected: `Ran 234 tests` (228 baseline + 4 from Task 2 + 6 from Task 3, minus none removed — recount if it doesn't match, but it must say `OK` either way) with no failures.
+Expected: `Ran 239 tests` (228 baseline + 4 from Task 2 + 6 from Task 3 + 1 new test this task adds) with no failures other than the known pre-existing `test_stub_serializes_concurrent_exports_for_one_meeting` flake noted in "Before you start". Recount if it doesn't match exactly, but any *new* failure beyond that one flake means something in this task's changes is wrong — do not proceed to Step 6 until it's just that one known flake or nothing.
 
 - [ ] **Step 6: Commit**
 
@@ -698,7 +731,7 @@ Expected: PASS.
 - [ ] **Step 5: Run the full suite**
 
 Run the full-suite command from "Before you start".
-Expected: `OK`, no failures (no other test asserts the old `"Notetaker Transcripts"` default — confirm this with a quick search before committing: `grep -rn "Notetaker Transcripts" backend/` should return nothing after this change other than possibly a comment, which is fine to leave or update).
+Expected: no failures other than the known pre-existing `test_stub_serializes_concurrent_exports_for_one_meeting` flake from "Before you start" (no other test asserts the old `"Notetaker Transcripts"` default — confirm this with a quick search before committing: `grep -rn "Notetaker Transcripts" backend/` should return nothing after this change other than possibly a comment, which is fine to leave or update).
 
 - [ ] **Step 6: Commit**
 
@@ -754,7 +787,7 @@ git commit -m "docs: record IN-387 implementation evidence and open items"
 
 ## After all tasks
 
-Run the full suite one final time and confirm the final count and `OK`:
+Run the full suite one final time and confirm `Ran 239 tests` with no failures other than the known pre-existing `test_stub_serializes_concurrent_exports_for_one_meeting` flake (see "Before you start"):
 
 ```bash
 PYTHONPATH=backend backend/.venv/Scripts/python.exe -m unittest discover -s backend/tests -t backend -v
