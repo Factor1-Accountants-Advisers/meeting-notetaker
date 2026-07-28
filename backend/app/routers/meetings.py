@@ -644,7 +644,7 @@ async def save_transcript_to_sharepoint(
     """
     require(meeting_id, actor, AccessRole.owner)
     meeting, participants, segments, summary, action_items = _delivery_artifacts(meeting_id)
-    filename = safe_transcript_filename(meeting.title, meeting.id)
+    filename = safe_transcript_filename(meeting.title, meeting.created_at)
     transcript_text = _format_transcript(
         segments,
         meeting.title,
@@ -675,10 +675,17 @@ async def save_transcript_to_sharepoint(
         }
     )
     try:
-        web_url = await get_sharepoint_provider(graph_token or None).save_transcript(
+        provider = get_sharepoint_provider(graph_token or None)
+        upload = await provider.save_transcript(
             meeting=meeting,
             filename=filename,
             content=transcript_text,
+            access_token=graph_token or None,
+        )
+        recipients = _sharepoint_recipients(meeting)
+        await provider.grant_view(
+            item_id=upload.item_id,
+            recipients=recipients,
             access_token=graph_token or None,
         )
     except Exception as exc:
@@ -701,7 +708,7 @@ async def save_transcript_to_sharepoint(
         update={
             "sharepoint_status": SharePointStatus.saved,
             "sharepoint_error_message": None,
-            "sharepoint_web_url": web_url,
+            "sharepoint_web_url": upload.web_url,
         }
     )
     store.MEETINGS[meeting_id] = updated
@@ -709,7 +716,7 @@ async def save_transcript_to_sharepoint(
         actor,
         "meeting.sharepoint_save",
         meeting.title,
-        after=web_url,
+        after=upload.web_url,
         meeting_id=meeting_id,
     )
     store.save_snapshot()
@@ -755,6 +762,42 @@ def _email_recipients(meeting: Meeting, recorder_email: str | None) -> list[str]
     # Signed-in recorder: the sole recipient for ad-hoc, and an organiser
     # safety net for calendar recordings.
     _add(recorder_email)
+
+    return recipients
+
+
+def _sharepoint_recipients(meeting: Meeting) -> list[str]:
+    """Resolve Jira IN-387 SharePoint view-access recipients.
+
+    Calendar-linked recordings grant view access to Graph attendee emails plus
+    the organiser (Graph's ``attendees`` array excludes the organiser, the
+    same gap fixed for email in IN-94/IN-119 — see ``_email_recipients``).
+    Manual/ad-hoc recordings grant view access to the recorder's ad-hoc
+    attendee picker selections instead. Recipients with no usable email
+    (room/resource attendees, unresolved external attendees) are silently
+    skipped rather than failing delivery. The recording owner is not included
+    here: they already have access as the identity that performed the
+    upload. Preserve first-seen order while deduping case-insensitively.
+
+    Unlike ``_email_recipients``, which currently drops manual attendees
+    entirely (email has no ad-hoc delivery path), this function intentionally
+    includes them — do not unify the two without revisiting IN-387's
+    SharePoint-access requirements.
+    """
+    recipients: list[str] = []
+
+    def _add(candidate: str | None) -> None:
+        email = _normalise_email(candidate)
+        if email and email not in recipients:
+            recipients.append(email)
+
+    if meeting.graph_metadata:
+        for attendee in meeting.graph_metadata.attendees:
+            _add(attendee.email)
+        _add(meeting.graph_metadata.organizer_email)
+    else:
+        for attendee in meeting.manual_attendees:
+            _add(attendee.email)
 
     return recipients
 

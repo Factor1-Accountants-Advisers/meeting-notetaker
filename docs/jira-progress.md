@@ -458,6 +458,65 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     merge, push, deployment, production write, or production smoke was
     performed.
 
+- [ ] IN-387 — Define SharePoint library structure and provisioning
+  - **Implemented (see `docs/superpowers/specs/2026-07-28-in387-sharepoint-library-design.md`):**
+    site/library identified as `futurebusinessgroup.sharepoint.com/sites/InnovationsandSystems`,
+    library `Transcriptions` (per IN-91's 3 Jul comment thread, which settled on
+    continuing with the existing directory rather than provisioning a new one),
+    flat folder structure (library root, no subfolder), and an
+    owner-implicit/invitee-view permission model: the recorder already has
+    access as the uploading identity, and `GraphSharePointProvider.grant_view`
+    (Graph `POST /items/{id}/invite`, `roles: ["read"]`, `requireSignIn: true`)
+    grants read-only view access to everyone else. `grant_view` is wired
+    directly into `save_transcript_to_sharepoint`'s existing upload/retry path
+    (`backend/app/routers/meetings.py`) immediately after the upload succeeds,
+    inside the same try/except — so a grant failure marks the whole delivery
+    `failed` (not a partial "uploaded but ungranted" state) and a retry re-runs
+    both the upload and the grant from scratch
+    (`test_sharepoint_grant_failure_marks_whole_delivery_failed_and_retry_recovers`).
+    Recipients come from a new `_sharepoint_recipients(meeting)` resolver:
+    calendar-linked recordings use Graph attendee emails plus the organiser
+    (mirroring the IN-94/IN-119 email-recipient gap fix, since Graph's
+    `attendees` array excludes the organiser); manual/ad-hoc recordings use the
+    recorder's ad-hoc attendee-picker selections instead. The
+    `sharepoint_folder_path` default now resolves to the library root instead
+    of a subfolder (`backend.env.template` updated to match, with the old
+    `Notetaker Transcripts` example removed so it can't be silently
+    reintroduced).
+  - **Also shipped, not in the original written plan (added mid-implementation
+    from a code review finding):** `GraphSharePointProvider.grant_view` now
+    parses the Graph `invite` response body and raises if the returned
+    `value` list contains fewer granted recipients than were requested — a
+    partial-success `200` is treated as a failure, not silently accepted
+    (`test_graph_provider_grant_view_raises_when_response_grants_fewer_than_requested`
+    in `test_sharepoint_provider.py`). Without this, a partial Graph grant
+    would report `saved` while some recipients silently had no access, which
+    is what actually makes the atomic retry guarantee above sound end to end.
+  - **Verification:** full backend suite —
+    `PYTHONPATH=backend backend/.venv/Scripts/python.exe -m unittest discover
+    -s backend/tests -t backend -v` — **242 tests, OK** (28 Jul 2026, this
+    task). One test, `test_stub_serializes_concurrent_exports_for_one_meeting`
+    (`test_storage_api_meetings.py`), is a known pre-existing,
+    non-deterministic concurrency-timing flake unrelated to IN-387; it passed
+    on this run but may or may not fail on any given run — a future failure of
+    just that test is not evidence IN-387 broke something. IN-387-specific
+    coverage: `test_sharepoint_provider.py` (Graph/local provider upload,
+    library-root default, grant-view success/no-token/empty-recipients/
+    partial-grant-rejection), `test_sharepoint_recipients.py`
+    (`_sharepoint_recipients` calendar/organiser/manual-attendee resolution),
+    and `test_delivery_reliability.py` (atomic save+grant success, grant
+    failure marking the whole delivery failed, and retry recovery).
+  - **Still open (spec's Scope items 5-6; both require a human with
+    interactive Graph sign-in against the production tenant, not automatable
+    from this session):** (5) the real `Transcriptions` library's Graph drive
+    ID has not been discovered (`GET /sites/{hostname}:/sites/
+    InnovationsandSystems:/drives` matched by `name == "Transcriptions"`) or
+    configured — `sharepoint_drive_id` remains `""`, so the app still runs in
+    local-stub mode for SharePoint delivery; (6) no live write-access or
+    permission-grant smoke test has been run against the real library with a
+    delegated token. Until both are done, IN-387 is code-complete and
+    test-covered but not deployable/functionally verified end to end.
+
 - [x] IN-386 — Deliver processed meeting JSON and audio to private Blob storage
   - **Server contract reviewed, not changed here:** the Storage API branch
     `in386-meeting-blob-delivery` was reviewed at `4dc0736` and remains

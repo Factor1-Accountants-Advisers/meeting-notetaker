@@ -50,7 +50,7 @@ class Settings(BaseSettings):
 
     # SharePoint transcript delivery. Empty values use the local locked-folder stand-in.
     sharepoint_drive_id: str = ""
-    sharepoint_folder_path: str = "Notetaker Transcripts"
+    sharepoint_folder_path: str = ""
 
     # Raw-audio retention (requirements §6.2 engineering default).
     audio_retention_days: int = 30
