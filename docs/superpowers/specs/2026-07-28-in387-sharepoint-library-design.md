@@ -130,6 +130,16 @@ blank — do not fail the whole delivery over it. This is the same
 degraded-but-successful behavior as the empty-manual-attendees case, applied
 consistently to both recipient sources.
 
+**The organizer must be included explicitly, not assumed to be in
+`attendees[]`.** Graph's `attendees` array excludes the meeting organizer —
+this codebase already hit exactly this gap for email delivery
+(`_email_recipients` in `backend/app/routers/meetings.py`, fixed for
+IN-94/IN-119) and had to add the organizer back in by hand. If the recording
+owner (the signed-in uploader) differs from the meeting's organizer, the
+organizer must still be added to the invite recipient list explicitly, the
+same way `_email_recipients` does for email — otherwise they silently get no
+SharePoint view grant on a meeting they organized.
+
 **Idempotency assumption:** both the file upload (`PUT .../content`, which
 overwrites) and the `invite` action (granting a role a recipient already
 has is a no-op, not an error) are believed safe to blindly re-run in full on
@@ -191,6 +201,14 @@ Unit tests (mocked Graph calls, extending `test_sharepoint_provider.py`):
   delivery `failed`; a subsequent retry re-issues every call.
 - Calendar vs. manual recipient source selection (`attendees` vs.
   `manual_attendees`).
+- Calendar attendee list with some/all missing emails: recipients with
+  `email is None` or blank are filtered out; remaining valid recipients are
+  still invited; an all-missing list succeeds with owner-only access
+  (mirrors the manual-attendee empty-list test, applied to the calendar
+  source).
+- Organizer inclusion: when the meeting organizer is not present in
+  `attendees[]` (Graph's normal behavior) and differs from the recording
+  owner, the organizer is still added to the invite recipient list.
 - Empty-recipient-list edge case (manual recording with no
   `manual_attendees`) succeeds with owner-only access.
 
