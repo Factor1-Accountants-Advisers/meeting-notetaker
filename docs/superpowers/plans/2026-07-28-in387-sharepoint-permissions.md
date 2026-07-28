@@ -143,7 +143,7 @@ Expected: PASS, all tests in the file green.
 - [ ] **Step 5: Run the full suite to check for other breakage**
 
 Run the full-suite command from "Before you start".
-Expected: the known pre-existing `test_stub_serializes_concurrent_exports_for_one_meeting` flake from "Before you start" (unrelated, ignore it), plus `test_delivery_reliability.py`'s `CaptureSharePointProvider` and its `test_sharepoint_save_writes_transcript_and_records_location` will very likely now fail too (it returns a bare string, and the router will break trying to read `.web_url`/`.item_id` off it) — that's expected and is fixed in Task 4. Confirm the *only new* failures beyond the known flake are in `test_delivery_reliability.py`.
+Expected: only the known pre-existing `test_stub_serializes_concurrent_exports_for_one_meeting` flake from "Before you start" (unrelated, ignore it) — nothing else should fail yet. `test_delivery_reliability.py`'s `CaptureSharePointProvider` and `save_transcript_to_sharepoint` (the router) are both untouched until Task 4, so this task's return-type change to `save_transcript` doesn't reach them yet.
 
 - [ ] **Step 6: Commit**
 
@@ -787,7 +787,7 @@ git commit -m "docs: record IN-387 implementation evidence and open items"
 
 ## After all tasks
 
-Run the full suite one final time and confirm `Ran 239 tests` with no failures other than the known pre-existing `test_stub_serializes_concurrent_exports_for_one_meeting` flake (see "Before you start"):
+Run the full suite one final time and confirm `Ran 240 tests` (239 after Task 4, plus Task 5's `test_folder_path_default_is_library_root`) with no failures other than the known pre-existing `test_stub_serializes_concurrent_exports_for_one_meeting` flake (see "Before you start"):
 
 ```bash
 PYTHONPATH=backend backend/.venv/Scripts/python.exe -m unittest discover -s backend/tests -t backend -v
