@@ -158,7 +158,15 @@ class GraphSharePointProvider:
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=60) as resp:
-            resp.read()
+            body = json.loads(resp.read().decode("utf-8"))
+        granted = body.get("value")
+        if not isinstance(granted, list):
+            granted = []
+        if len(granted) < len(recipients):
+            raise RuntimeError(
+                f"SharePoint granted access to {len(granted)} of {len(recipients)} "
+                "recipient(s); expected all"
+            )
         logger.info(
             "SharePoint view access granted for item %s to %d recipient(s)",
             item_id,

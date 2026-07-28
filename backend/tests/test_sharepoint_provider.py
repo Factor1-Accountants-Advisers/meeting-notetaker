@@ -10,6 +10,13 @@ from app.services.sharepoint import GraphSharePointProvider
 
 
 class _Response:
+    def __init__(self, body=None):
+        self._body = (
+            body
+            if body is not None
+            else {"webUrl": "https://sharepoint.example/transcript.txt", "id": "item-abc-123"}
+        )
+
     def __enter__(self):
         return self
 
@@ -17,9 +24,7 @@ class _Response:
         return False
 
     def read(self):
-        return json.dumps(
-            {"webUrl": "https://sharepoint.example/transcript.txt", "id": "item-abc-123"}
-        ).encode("utf-8")
+        return json.dumps(self._body).encode("utf-8")
 
 
 class SharePointProviderTests(unittest.IsolatedAsyncioTestCase):
@@ -101,7 +106,9 @@ class SharePointProviderTests(unittest.IsolatedAsyncioTestCase):
             captured["url"] = req.full_url
             captured["method"] = req.get_method()
             captured["body"] = json.loads(req.data.decode("utf-8"))
-            return _Response()
+            return _Response(
+                {"value": [{"id": "perm-1"}, {"id": "perm-2"}]}
+            )
 
         provider = GraphSharePointProvider("drive-123", "")
         with patch("urllib.request.urlopen", fake_urlopen):
@@ -122,6 +129,22 @@ class SharePointProviderTests(unittest.IsolatedAsyncioTestCase):
             captured["body"]["recipients"],
             [{"email": "bb@factor1.com.au"}, {"email": "jt@factor1.com.au"}],
         )
+
+    async def test_graph_provider_grant_view_raises_when_response_grants_fewer_than_requested(self):
+        def fake_urlopen(req, timeout=0):
+            # Graph returned HTTP 200 but only resolved one of the two
+            # requested recipients — a partial grant that must be treated
+            # as a full failure so the caller's atomic retry logic kicks in.
+            return _Response({"value": [{"id": "perm-1"}]})
+
+        provider = GraphSharePointProvider("drive-123", "")
+        with patch("urllib.request.urlopen", fake_urlopen):
+            with self.assertRaises(RuntimeError):
+                await provider.grant_view(
+                    item_id="item-abc-123",
+                    recipients=["bb@factor1.com.au", "jt@factor1.com.au"],
+                    access_token="token",
+                )
 
     async def test_graph_provider_grant_view_is_noop_for_empty_recipients(self):
         def fake_urlopen(req, timeout=0):
