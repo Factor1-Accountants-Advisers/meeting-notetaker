@@ -1,4 +1,5 @@
 import { app, Menu, nativeImage, Tray, type MenuItemConstructorOptions } from 'electron'
+import { join } from 'path'
 import {
   extendActiveRecordingFromMain,
   getRecordingStateMachine,
@@ -124,29 +125,37 @@ export function isAutoLaunchEnabled(): boolean {
 }
 
 function createTrayIcon(): Electron.NativeImage {
-  // Generate a simple 16x16 tray icon: a coloured square with the app initial.
-  // In production this should be replaced with a proper .ico file.
+  // IN-472: load the app logo from resources/ (dev) or extraResources (packaged).
+  const iconPath = app.isPackaged
+    ? join(process.resourcesPath, 'tray-icon.png')
+    : join(__dirname, '..', '..', 'resources', 'tray-icon.png')
+
+  try {
+    const icon = nativeImage.createFromPath(iconPath)
+    if (!icon.isEmpty()) {
+      return icon
+    }
+  } catch {
+    // Fall through to generated fallback.
+  }
+
+  logger().warn('[tray] logo not found, using generated fallback', { path: iconPath })
+  // Generated fallback — same blue circle as before, kept as a safety net.
   const size = 16
   const canvas = Buffer.alloc(size * size * 4)
-
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const offset = (y * size + x) * 4
-      // Rounded square with blue fill
       const cx = size / 2, cy = size / 2
       const dx = Math.abs(x - cx + 0.5), dy = Math.abs(y - cy + 0.5)
       const r = size / 2 - 1
       if (dx * dx + dy * dy <= r * r) {
-        canvas[offset] = 0x00   // R
-        canvas[offset + 1] = 0x76 // G
-        canvas[offset + 2] = 0xBF // B — brand blue
-        canvas[offset + 3] = 0xFF // A
+        canvas[offset] = 0x00
+        canvas[offset + 1] = 0x76
+        canvas[offset + 2] = 0xBF
+        canvas[offset + 3] = 0xFF
       }
     }
   }
-
-  return nativeImage.createFromBuffer(canvas, {
-    width: size,
-    height: size
-  })
+  return nativeImage.createFromBuffer(canvas, { width: size, height: size })
 }

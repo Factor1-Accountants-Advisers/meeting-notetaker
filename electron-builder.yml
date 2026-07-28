@@ -1,5 +1,6 @@
 appId: com.factor1.notetaker
 productName: Meeting Notetaker
+icon: build/icon.ico
 directories:
   buildResources: build
 files:
@@ -19,6 +20,8 @@ extraResources:
     to: backend
   - from: seed-data
     to: seed-data
+  - from: resources/tray-icon.png
+    to: tray-icon.png
 extraMetadata:
   SliceVersion: 1.0.0
 win:
