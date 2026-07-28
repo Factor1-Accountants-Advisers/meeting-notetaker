@@ -168,6 +168,11 @@ class SharePointProviderTests(unittest.IsolatedAsyncioTestCase):
             item_id="anything", recipients=["bb@factor1.com.au"], access_token=None
         )
 
+    def test_folder_path_default_is_library_root(self):
+        from app.config import Settings
+
+        self.assertEqual(Settings().sharepoint_folder_path, "")
+
 
 if __name__ == "__main__":
     unittest.main()
