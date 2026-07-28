@@ -16,7 +16,7 @@ import urllib.parse
 from datetime import datetime, timezone
 import urllib.request
 from pathlib import Path
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 from app.config import get_settings
 from app.paths import local_sharepoint_dir
@@ -28,6 +28,11 @@ LOCAL_SHAREPOINT_DIR = local_sharepoint_dir()
 GRAPH_DRIVE_BASE = "https://graph.microsoft.com/v1.0/drives"
 
 
+class SharePointUploadResult(NamedTuple):
+    web_url: str
+    item_id: str
+
+
 class SharePointProvider(Protocol):
     async def save_transcript(
         self,
@@ -36,7 +41,7 @@ class SharePointProvider(Protocol):
         filename: str,
         content: str,
         access_token: str | None = None,
-    ) -> str:
+    ) -> SharePointUploadResult:
         ...
 
 
@@ -58,12 +63,12 @@ class LocalSharePointProvider:
         filename: str,
         content: str,
         access_token: str | None = None,
-    ) -> str:
+    ) -> SharePointUploadResult:
         LOCAL_SHAREPOINT_DIR.mkdir(parents=True, exist_ok=True)
         path = LOCAL_SHAREPOINT_DIR / filename
         path.write_text(content, encoding="utf-8")
         logger.info("local SharePoint transcript saved for %s: %s", meeting.id, path)
-        return path.as_uri()
+        return SharePointUploadResult(web_url=path.as_uri(), item_id=str(path))
 
 
 class GraphSharePointProvider:
@@ -80,7 +85,7 @@ class GraphSharePointProvider:
         filename: str,
         content: str,
         access_token: str | None = None,
-    ) -> str:
+    ) -> SharePointUploadResult:
         if not access_token:
             raise ValueError("SharePoint save requires a delegated Graph token")
         upload_path = f"{self._folder_path}/{filename}" if self._folder_path else filename
@@ -100,8 +105,11 @@ class GraphSharePointProvider:
         web_url = body.get("webUrl")
         if not isinstance(web_url, str) or not web_url:
             raise RuntimeError("Graph upload completed but returned no webUrl")
+        item_id = body.get("id")
+        if not isinstance(item_id, str) or not item_id:
+            raise RuntimeError("Graph upload completed but returned no item id")
         logger.info("SharePoint transcript saved for %s", meeting.id)
-        return web_url
+        return SharePointUploadResult(web_url=web_url, item_id=item_id)
 
 
 def get_sharepoint_provider(access_token: str | None = None) -> SharePointProvider:

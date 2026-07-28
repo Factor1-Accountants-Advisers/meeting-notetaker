@@ -17,7 +17,9 @@ class _Response:
         return False
 
     def read(self):
-        return json.dumps({"webUrl": "https://sharepoint.example/transcript.txt"}).encode("utf-8")
+        return json.dumps(
+            {"webUrl": "https://sharepoint.example/transcript.txt", "id": "item-abc-123"}
+        ).encode("utf-8")
 
 
 class SharePointProviderTests(unittest.IsolatedAsyncioTestCase):
@@ -37,14 +39,15 @@ class SharePointProviderTests(unittest.IsolatedAsyncioTestCase):
 
         provider = GraphSharePointProvider("drive-123", "")
         with patch("urllib.request.urlopen", fake_urlopen):
-            web_url = await provider.save_transcript(
+            result = await provider.save_transcript(
                 meeting=meeting,
                 filename="minutes.txt",
                 content="transcript",
                 access_token="token",
             )
 
-        self.assertEqual(web_url, "https://sharepoint.example/transcript.txt")
+        self.assertEqual(result.web_url, "https://sharepoint.example/transcript.txt")
+        self.assertEqual(result.item_id, "item-abc-123")
         self.assertEqual(
             captured_urls,
             ["https://graph.microsoft.com/v1.0/drives/drive-123/root:/minutes.txt:/content"],
