@@ -175,6 +175,56 @@ class SharePointProviderTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(Settings().sharepoint_folder_path, "")
 
+    def test_safe_transcript_filename_is_stable_across_retries(self):
+        # IN-387 final review bug: filename must not depend on wall-clock
+        # time. If a delivery upload succeeds but the subsequent grant_view
+        # call fails, the whole delivery is marked failed for retry (an
+        # intentional atomic-retry design). If the retry happens on a
+        # different UTC calendar day, a wall-clock-based filename would
+        # produce a second, differently-named upload — orphaning the first
+        # file in real SharePoint with no permissions and no record of it.
+        created_at = datetime(2026, 3, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+        fake_now_values = iter(
+            [
+                datetime(2026, 3, 1, 23, 59, 0, tzinfo=timezone.utc),
+                datetime(2026, 3, 2, 0, 1, 0, tzinfo=timezone.utc),
+            ]
+        )
+
+        class _FakeDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return next(fake_now_values)
+
+        with patch("app.services.sharepoint.datetime", _FakeDateTime):
+            first = sharepoint.safe_transcript_filename("Retry meeting", created_at)
+            second = sharepoint.safe_transcript_filename("Retry meeting", created_at)
+
+        self.assertEqual(
+            first,
+            second,
+            "filename must be stable across retries regardless of "
+            "wall-clock time, or a delayed retry orphans the first "
+            "uploaded file (IN-387)",
+        )
+
+    def test_safe_transcript_filename_uses_created_at_date_not_wallclock(self):
+        # created_at is a fixed date in the past; wall clock is "today"
+        # (mocked far in the future). The filename must reflect created_at.
+        created_at = datetime(2024, 1, 15, 9, 30, 0, tzinfo=timezone.utc)
+
+        class _FakeDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2026, 7, 28, 12, 0, 0, tzinfo=timezone.utc)
+
+        with patch("app.services.sharepoint.datetime", _FakeDateTime):
+            filename = sharepoint.safe_transcript_filename("Quarterly Review", created_at)
+
+        self.assertIn("2024-01-15", filename)
+        self.assertNotIn("2026-07-28", filename)
+
 
 if __name__ == "__main__":
     unittest.main()

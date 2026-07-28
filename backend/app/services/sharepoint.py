@@ -54,11 +54,23 @@ class SharePointProvider(Protocol):
         ...
 
 
-def safe_transcript_filename(title: str, meeting_id: object) -> str:
+def safe_transcript_filename(title: str, created_at: datetime) -> str:
+    """Build a deterministic transcript filename.
+
+    The date portion is derived from `created_at` (a stable, always-present
+    field on the Meeting model) rather than wall-clock time. A retry of a
+    failed SharePoint delivery (e.g. upload succeeds, grant_view fails)
+    must recompute the exact same filename as the original attempt, or a
+    retry that crosses a UTC calendar day boundary uploads a second,
+    differently-named file and orphans the first — unpermissioned, and
+    with no record of it once the failed attempt's item id is discarded
+    (IN-387 final review).
+    """
     cleaned = re.sub(r"[^A-Za-z0-9_. -]+", "-", title).strip(" .-")
     if not cleaned:
         cleaned = "meeting"
-    date_part = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    basis = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
+    date_part = basis.astimezone(timezone.utc).strftime("%Y-%m-%d")
     return f"{cleaned[:60]}-{date_part}.txt"
 
 

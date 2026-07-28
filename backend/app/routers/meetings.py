@@ -644,7 +644,7 @@ async def save_transcript_to_sharepoint(
     """
     require(meeting_id, actor, AccessRole.owner)
     meeting, participants, segments, summary, action_items = _delivery_artifacts(meeting_id)
-    filename = safe_transcript_filename(meeting.title, meeting.id)
+    filename = safe_transcript_filename(meeting.title, meeting.created_at)
     transcript_text = _format_transcript(
         segments,
         meeting.title,
