@@ -458,7 +458,7 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     merge, push, deployment, production write, or production smoke was
     performed.
 
-- [ ] IN-386 — Deliver processed meeting JSON and audio to private Blob storage
+- [x] IN-386 — Deliver processed meeting JSON and audio to private Blob storage
   - **Server contract reviewed, not changed here:** the Storage API branch
     `in386-meeting-blob-delivery` was reviewed at `4dc0736` and remains
     unmerged and undeployed. Its `docs/jira-progress.md` already records the
@@ -538,7 +538,18 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     `managementPolicies/default` resource replaces the entire existing
     lifecycle policy. The mandatory human-reviewed Azure `what-if` remains
     required before any apply.
-  - **Release/operations state:** no Jira transition, merge, push, deployment,
-    or production smoke was performed. A production meeting smoke remains
-    pending and is an approval-gated production write. The Storage API Bicep
-    lifecycle policy has not been applied.
+  - **Release/operations state (updated 28 July 2026):** the Storage API
+    branch `in386-meeting-blob-delivery` was merged to `main` (`4dc0736`) and
+    deployed to production — GitHub Actions `Deploy` run `30335569135` and
+    `CI` run `30335569138` both succeeded, `GET /health/live` and
+    `GET /health/ready` returned 200, and an unauthenticated smoke against
+    `PUT /api/v1/meetings/{id}/export` and
+    `POST /api/v1/meetings/{id}/audio/upload-sas` returned 401 (route
+    present, auth enforced) rather than 404. This closes the gap where the
+    desktop client (merged to `main` since 27 Jul) was pointed at a real
+    production Storage API URL that did not yet expose these routes. Still
+    outstanding: an authenticated end-to-end production meeting smoke (a
+    real desktop delivery through to `uploaded`) has not been run, and the
+    Storage API Bicep lifecycle policy (`meetings-audio/` Cool-at-30/
+    delete-at-365) has not been applied — that remains a separate,
+    David-reviewed `what-if` step per `notetaker-storage-api/infra/README.md`.
