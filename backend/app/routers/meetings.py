@@ -759,6 +759,42 @@ def _email_recipients(meeting: Meeting, recorder_email: str | None) -> list[str]
     return recipients
 
 
+def _sharepoint_recipients(meeting: Meeting) -> list[str]:
+    """Resolve Jira IN-387 SharePoint view-access recipients.
+
+    Calendar-linked recordings grant view access to Graph attendee emails plus
+    the organiser (Graph's ``attendees`` array excludes the organiser, the
+    same gap fixed for email in IN-94/IN-119 — see ``_email_recipients``).
+    Manual/ad-hoc recordings grant view access to the recorder's ad-hoc
+    attendee picker selections instead. Recipients with no usable email
+    (room/resource attendees, unresolved external attendees) are silently
+    skipped rather than failing delivery. The recording owner is not included
+    here: they already have access as the identity that performed the
+    upload. Preserve first-seen order while deduping case-insensitively.
+
+    Unlike ``_email_recipients``, which currently drops manual attendees
+    entirely (email has no ad-hoc delivery path), this function intentionally
+    includes them — do not unify the two without revisiting IN-387's
+    SharePoint-access requirements.
+    """
+    recipients: list[str] = []
+
+    def _add(candidate: str | None) -> None:
+        email = _normalise_email(candidate)
+        if email and email not in recipients:
+            recipients.append(email)
+
+    if meeting.graph_metadata:
+        for attendee in meeting.graph_metadata.attendees:
+            _add(attendee.email)
+        _add(meeting.graph_metadata.organizer_email)
+    else:
+        for attendee in meeting.manual_attendees:
+            _add(attendee.email)
+
+    return recipients
+
+
 def _build_review(meeting: Meeting) -> MeetingReview:
     items = [
         a.model_copy(update={"meeting_title": meeting.title})
