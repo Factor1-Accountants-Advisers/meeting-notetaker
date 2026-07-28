@@ -59,6 +59,8 @@ class SharePointProviderTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_graph_provider_uploads_to_configured_subfolder(self):
+        # Exercises the still-supported explicit-subfolder code path, not the
+        # current default (which is the flat library root, IN-387).
         meeting = Meeting(
             id=uuid4(),
             title="Folder upload",
