@@ -26,9 +26,6 @@ from app.services.storage_api import (
 )
 
 
-INTERRUPTED_FAILURE = (
-    "Secure storage upload was interrupted. Retry when connected."
-)
 _BLOB_DELIVERY_TASKS: set[asyncio.Task[Meeting | None]] = set()
 _DELIVERY_LOCKS: dict[UUID, asyncio.Lock] = {}
 
@@ -442,8 +439,13 @@ def reconcile_interrupted_blob_deliveries() -> int:
             and meeting.blob_status is BlobStatus.pending
             and meeting_id in store.BLOB_DELIVERY_STARTED_AT
         ):
+            reason = FailureReason.for_category(
+                FailureCategory.interrupted, detail="startup_reconcile"
+            )
+            log_delivery_failure(meeting_id, "blob", reason, code="startup_reconcile")
             meeting.blob_status = BlobStatus.failed
-            meeting.blob_error_message = INTERRUPTED_FAILURE
+            meeting.blob_error_message = reason.user_sentence
+            meeting.blob_error_code = reason.category.value
             store.BLOB_DELIVERY_STARTED_AT.pop(meeting_id, None)
             changed += 1
     if changed:

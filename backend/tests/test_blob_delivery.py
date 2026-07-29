@@ -622,20 +622,20 @@ class BlobDeliveryTests(unittest.IsolatedAsyncioTestCase):
             USER_SENTENCES[FailureCategory.processing_error],
         )
 
-    async def test_audio_filesystem_error_is_contained_as_audio_failure(self):
+    async def test_audio_filesystem_error_classifies_as_processing_error(self):
         client = CaptureStorageClient()
         with patch(
             "app.services.blob_delivery.audio_dir",
-            side_effect=OSError("private filesystem path"),
+            side_effect=PermissionError("private filesystem path"),
         ):
             result = await self._deliver(client)
 
         self.assertEqual(client.calls, [])
         self.assertEqual(result.blob_status, BlobStatus.failed)
-        self.assertEqual(result.blob_error_code, "network")
+        self.assertEqual(result.blob_error_code, "processing_error")
         self.assertEqual(
             result.blob_error_message,
-            USER_SENTENCES[FailureCategory.network],
+            USER_SENTENCES[FailureCategory.processing_error],
         )
 
     async def test_audio_failure_stops_before_export(self):
@@ -953,19 +953,32 @@ class BlobDeliveryReconciliationTests(unittest.TestCase):
             meeting.id: meeting.model_dump() for meeting in untouched
         }
 
-        with patch("app.services.blob_delivery.store.save_snapshot") as save:
+        with self.assertLogs(
+            "app.services.failure_reasons", level="WARNING"
+        ) as captured, patch(
+            "app.services.blob_delivery.store.save_snapshot"
+        ) as save:
             changed = reconcile_interrupted_blob_deliveries()
 
         self.assertEqual(changed, 1)
         self.assertEqual(ready_pending.blob_status, BlobStatus.failed)
+        self.assertEqual(ready_pending.blob_error_code, "interrupted")
         self.assertEqual(
             ready_pending.blob_error_message,
-            "Secure storage upload was interrupted. Retry when connected.",
+            USER_SENTENCES[FailureCategory.interrupted],
         )
         self.assertEqual(ready_pending.pipeline_status, PipelineStatus.ready)
         self.assertEqual(ready_pending.action_item_count, 4)
         self.assertNotIn(ready_pending.id, store.BLOB_DELIVERY_STARTED_AT)
         save.assert_called_once_with()
+        self.assertTrue(
+            any(
+                "delivery_failure" in line
+                and "stage=blob" in line
+                and "code=startup_reconcile" in line
+                for line in captured.output
+            )
+        )
         for meeting in untouched:
             self.assertEqual(meeting.model_dump(), untouched_before[meeting.id])
 
