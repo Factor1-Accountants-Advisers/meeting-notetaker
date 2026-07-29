@@ -7,6 +7,7 @@ import {
 } from '@renderer/components/AttendeePicker'
 import { staff as sampleStaff, type BlobStatus, type StaffMember } from '@renderer/data/mock'
 import { fetchPeople } from '@renderer/lib/api'
+import { categoryLabel } from '@renderer/lib/failureDisplay'
 import { useLive } from '@renderer/lib/useLive'
 
 /** A recording interrupted by sleep/crash, recoverable from its spill file (IN-129). */
@@ -29,6 +30,11 @@ interface HomeProps {
     meetingId: string
     title: string
     message: string
+    // IN-391 category code for the *_failed states (Task 7b): a real
+    // FailureCategory string, null (show the fallback label), or
+    // omitted/undefined when the notice isn't actually a failure (e.g. the
+    // email-unconfirmed sub-case of 'email_failed' — IN-478).
+    errorCode?: string | null
   } | null
   onDismissPostCaptureNotice?: () => void
   onRetryPostCapture?: (meetingId: string, title: string) => void
@@ -38,6 +44,7 @@ interface HomeProps {
     title: string
     message: string
     retrying: boolean
+    errorCode?: string | null
   }[]
   onDismissBlobDeliveryNotice?: (meetingId: string) => void
   onRetryBlobDelivery?: (meetingId: string, title: string) => void
@@ -151,6 +158,11 @@ function BlobDeliveryNoticeCard({
           className="min-w-0 flex-1"
         >
           <div className="truncate text-[13px] font-medium">{notice.title}</div>
+          {failed && notice.errorCode !== undefined && (
+            <div className="mt-0.5 text-[12px] font-semibold">
+              Failed: {categoryLabel(notice.errorCode)}
+            </div>
+          )}
           <div className="mt-0.5 text-[12px] opacity-90">{notice.message}</div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -275,6 +287,11 @@ function PostCaptureNotice({
         <div className="mt-0.5 shrink-0">{icon}</div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-[13px] font-medium">{notice.title}</div>
+          {failed && notice.errorCode !== undefined && (
+            <div className="mt-0.5 text-[12px] font-semibold">
+              Failed: {categoryLabel(notice.errorCode)}
+            </div>
+          )}
           <div className="mt-0.5 text-[12px] opacity-90">{notice.message}</div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
