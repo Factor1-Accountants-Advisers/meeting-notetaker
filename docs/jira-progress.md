@@ -458,7 +458,7 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     merge, push, deployment, production write, or production smoke was
     performed.
 
-- [ ] IN-387 — Define SharePoint library structure and provisioning
+- [x] IN-387 — Define SharePoint library structure and provisioning
   - **Implemented (see `docs/superpowers/specs/2026-07-28-in387-sharepoint-library-design.md`):**
     site/library identified as `futurebusinessgroup.sharepoint.com/sites/InnovationsandSystems`,
     library `Transcriptions` (per IN-91's 3 Jul comment thread, which settled on
@@ -506,16 +506,29 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     (`_sharepoint_recipients` calendar/organiser/manual-attendee resolution),
     and `test_delivery_reliability.py` (atomic save+grant success, grant
     failure marking the whole delivery failed, and retry recovery).
-  - **Still open (spec's Scope items 5-6; both require a human with
-    interactive Graph sign-in against the production tenant, not automatable
-    from this session):** (5) the real `Transcriptions` library's Graph drive
-    ID has not been discovered (`GET /sites/{hostname}:/sites/
-    InnovationsandSystems:/drives` matched by `name == "Transcriptions"`) or
-    configured — `sharepoint_drive_id` remains `""`, so the app still runs in
-    local-stub mode for SharePoint delivery; (6) no live write-access or
-    permission-grant smoke test has been run against the real library with a
-    delegated token. Until both are done, IN-387 is code-complete and
-    test-covered but not deployable/functionally verified end to end.
+  - **Resolved 29 Jul 2026 (spec's Scope items 5-6, previously the open
+    tail):** (5) the real `Transcriptions` library's Graph drive ID was
+    discovered (`GET /sites/{hostname}:/sites/InnovationsandSystems:/drives`,
+    matched by `name == "Transcriptions"`) and is now the committed
+    `sharepoint_drive_id` default in `backend/app/config.py` — a non-secret
+    identifier, same class as the committed Storage API URL;
+    `backend.env.template` documents the override. (6) a live delegated-token
+    delivery against the real library succeeded at 08:17 AEST on 29 Jul 2026:
+    meeting `0d2d3086-2451-49d6-9362-20ed47a8babb` reached
+    `sharepoint_status=saved` with `sharepoint_web_url=
+    https://futurebusinessgroup.sharepoint.com/sites/InnovationsandSystems/
+    Transcriptions/Test-2026-07-29.txt` and no delivery errors in `main.log`.
+    Verification of the committed default: `test_sharepoint_provider.py` +
+    `test_sharepoint_recipients.py` 19/19 OK; full backend suite 245 tests
+    with only the documented pre-existing
+    `test_stub_serializes_concurrent_exports_for_one_meeting` flake failing —
+    confirmed failing identically with the change stashed, so it is not
+    caused by the drive-ID default.
+  - **Remaining live caveat:** the 29 Jul smoke was a solo test meeting, so
+    `grant_view` to *other* recipients has unit coverage only. The IN-398
+    acceptance test (second invitee opens the file read-only) is the
+    outstanding live verification of the permission model — it needs a
+    two-person meeting, not additional voiceprints.
 
 - [x] IN-386 — Deliver processed meeting JSON and audio to private Blob storage
   - **Server contract reviewed, not changed here:** the Storage API branch
