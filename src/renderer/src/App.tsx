@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppShell } from './components/shell/AppShell'
 import { EnrollmentModal } from './components/EnrollmentModal'
 import { HomeScreen } from './screens/HomeScreen'
@@ -26,7 +26,6 @@ import { capture, type CaptureStatus, type SystemSegment } from './lib/capture'
 import { emailFailureMessage } from './lib/deliveryNotice'
 import notificationChimeUrl from './assets/notification.wav'
 import { loadPrefs } from './lib/prefs'
-import { useNotifications } from './lib/useNotifications'
 import { audioDurationSeconds, blobToBase64 } from './lib/recorder'
 import { elapsedMs } from './screens/RecordingScreen'
 import { useTheme } from './lib/theme'
@@ -181,8 +180,7 @@ function App(): JSX.Element {
   const blobDeliveryEpochsRef = useRef(new Map<string, number>())
   const blobDeliveryTimersRef = useRef(new Map<string, number>())
   const [interrupted, setInterrupted] = useState<SpillEntry[]>([])
-  const { theme, toggle } = useTheme()
-  const { items: notifications, unread, markAllRead } = useNotifications(user !== null)
+  const { theme, setTheme } = useTheme()
 
   useEffect(() => {
     return () => {
@@ -235,6 +233,17 @@ function App(): JSX.Element {
   useEffect(() => {
     recordingRef.current = recording
   }, [recording])
+
+  const applyScheduledEndUtc = useCallback((endTimeUtc: string): void => {
+    setRecording((current) => {
+      if (!current) return current
+      const next = { ...current, scheduledEndUtc: endTimeUtc }
+      // Pause/resume and auto-stop callbacks read the ref synchronously. Keep it
+      // aligned with the rendered countdown instead of waiting for the effect.
+      recordingRef.current = next
+      return next
+    })
+  }, [])
 
   // Keep the main process informed so backend calls carry the audit actor.
   useEffect(() => {
@@ -369,10 +378,10 @@ function App(): JSX.Element {
     if (typeof window.api?.onRecordingEndExtended !== 'function') return
     return window.api.onRecordingEndExtended((data) => {
       if (data?.endTimeUtc) {
-        setRecording((s) => (s ? { ...s, scheduledEndUtc: data.endTimeUtc } : s))
+        applyScheduledEndUtc(data.endTimeUtc)
       }
     })
-  }, [])
+  }, [applyScheduledEndUtc])
 
   // Listen for auto-recording commands from the main process (IN-66).
   useEffect(() => {
@@ -417,6 +426,10 @@ function App(): JSX.Element {
       stopping = true
       try {
         setAutoRecordingState('processing')
+        // Leave the active controls immediately. Capture finalization and upload
+        // may take time, but the user should never be left on a dead recording
+        // screen after auto-stop (or a manual Stop).
+        setView('home')
         const session = recordingRef.current
         const meetingId = session?.meetingId ?? null
         const graphMetadata = autoGraphMetadataRef.current
@@ -501,7 +514,6 @@ function App(): JSX.Element {
             }
           }
         }
-        setView('home')
         recordingRef.current = null
         setRecording(null)
         autoGraphMetadataRef.current = null
@@ -1346,21 +1358,44 @@ function App(): JSX.Element {
     )
   }
 
-  const shellRecordingState = recording ? 'recording' : autoRecordingState
+  const finishingRecording = autoRecordingState === 'processing'
+  const activePostCaptureNotice =
+    postCaptureNotice &&
+    (postCaptureNotice.state === 'processing' || postCaptureNotice.state === 'emailing')
+      ? postCaptureNotice
+      : null
+  const shellRecordingState = finishingRecording
+    ? 'processing'
+    : recording
+      ? 'recording'
+      : autoRecordingState
+  const shellStatusText = finishingRecording
+    ? activePostCaptureNotice?.message ?? 'Processing recording'
+    : recording
+      ? recording.pausedAt !== null
+        ? 'Recording paused'
+        : 'Recording'
+      : activePostCaptureNotice?.message ?? null
+  const shellStatusDetail = finishingRecording
+    ? activePostCaptureNotice?.title ?? recording?.title ?? null
+    : !recording &&
+        activePostCaptureNotice
+      ? activePostCaptureNotice.title
+      : null
 
   return (
     <AppShell
       active={view === 'recording' ? null : view}
       onSelect={navigate}
-      theme={theme}
-      onToggleTheme={toggle}
       recordingState={shellRecordingState}
+      statusText={shellStatusText}
+      statusDetail={shellStatusDetail}
+      recordingStartedAt={recording?.startedAt}
+      recordingPausedAt={recording?.pausedAt}
+      recordingPausedAccum={recording?.pausedAccum}
       onOpenRecording={
-        recording ? () => setView('recording') : null
+        recording && autoRecordingState !== 'processing' ? () => setView('recording') : null
       }
-      notifications={notifications}
-      unreadCount={unread}
-      onNotificationsOpened={markAllRead}
       userName={user?.name}
     >
       {view === 'recording' && recording && (
@@ -1379,7 +1414,7 @@ function App(): JSX.Element {
                     .extendRecording()
                     .then((res) => {
                       if (res?.endTimeUtc) {
-                        setRecording((s) => (s ? { ...s, scheduledEndUtc: res.endTimeUtc } : s))
+                        applyScheduledEndUtc(res.endTimeUtc)
                       }
                     })
                     .finally(() => setExtending(false))
@@ -1391,7 +1426,6 @@ function App(): JSX.Element {
       )}
       {view === 'home' && (
         <HomeScreen
-          userName={user.name}
           onStartRecording={(title, attendees) =>
             void startManualRecording(title, attendees)
           }
@@ -1414,16 +1448,16 @@ function App(): JSX.Element {
           onRetryBlobDelivery={(meetingId, title) =>
             void retryMeetingBlobDelivery(meetingId, title)
           }
-          onShowRecording={recording ? () => setView('recording') : undefined}
         />
       )}
       {view === 'settings' && (
         <SettingsScreen
           theme={theme}
-          onToggleTheme={toggle}
+          onSetTheme={setTheme}
           userName={user.name}
           userEmail={user.email}
           onSignOut={signOut}
+          onClose={() => setView('home')}
         />
       )}
     </AppShell>

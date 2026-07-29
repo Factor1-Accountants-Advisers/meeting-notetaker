@@ -41,18 +41,37 @@ const saving = render(baseSession, true)
 assert.match(saving, /Saving and uploading your recording/, 'saving state is explicit')
 assert.doesNotMatch(saving, /aria-label="Stop recording"/, 'saving state prevents duplicate Stop')
 
-const scheduled = renderToStaticMarkup(
-  <RecordingScreen
-    session={{ ...baseSession, scheduledEndUtc: new Date(Date.now() + 600_000).toISOString() }}
-    captureStatus={{ mic: 'active', loopback: 'active', recording: true }}
-    onPause={() => undefined}
-    onResume={() => undefined}
-    onStop={() => undefined}
-    onExtend={() => undefined}
-  />
-)
+function renderScheduled(endTimeMs: number): string {
+  return renderToStaticMarkup(
+    <RecordingScreen
+      session={{ ...baseSession, scheduledEndUtc: new Date(endTimeMs).toISOString() }}
+      captureStatus={{ mic: 'active', loopback: 'active', recording: true }}
+      onPause={() => undefined}
+      onResume={() => undefined}
+      onStop={() => undefined}
+      onExtend={() => undefined}
+    />
+  )
+}
+
+const scheduleNow = Date.now()
+const scheduled = renderScheduled(scheduleNow + 10 * 60_000)
 assert.match(scheduled, /Extend 10 min/, 'scheduled recordings retain Extend')
+assert.match(scheduled, /Scheduled end/, 'scheduled recordings expose the exact scheduled end')
+assert.match(scheduled, /10 min remaining/, 'scheduled recordings expose remaining time')
 assert.match(scheduled, /aria-label="Stop recording"/, 'scheduled recordings share Stop')
+
+const extended = renderScheduled(scheduleNow + 20 * 60_000)
+assert.match(
+  extended,
+  /20 min remaining/,
+  'an extended scheduled end immediately produces the new remaining time'
+)
+assert.notEqual(
+  extended,
+  scheduled,
+  'an extended scheduled end produces updated recording-screen markup'
+)
 
 class FakeTrack {
   kind = 'audio'

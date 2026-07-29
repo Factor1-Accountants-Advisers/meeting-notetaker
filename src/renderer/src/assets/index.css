@@ -4,56 +4,83 @@
 
 :root {
   /* Brand */
-  --brand-navy: #1f3864;
-  --brand-blue: #2e75b6;
+  --brand-navy: color-mix(in srgb, #1f3864 72%, var(--color-text-primary));
+  --brand-blue: color-mix(in srgb, #2e75b6 78%, var(--color-text-primary));
   /* Surfaces */
-  --color-background-primary: #ffffff;
-  --color-background-secondary: #f4f6f9;
-  --color-background-tertiary: #eaeef3;
-  --color-background-info: #e7eef6;
+  --color-background-primary: rgba(26, 28, 31, 0.05);
+  --color-background-secondary: rgba(255, 255, 255, 0.96);
+  --color-background-tertiary: #f1f2f3;
+  --color-background-chrome: rgba(26, 28, 31, 0.1);
+  --color-background-popover: #ffffff;
+  --color-background-info: #e5f2ff;
   --color-background-danger: #fcebeb;
   --color-background-warning: #faeeda;
   --color-background-success: #eaf3de;
   /* Text */
-  --color-text-primary: #1b1d21;
-  --color-text-secondary: #565a61;
-  --color-text-tertiary: #8b9098;
-  --color-text-info: #1f3864;
+  --color-text-primary: #1a1c1f;
+  --color-text-secondary: rgba(26, 28, 31, 0.64);
+  --color-text-tertiary: rgba(26, 28, 31, 0.49);
+  --color-text-info: #339cff;
   --color-text-danger: #a32d2d;
   --color-text-warning: #854f0b;
   --color-text-success: #3b6d11;
   /* Borders */
-  --color-border-tertiary: rgba(20, 24, 31, 0.12);
-  --color-border-secondary: rgba(20, 24, 31, 0.2);
-  --color-border-info: #2e75b6;
+  --color-border-tertiary: rgba(26, 28, 31, 0.08);
+  --color-border-secondary: rgba(26, 28, 31, 0.12);
+  --color-border-info: #339cff;
   --color-border-danger: #e24b4a;
+  --color-border-success: #639922;
+  --color-button-primary: #1a1c1f;
+  --color-button-primary-text: #ffffff;
+  --color-button-primary-hover: rgba(26, 28, 31, 0.8);
+  --color-button-stop: #f0aa78;
+  --color-button-stop-hover: #f5b98c;
+  --color-status-ok: color-mix(in srgb, #f3883b 58%, var(--color-text-primary));
   /* Radius + type */
   --border-radius-md: 8px;
   --border-radius-lg: 12px;
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  --page-bg: #dfe3e9;
+  --border-radius-control: 12px;
+  --border-radius-card: 20px;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-size-base: 14px;
+  --font-size-small: 12px;
+  --font-size-label: 13px;
+  --font-size-h1: 24px;
+  --font-size-h2: 20px;
+  --font-size-h3: 18px;
+  --page-bg: #ffffff;
+  --color-background-muted: rgba(26, 28, 31, 0.1);
+  --color-background-modal: color-mix(in srgb, var(--page-bg) 96%, var(--color-text-primary));
 }
 
 .dark {
-  --color-background-primary: #1f2228;
-  --color-background-secondary: #272b32;
-  --color-background-tertiary: #2c3138;
-  --color-background-info: #284879;
-  --color-background-danger: #3c2627;
-  --color-background-warning: #3a3119;
-  --color-background-success: #26361d;
-  --color-text-primary: #e9ebee;
-  --color-text-secondary: #aab1ba;
-  --color-text-tertiary: #79808a;
-  --color-text-info: #d6e6fb;
-  --color-text-danger: #f0a6a3;
-  --color-text-warning: #e7c587;
-  --color-text-success: #b8db9c;
-  --color-border-tertiary: rgba(255, 255, 255, 0.1);
-  --color-border-secondary: rgba(255, 255, 255, 0.18);
-  --color-border-info: #3a6db0;
-  --color-border-danger: #b8504e;
-  --page-bg: #141619;
+  --color-background-primary: rgba(255, 255, 255, 0.05);
+  --color-background-secondary: rgba(54, 54, 54, 0.96);
+  --color-background-tertiary: #424242;
+  --color-background-chrome: rgba(255, 255, 255, 0.1);
+  --color-background-popover: #2d2d2d;
+  --color-background-info: #0d273f;
+  --color-background-danger: rgba(250, 66, 62, 0.12);
+  --color-background-warning: rgba(255, 133, 73, 0.12);
+  --color-background-success: rgba(64, 201, 119, 0.12);
+  --color-text-primary: #ffffff;
+  --color-text-secondary: rgba(255, 255, 255, 0.64);
+  --color-text-tertiary: rgba(255, 255, 255, 0.5);
+  --color-text-info: #83c3ff;
+  --color-text-danger: #fa423e;
+  --color-text-warning: #ff8549;
+  --color-text-success: #40c977;
+  --color-border-tertiary: rgba(255, 255, 255, 0.082);
+  --color-border-secondary: rgba(255, 255, 255, 0.12);
+  --color-border-info: rgba(131, 195, 255, 0.76);
+  --color-border-danger: rgba(250, 66, 62, 0.72);
+  --color-border-success: rgba(64, 201, 119, 0.72);
+  --color-button-primary: #ffffff;
+  --color-button-primary-text: #0d0d0d;
+  --color-button-primary-hover: rgba(255, 255, 255, 0.8);
+  --color-status-ok: color-mix(in srgb, #f59a56 58%, var(--color-text-primary));
+  --page-bg: #181818;
+  --color-background-muted: rgba(255, 255, 255, 0.1);
 }
 
 html,
@@ -65,10 +92,47 @@ body,
 body {
   margin: 0;
   font-family: var(--font-sans);
+  font-size: var(--font-size-base);
   font-weight: 400;
+  line-height: 1.5;
   color: var(--color-text-primary);
   background: var(--page-bg);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2 {
+  line-height: 1.25;
+}
+
+h3 {
+  line-height: 1.3;
+}
+
+svg.lucide {
+  stroke-width: 1.6;
+}
+
+/*
+ * Electron's native minimize/maximize/close buttons occupy the right side of
+ * this same 40px title bar. The CSS environment variables keep our Settings
+ * and avatar controls immediately to their left; 150px is a safe Windows
+ * fallback before the overlay geometry becomes available.
+ */
+.mn-topbar {
+  -webkit-app-region: drag;
+  padding-right: max(
+    150px,
+    calc(
+      100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px
+    )
+  );
+}
+
+.mn-topbar button,
+.mn-topbar [data-no-drag] {
+  -webkit-app-region: no-drag;
 }
 
 /* Thin flat scrollbars to match the surface design. */
@@ -92,4 +156,81 @@ body {
   outline: none;
   box-shadow: 0 0 0 2px rgba(46, 117, 182, 0.45);
   border-radius: var(--border-radius-md);
+}
+
+@keyframes ui-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ui-popover {
+  from {
+    opacity: 0;
+    transform: translateY(-3px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes ui-backdrop {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.ui-enter {
+  animation: ui-enter 150ms ease-out;
+}
+
+.ui-popover {
+  transform-origin: top right;
+  animation: ui-popover 150ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.ui-backdrop {
+  animation: ui-backdrop 160ms ease-out both;
+}
+
+.ui-control {
+  transition:
+    color 150ms ease,
+    background-color 150ms ease,
+    border-color 150ms ease,
+    opacity 150ms ease,
+    transform 120ms ease;
+}
+
+.ui-control:active:not(:disabled) {
+  transform: scale(0.985);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (max-width: 400px) {
+  .mn-brand-label,
+  .mn-recording-label,
+  .mn-processing-detail,
+  .mn-disclosure-detail {
+    display: none;
+  }
 }

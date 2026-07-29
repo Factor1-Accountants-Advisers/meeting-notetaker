@@ -1,6 +1,15 @@
 import { useState } from 'react'
-import { AlertTriangle, CheckCircle2, Loader2, Mic, Plus, Upload, XCircle } from 'lucide-react'
-import { Card, SectionHeader } from '@renderer/components/ui/Card'
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronDown,
+  Loader2,
+  Mic,
+  Upload,
+  Users,
+  XCircle
+} from 'lucide-react'
+import { Card } from '@renderer/components/ui/Card'
 import {
   AttendeePicker,
   type ManualAttendee
@@ -18,7 +27,7 @@ export interface InterruptedRecording {
 }
 
 interface HomeProps {
-  userName: string
+  previewMode?: boolean
   onStartRecording: (title: string, attendees: ManualAttendee[]) => void
   onUploadRecording: (title: string, file: File, attendees: ManualAttendee[]) => void
   recordingState?: 'idle' | 'recording' | 'processing'
@@ -48,11 +57,10 @@ interface HomeProps {
   }[]
   onDismissBlobDeliveryNotice?: (meetingId: string) => void
   onRetryBlobDelivery?: (meetingId: string, title: string) => void
-  onShowRecording?: () => void
 }
 
 export function HomeScreen({
-  userName,
+  previewMode = false,
   onStartRecording,
   onUploadRecording,
   recordingState,
@@ -64,14 +72,15 @@ export function HomeScreen({
   onRetryPostCapture,
   blobDeliveryNotices,
   onDismissBlobDeliveryNotice,
-  onRetryBlobDelivery,
-  onShowRecording
+  onRetryBlobDelivery
 }: HomeProps): JSX.Element {
-  const { data: staff, offline } = useLive(fetchPeople, sampleStaff)
+  const { data: staff, offline } = useLive(
+    previewMode ? async () => sampleStaff : fetchPeople,
+    sampleStaff
+  )
 
   return (
-    <div className="flex flex-col gap-4">
-      <Greeting userName={userName} />
+    <div className="flex flex-col gap-3">
       {interruptedRecordings?.map((entry) => (
         <InterruptedRecordingNotice
           key={entry.key}
@@ -80,28 +89,15 @@ export function HomeScreen({
           onDiscard={onDiscardInterrupted}
         />
       ))}
-      {recordingState && recordingState !== 'idle' && (
-        <div className="flex items-center gap-2 rounded-md border-[0.5px] border-edge-info bg-bg-info px-3 py-2 text-[13px] text-content-info">
-          <span className={`h-2 w-2 rounded-full ${recordingState === 'recording' ? 'animate-pulse bg-edge-danger' : 'bg-edge-info'}`} />
-          {recordingState === 'recording' ? 'Recording in progress' : 'Processing recording…'}
-          {recordingState === 'recording' && onShowRecording && (
-            <button
-              type="button"
-              onClick={onShowRecording}
-              className="ml-auto rounded-md border-[0.5px] border-edge-info px-2.5 py-1 text-[12px] text-content-info hover:bg-bg-info"
-            >
-              Show
-            </button>
-          )}
-        </div>
-      )}
-      {postCaptureNotice && (
+      {postCaptureNotice &&
+        postCaptureNotice.state !== 'processing' &&
+        postCaptureNotice.state !== 'emailing' && (
         <PostCaptureNotice
           notice={postCaptureNotice}
           onDismiss={onDismissPostCaptureNotice}
           onRetry={onRetryPostCapture}
         />
-      )}
+        )}
       {blobDeliveryNotices?.map((notice) => (
         <BlobDeliveryNoticeCard
           key={notice.meetingId}
@@ -113,7 +109,7 @@ export function HomeScreen({
       <CaptureCard
         onStart={onStartRecording}
         onUpload={onUploadRecording}
-        recordingActive={recordingState === 'recording'}
+        recordingActive={recordingState !== undefined && recordingState !== 'idle'}
         people={staff}
         directoryUnavailable={offline}
       />
@@ -315,28 +311,6 @@ function PostCaptureNotice({
   )
 }
 
-function Greeting({ userName }: { userName: string }): JSX.Element {
-  const now = new Date()
-  const dateLine = now.toLocaleDateString('en-GB', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric'
-  })
-  const hour = now.getHours()
-  const daypart = hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening'
-
-  const firstName = userName.split(' ')[0]
-  return (
-    <div>
-      <div className="mb-0.5 text-[12px] text-content-tertiary">{dateLine}</div>
-      <h1 className="text-[22px] font-medium text-content-primary">
-        Good {daypart}, {firstName}
-      </h1>
-    </div>
-  )
-}
-
 function CaptureCard({
   onStart,
   onUpload,
@@ -346,51 +320,81 @@ function CaptureCard({
 }: {
   onStart: (title: string, attendees: ManualAttendee[]) => void
   onUpload: (title: string, file: File, attendees: ManualAttendee[]) => void
-  /** Upload is disabled while an automatic recording is in progress. */
+  /** Capture actions are disabled while a recording is active or finishing. */
   recordingActive?: boolean
   people: StaffMember[]
   directoryUnavailable: boolean
 }): JSX.Element {
   const [title, setTitle] = useState('')
   const [attendees, setAttendees] = useState<ManualAttendee[]>([])
+  const [attendeesOpen, setAttendeesOpen] = useState(false)
   const hasTitle = title.trim().length > 0
   const canUpload = hasTitle && !recordingActive
 
   return (
     <Card>
-      <SectionHeader icon={Plus} title="Meeting Title" />
+      <div className="mb-3.5 flex items-start justify-between gap-4">
+        <div>
+          <p className="mb-0.5 mt-0 text-[12px] text-content-tertiary">Manual capture</p>
+          <h2 className="m-0 text-[20px] font-medium text-content-primary">New meeting</h2>
+        </div>
+        <Mic size={16} className="mt-0.5 text-content-secondary" aria-hidden="true" />
+      </div>
+      <label
+        htmlFor="meeting-title"
+        className="mb-1.5 block text-[14px] font-medium text-content-primary"
+      >
+        Meeting title
+      </label>
       <input
+        id="meeting-title"
         type="text"
         value={title}
         disabled={recordingActive}
         onChange={(e) => setTitle(e.target.value)}
         placeholder="e.g. Tax compliance — Henderson & Co"
-        className="mb-3 h-9 w-full rounded-md border-[0.5px] border-edge-tertiary bg-bg-primary px-3 text-[14px] text-content-primary placeholder:text-content-tertiary focus:border-brand-blue focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
+        className="ui-control h-7 w-full rounded-control border border-edge-tertiary bg-bg-secondary px-2 text-[14px] text-content-primary placeholder:text-content-tertiary focus:border-brand-blue focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
       />
-      <AttendeePicker
-        people={people}
-        selected={attendees}
-        onChange={setAttendees}
-        disabled={recordingActive}
-        directoryUnavailable={directoryUnavailable}
-      />
-      <div className="flex gap-2.5">
-        <button
-          type="button"
-          disabled={!canUpload}
-          onClick={() => onStart(title.trim(), attendees)}
-          className="flex flex-1 items-center justify-center gap-1.5 rounded-md border-[0.5px] border-edge-info bg-bg-info py-2.5 text-[14px] text-content-info transition-colors hover:opacity-90 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-45"
-        >
-          <Mic size={16} strokeWidth={1.75} />
-          Start Recording
-        </button>
+      <button
+        type="button"
+        aria-expanded={attendeesOpen}
+        onClick={() => setAttendeesOpen((open) => !open)}
+        className="ui-control my-3 grid w-full grid-cols-[1fr_auto_auto] items-center gap-2.5 border-y border-edge-tertiary bg-transparent py-2.5 text-left text-[14px] text-content-primary max-[400px]:grid-cols-[1fr_auto]"
+      >
+        <span className="flex items-center gap-2">
+          <Users size={16} aria-hidden="true" />
+          Add attendees
+        </span>
+        <span className="mn-disclosure-detail text-[12px] text-content-tertiary">
+          {attendees.length > 0 ? `${attendees.length} selected · optional` : 'Optional'}
+        </span>
+        <ChevronDown
+          size={16}
+          aria-hidden="true"
+          className={`text-content-tertiary transition-transform duration-150 ${
+            attendeesOpen ? 'rotate-180' : ''
+          }`}
+        />
+      </button>
+      {attendeesOpen && (
+        <div className="ui-enter">
+          <AttendeePicker
+            people={people}
+            selected={attendees}
+            onChange={setAttendees}
+            disabled={recordingActive}
+            directoryUnavailable={directoryUnavailable}
+          />
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-2">
         <label
-          className={`flex items-center justify-center gap-1.5 rounded-md border-[0.5px] border-edge-secondary px-4 py-2.5 text-[14px] text-content-primary ${
-            canUpload ? 'cursor-pointer hover:bg-bg-secondary' : 'cursor-not-allowed opacity-45'
+          className={`ui-control flex min-h-7 items-center justify-center gap-1 rounded-control border border-edge-secondary bg-bg-secondary px-2 text-[14px] text-content-primary ${
+            canUpload ? 'cursor-pointer hover:bg-bg-tertiary' : 'cursor-not-allowed opacity-45'
           }`}
           title={
             recordingActive
-              ? 'Upload is unavailable while an automatic recording is in progress'
+              ? 'Capture actions are unavailable while the current recording finishes'
               : hasTitle
                 ? 'Upload an existing recording'
                 : 'Enter a meeting name first'
@@ -410,6 +414,15 @@ function CaptureCard({
             }}
           />
         </label>
+        <button
+          type="button"
+          disabled={!canUpload}
+          onClick={() => onStart(title.trim(), attendees)}
+          className="ui-control flex min-h-7 items-center justify-center gap-1 rounded-control border border-transparent bg-[var(--color-button-primary)] px-2 text-[14px] text-[var(--color-button-primary-text)] hover:bg-[var(--color-button-primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <Mic size={16} strokeWidth={1.75} />
+          Start recording
+        </button>
       </div>
     </Card>
   )

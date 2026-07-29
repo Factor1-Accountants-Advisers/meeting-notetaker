@@ -26,7 +26,7 @@ import { ensureDefaultAutoLaunchEnabled, isBackgroundLaunch, registerStartupIpc 
 import { createTray, destroyTray, setTraySkipped, updateTrayMenu } from './tray'
 import { checkForUpdatesOnLaunch, registerUpdaterIpc } from './updater'
 import { startBackendSupervisor, stopBackendSupervisor } from './backend-supervisor'
-import { createWindow } from './window'
+import { createWindow, registerWindowSizingIpc } from './window'
 import type { GraphEventDecision } from './graph/types'
 
 loadPublicEnv()
@@ -42,6 +42,7 @@ registerApiProxyIpc()
 registerRecordingStorageIpc()
 registerUpdaterIpc()
 registerStartupIpc()
+registerWindowSizingIpc()
 
 function registerRecordingIpcHandlers(): void {
   ipcMain.on('renderer:debug-log', (_event, message: string, details?: unknown) => {

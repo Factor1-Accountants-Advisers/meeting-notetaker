@@ -1,53 +1,50 @@
 import { useEffect, useState } from 'react'
 import {
   AlertTriangle,
-  Clock,
+  AudioWaveform as AudioWaveformIcon,
   CloudOff,
+  Clock3,
   Mic,
   MicOff,
   Pause,
   Play,
-  Plus,
   Square,
-  Volume2
 } from 'lucide-react'
 import { Card } from '@renderer/components/ui/Card'
-import { Pill } from '@renderer/components/ui/Pill'
 import type { CaptureStatus } from '@renderer/lib/capture'
 
 /** Lifted to App so recording survives navigation between screens. */
 export interface RecordingSession {
-  meetingId: string | null // null when created offline (not saved to backend)
+  meetingId: string | null
   title: string
   source: 'online' | 'in_person'
-  startedAt: number // epoch ms
-  pausedAccum: number // total paused ms so far
-  pausedAt: number | null // epoch ms when current pause began; null = recording
-  // Scheduled auto-stop time (auto-recordings only). Owned by the main process;
-  // updated here when the user extends. null/undefined for manual recordings.
+  startedAt: number
+  pausedAccum: number
+  pausedAt: number | null
   scheduledEndUtc?: string | null
 }
 
-export function elapsedMs(s: RecordingSession, now = Date.now()): number {
-  const pausedSoFar = s.pausedAccum + (s.pausedAt !== null ? now - s.pausedAt : 0)
-  return now - s.startedAt - pausedSoFar
+export function elapsedMs(session: RecordingSession, now = Date.now()): number {
+  const pausedSoFar =
+    session.pausedAccum + (session.pausedAt !== null ? now - session.pausedAt : 0)
+  return now - session.startedAt - pausedSoFar
 }
 
 function clock(ms: number): string {
   const total = Math.floor(ms / 1000)
-  const h = Math.floor(total / 3600)
-  const m = Math.floor((total % 3600) / 60)
-  const s = total % 60
-  const mm = String(m).padStart(2, '0')
-  const ss = String(s).padStart(2, '0')
-  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const seconds = total % 60
+  const hh = String(hours).padStart(2, '0')
+  const mm = String(minutes).padStart(2, '0')
+  const ss = String(seconds).padStart(2, '0')
+  return `${hh}:${mm}:${ss}`
 }
 
-function countdown(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000))
-  const m = Math.floor(total / 60)
-  const s = total % 60
-  return `${m}:${String(s).padStart(2, '0')}`
+function remainingLabel(ms: number): string {
+  if (ms <= 0) return 'Scheduled end passed'
+  const minutes = Math.ceil(ms / 60_000)
+  return minutes === 1 ? '1 min remaining' : `${minutes} min remaining`
 }
 
 interface Props {
@@ -68,17 +65,21 @@ export function RecordingScreen({
   onResume,
   onStop,
   onExtend,
-  extending,
+  extending = false,
   saving = false
 }: Props): JSX.Element {
   const [now, setNow] = useState(Date.now())
   const paused = session.pausedAt !== null
-
-  const scheduledEndMs = session.scheduledEndUtc ? new Date(session.scheduledEndUtc).getTime() : null
+  const scheduledEndMs = session.scheduledEndUtc
+    ? new Date(session.scheduledEndUtc).getTime()
+    : null
   const remainingMs = scheduledEndMs !== null ? scheduledEndMs - now : null
   const endLabel =
     scheduledEndMs !== null
-      ? new Date(scheduledEndMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+      ? new Date(scheduledEndMs).toLocaleTimeString([], {
+          hour: 'numeric',
+          minute: '2-digit'
+        }).toLocaleLowerCase()
       : null
 
   useEffect(() => {
@@ -87,75 +88,87 @@ export function RecordingScreen({
     return () => window.clearInterval(id)
   }, [saving])
 
+  useEffect(() => {
+    // An extension can arrive between timer ticks. Rebase immediately so the
+    // new remaining time and scheduled end render in the same update.
+    setNow(Date.now())
+  }, [session.scheduledEndUtc])
+
   if (saving) {
     return (
-      <div className="flex flex-col gap-4">
+      <Card className="flex flex-col items-center gap-3 !px-5 !py-8 text-center">
+        <span className="h-3 w-3 animate-pulse rounded-full bg-edge-success" />
         <div>
-          <div className="mb-0.5 text-[12px] text-content-tertiary">Finishing up</div>
-          <h1 className="truncate text-[22px] font-medium text-content-primary">{session.title}</h1>
+          <h1 className="m-0 truncate text-[18px] font-medium text-content-primary">
+            Finishing {session.title}
+          </h1>
+          <p className="mb-0 mt-1 text-[13px] text-content-secondary">
+            Saving and uploading your recording…
+          </p>
         </div>
-        <Card className="flex flex-col items-center gap-5 !py-9">
-          <div className="flex items-center gap-3">
-            <span className="h-3 w-3 animate-pulse rounded-full bg-edge-success" />
-            <span className="text-[16px] font-medium text-content-primary">
-              Saving and uploading your recording…
-            </span>
-          </div>
-          <Pill tone="info">Processing</Pill>
-          <div className="text-[13px] text-content-secondary">
-            You can keep using the app when this screen closes.
-          </div>
-        </Card>
-      </div>
+      </Card>
     )
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div>
-        <div className="mb-0.5 text-[12px] text-content-tertiary">
-          {paused ? 'Recording paused' : 'Recording'}
-        </div>
-        <h1 className="truncate text-[22px] font-medium text-content-primary">{session.title}</h1>
-      </div>
-
-      <Card className="flex flex-col items-center gap-5 !py-9">
-        <div className="flex items-center gap-3">
-          <span
-            className={`h-3 w-3 rounded-full ${
-              paused ? 'bg-content-tertiary' : 'animate-pulse bg-edge-danger'
-            }`}
-          />
-          <span className="text-[40px] font-medium tabular-nums text-content-primary">
+    <div className="flex flex-col gap-3">
+      <Card>
+        <div className="text-center">
+          <p className="m-0 truncate text-[12px] text-content-tertiary">{session.title}</p>
+          <div className="mt-1 text-[20px] font-medium leading-tight tabular-nums text-content-primary">
             {clock(elapsedMs(session, now))}
-          </span>
+          </div>
+          <AudioWaveform
+            paused={paused}
+            level={Math.max(captureStatus?.micLevel ?? 0, captureStatus?.loopbackLevel ?? 0)}
+          />
         </div>
 
-        {paused ? <Pill tone="warning">Paused</Pill> : <Pill tone="danger">Recording</Pill>}
+        <div className="mt-3">
+          <LevelMeter
+            icon={captureStatus?.mic === 'error' || captureStatus?.mic === 'silent' ? MicOff : Mic}
+            label="Microphone"
+            level={captureStatus?.micLevel ?? 0}
+            state={captureStatus?.mic ?? 'off'}
+          />
+          {session.source === 'online' && (
+            <LevelMeter
+              icon={AudioWaveformIcon}
+              label="System audio"
+              level={captureStatus?.loopbackLevel ?? 0}
+              state={captureStatus?.loopback ?? 'off'}
+            />
+          )}
+        </div>
 
-        {remainingMs !== null && (
-          <div className="flex items-center gap-1.5 text-[13px] text-content-secondary">
-            <Clock size={13} strokeWidth={1.75} />
-            {remainingMs > 0 ? (
-              <span>
-                <span className="tabular-nums text-content-primary">{countdown(remainingMs)}</span> until
-                scheduled end ({endLabel})
+        {remainingMs !== null && endLabel && (
+          <div
+            className={`mb-2.5 flex items-center justify-between gap-3 border-t border-edge-tertiary py-2.5 text-left text-[14px] ${
+              remainingMs > 0 ? 'text-content-secondary' : 'text-content-warning'
+            }`}
+            aria-label={`Scheduled to end at ${endLabel}, ${remainingLabel(remainingMs)}`}
+          >
+            <span className="flex items-center gap-1.5">
+              <Clock3 size={15} aria-hidden="true" />
+              Scheduled end
+            </span>
+            <span className="whitespace-nowrap">
+              <strong className="font-medium text-content-primary">{endLabel}</strong>
+              <span className="text-[12px] text-content-tertiary">
+                {' '}
+                · {remainingLabel(remainingMs)}
               </span>
-            ) : (
-              <span className="text-content-warning">
-                Past scheduled end ({endLabel}) — extend to keep recording
-              </span>
-            )}
+            </span>
           </div>
         )}
 
-        <div className="flex flex-wrap justify-center gap-2.5">
+        <div className={`grid gap-2 ${onExtend ? 'grid-cols-3' : 'grid-cols-2'}`}>
           {paused ? (
             <button
               type="button"
               aria-label="Resume recording"
               onClick={onResume}
-              className="flex items-center gap-1.5 rounded-md border-[0.5px] border-edge-info bg-bg-info px-4 py-2.5 text-[14px] text-content-info"
+              className="ui-control flex min-h-7 min-w-0 items-center justify-center gap-1 rounded-control border border-edge-secondary bg-bg-secondary px-2 text-[14px] text-content-primary hover:bg-bg-tertiary"
             >
               <Play size={16} strokeWidth={1.75} />
               Resume
@@ -165,128 +178,169 @@ export function RecordingScreen({
               type="button"
               aria-label="Pause recording"
               onClick={onPause}
-              className="flex items-center gap-1.5 rounded-md border-[0.5px] border-edge-secondary px-4 py-2.5 text-[14px] text-content-primary hover:bg-bg-secondary"
+              className="ui-control flex min-h-7 min-w-0 items-center justify-center gap-1 rounded-control border border-edge-secondary bg-bg-secondary px-2 text-[14px] text-content-primary hover:bg-bg-tertiary"
             >
               <Pause size={16} strokeWidth={1.75} />
               Pause
             </button>
           )}
-          {scheduledEndMs !== null && onExtend && (
+
+          {onExtend && (
             <button
               type="button"
               onClick={onExtend}
               disabled={extending}
-              className="flex items-center gap-1.5 rounded-md border-[0.5px] border-edge-secondary px-4 py-2.5 text-[14px] text-content-primary hover:bg-bg-secondary disabled:opacity-50"
+              className="ui-control flex min-h-7 min-w-0 items-center justify-center gap-1 rounded-control border border-transparent bg-white px-2 text-[14px] text-[#111111] hover:bg-[#F2F2F2] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <Plus size={16} strokeWidth={1.75} />
+              {!extending && <Clock3 size={15} aria-hidden="true" />}
               {extending ? 'Extending…' : 'Extend 10 min'}
             </button>
           )}
+
           <button
             type="button"
             aria-label="Stop recording"
             onClick={onStop}
-            className="flex items-center gap-1.5 rounded-md border-[0.5px] border-edge-danger bg-bg-danger px-4 py-2.5 text-[14px] text-content-danger"
+            className="ui-control flex min-h-7 min-w-0 items-center justify-center gap-1 rounded-control border border-transparent bg-[var(--color-button-stop)] px-2 text-[14px] text-[#17110D] hover:bg-[var(--color-button-stop-hover)]"
           >
             <Square size={15} strokeWidth={1.75} />
-            Stop
+            Stop recording
           </button>
         </div>
       </Card>
 
-      <Card>
-        <div className="flex flex-col gap-2 text-[12px] text-content-secondary">
-          {captureStatus?.mic === 'active' && (
-            <span className="flex items-center gap-1.5 text-content-success">
-              <Mic size={13} strokeWidth={1.75} />
-              Microphone capturing
-            </span>
-          )}
-          {captureStatus?.mic === 'error' && (
-            <span className="flex items-center gap-1.5 text-content-danger">
-              <MicOff size={13} strokeWidth={1.75} />
-              Microphone unavailable — check access in system settings.
-            </span>
-          )}
-          {captureStatus?.mic === 'silent' && (
-            <span className="flex items-center gap-1.5 text-content-danger">
-              <MicOff size={13} strokeWidth={1.75} />
-              Microphone appears silent — your voice is not being captured. Check your mic in
-              Settings (Bluetooth headsets in calls are a common cause).
-            </span>
-          )}
-          {session.source === 'online' && captureStatus?.loopback === 'active' && (
-            <span className="flex items-center gap-1.5 text-content-success">
-              <Volume2 size={13} strokeWidth={1.75} />
-              System audio (loopback) capturing — silence notifications and media while
-              recording.
-            </span>
-          )}
-          {session.source === 'online' && captureStatus?.loopback === 'error' && (
-            <span className="flex items-center gap-1.5 text-content-danger">
-              <AlertTriangle size={13} strokeWidth={1.75} />
-              System-audio loopback failed — remote participants are not being captured.
-            </span>
-          )}
-          {session.source === 'online' && captureStatus?.loopback === 'silent' && (
-            <span className="flex items-center gap-1.5 text-content-danger">
-              <AlertTriangle size={13} strokeWidth={1.75} />
-              System audio has been silent for over a minute — meeting audio may not be
-              captured. Check your audio output device (a headset switch is a common cause).
-            </span>
-          )}
-          {captureStatus !== null && !captureStatus.recording && (
-            <span className="flex items-center gap-1.5 text-content-danger">
-              <AlertTriangle size={13} strokeWidth={1.75} />
-              No audio is being captured — timer only. Upload a recording afterwards instead.
-            </span>
-          )}
-          {session.meetingId === null && (
-            <span className="flex items-center gap-1.5 text-content-warning">
-              <CloudOff size={13} strokeWidth={1.75} />
-              Backend unavailable — this meeting is not saved yet.
-            </span>
-          )}
-          {/* Audio input level meters (IN-128) */}
-          {captureStatus?.mic === 'active' && captureStatus.micLevel !== null && (
-            <LevelMeter label="Microphone" level={captureStatus.micLevel} tone="mic" />
-          )}
-          {session.source === 'online' &&
-            captureStatus?.loopback === 'active' &&
-            captureStatus.loopbackLevel !== null && (
-              <LevelMeter label="System audio" level={captureStatus.loopbackLevel} tone="loopback" />
-            )}
-        </div>
-      </Card>
+      <CaptureWarnings session={session} captureStatus={captureStatus} />
     </div>
   )
 }
 
-/** Live audio input meter bar (IN-128). Fills smoothly with the RMS level. */
-function LevelMeter({
-  label,
-  level,
-  tone
-}: {
-  label: string
-  level: number
-  tone: 'mic' | 'loopback'
-}): JSX.Element {
-  // Clamp and scale: 0–0.05 = barely visible, 0.5 = half full, 1.0 = full.
-  // Use a non-linear curve so quiet signals still show movement.
-  const visual = Math.min(1, Math.pow(level / 0.05, 0.45) * 0.15)
-  const barColor =
-    tone === 'mic' ? 'bg-[#CC6A38]' : 'bg-[#2F6F95]'
+function AudioWaveform({ paused, level }: { paused: boolean; level: number }): JSX.Element {
+  const pattern = [28, 48, 74, 38, 88, 56, 94, 42, 68, 34, 80, 50, 90, 44, 62, 30, 72, 46, 84, 36, 66]
+  const strength = paused ? 0.25 : 0.58 + Math.min(1, level * 16) * 0.42
 
   return (
-    <div className="flex items-center gap-2">
-      <span className="w-[88px] shrink-0 text-[11px] text-content-tertiary">{label}</span>
-      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[#E8EDF3]">
+    <div
+      className="mt-2.5 flex h-12 items-center justify-center gap-[3px]"
+      role="img"
+      aria-label={paused ? 'Audio waveform paused' : 'Live audio waveform'}
+    >
+      {pattern.map((height, index) => (
+        <span
+          key={`${height}-${index}`}
+          className="w-[3px] rounded-full bg-brand-blue transition-[height,opacity] duration-100"
+          style={{
+            height: `${Math.max(5, Math.round((height / 100) * 48 * strength))}px`,
+            opacity: paused ? 0.45 : 0.92
+          }}
+        />
+      ))}
+    </div>
+  )
+}
+
+function LevelMeter({
+  icon: Icon,
+  label,
+  level,
+  state
+}: {
+  icon: typeof Mic
+  label: string
+  level: number
+  state: CaptureStatus['mic']
+}): JSX.Element {
+  const visual = Math.min(100, Math.round(Math.pow(Math.max(0, level) / 0.05, 0.45) * 100))
+  const problem = state === 'error' || state === 'silent'
+
+  return (
+    <div className="grid grid-cols-[minmax(8rem,1fr)_minmax(7rem,2fr)_auto] items-center gap-3 border-t border-edge-tertiary py-2 max-[560px]:grid-cols-1">
+      <span className="flex min-w-0 items-center gap-[7px] text-[14px] text-content-primary">
+        <Icon size={15} strokeWidth={1.75} className="text-content-secondary" />
+        {label}
+      </span>
+      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--color-background-muted)]">
         <div
-          className={`h-full rounded-full transition-[width] duration-75 ease-linear ${barColor}`}
-          style={{ width: `${Math.round(visual * 100)}%` }}
+          className={`h-full rounded-full transition-[width] duration-100 ${
+            problem ? 'bg-edge-danger' : 'bg-brand-blue'
+          }`}
+          style={{ width: `${visual}%` }}
         />
       </div>
+      <span
+        className={`h-2 w-2 shrink-0 rounded-full max-[560px]:hidden ${
+          problem
+            ? 'bg-edge-danger'
+            : state === 'active'
+              ? 'bg-[var(--color-button-stop)]'
+              : 'bg-content-tertiary'
+        }`}
+        aria-label={`${label} ${state}`}
+      />
     </div>
+  )
+}
+
+function CaptureWarnings({
+  session,
+  captureStatus
+}: {
+  session: RecordingSession
+  captureStatus: CaptureStatus | null
+}): JSX.Element | null {
+  const warnings: { icon: typeof AlertTriangle; text: string; tone: string }[] = []
+
+  if (captureStatus?.mic === 'error') {
+    warnings.push({
+      icon: MicOff,
+      text: 'Microphone unavailable — check access in system settings.',
+      tone: 'text-content-danger'
+    })
+  } else if (captureStatus?.mic === 'silent') {
+    warnings.push({
+      icon: MicOff,
+      text: 'Microphone appears silent — check your selected microphone.',
+      tone: 'text-content-danger'
+    })
+  }
+  if (session.source === 'online' && captureStatus?.loopback === 'error') {
+    warnings.push({
+      icon: AlertTriangle,
+      text: 'System audio failed — remote participants are not being captured.',
+      tone: 'text-content-danger'
+    })
+  } else if (session.source === 'online' && captureStatus?.loopback === 'silent') {
+    warnings.push({
+      icon: AlertTriangle,
+      text: 'System audio has been silent for over a minute — check your audio output device.',
+      tone: 'text-content-danger'
+    })
+  }
+  if (captureStatus !== null && !captureStatus.recording) {
+    warnings.push({
+      icon: AlertTriangle,
+      text: 'No audio is being captured — the timer is still running.',
+      tone: 'text-content-danger'
+    })
+  }
+  if (session.meetingId === null) {
+    warnings.push({
+      icon: CloudOff,
+      text: 'Backend unavailable — this meeting is not saved yet.',
+      tone: 'text-content-warning'
+    })
+  }
+  if (warnings.length === 0) return null
+
+  return (
+    <Card className="!py-2.5">
+      <div className="flex flex-col gap-2">
+        {warnings.map(({ icon: Icon, text, tone }) => (
+          <div key={text} className={`flex items-start gap-2 text-[12px] ${tone}`}>
+            <Icon size={14} strokeWidth={1.75} className="mt-0.5 shrink-0" />
+            <span>{text}</span>
+          </div>
+        ))}
+      </div>
+    </Card>
   )
 }

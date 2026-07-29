@@ -120,6 +120,14 @@ const api = {
     reason?: string
   }> => ipcRenderer.invoke('startup:set-auto-launch', enabled),
 
+  /** Resize the compact window to the active renderer screen's measured height. */
+  setCompactWindowHeight: (height: number): void =>
+    ipcRenderer.send('window:set-content-height', height),
+
+  /** Keep the native Windows controls legible on the integrated app title bar. */
+  setTitleBarTheme: (theme: 'light' | 'dark'): void =>
+    ipcRenderer.send('window:set-titlebar-theme', theme),
+
   /** Interactive Microsoft sign-in via MSAL. Returns user info or null if failed/not configured. */
   signIn: (): Promise<{ ok: boolean; name?: string; email?: string; error?: string }> =>
     ipcRenderer.invoke('auth:sign-in'),
