@@ -114,12 +114,19 @@ carry these sentences; raw exception text is confined to
    `OSError` and carry no `filename`.
 6. Anything else → `processing_error`.
 7. **`StorageApiUnavailable` (blob only, explicit, not via `classify()`).**
-   `storage_api.py:544` raises this on a 5xx with no `__cause__`
-   (`raise ... from None` at `:551`), so generic `classify()` would land it
-   on `processing_error` and hide a real Azure outage. Every blob call site
-   catches `StorageApiUnavailable` before the generic `except Exception` and
-   maps it explicitly via `FailureReason.for_category(service_unavailable,
-   ...)`, logged with `code="StorageApiUnavailable"`.
+   `storage_api.py` raises this from three sites with three different cause
+   chains: `:544` (5xx status check) has no active exception, so no
+   `__cause__`; `:551` (`except http.client.HTTPException:`) raises `from
+   None`, an explicit no-cause; `:552-553` (`except OSError as exc:`) raises
+   `from exc`, carrying the OSError as `__cause__`. Generic `classify()`
+   would therefore be inconsistent across the three variants —
+   `processing_error` for the first two (no useful cause, no HTTP status),
+   `network` for the third (the unwrapped OSError) — silently downgrading
+   what is always actually a Storage API outage. Every blob call site
+   instead catches `StorageApiUnavailable` before the generic `except
+   Exception` and maps all three variants explicitly via
+   `FailureReason.for_category(service_unavailable, ...)`, logged with
+   `code="StorageApiUnavailable"`.
 8. **`interrupted` / `stalled` are never produced by `classify()`.** They
    are assigned directly via `FailureReason.for_category(...)` at the two
    marking sites that have no exception object: startup reconcile
@@ -217,10 +224,17 @@ condition checks:
 Python's default logging writes this to stderr; the Electron backend
 supervisor (`src/main/backend-supervisor.ts`) pipes the child process's
 stderr into the main-process logger (`electron-log`, `src/main/logger.ts`),
-which writes to `main.log`. `backend/app/routers/support.py`'s IN-473
-"Report Problem" endpoint attaches the last ~30 lines of `main.log` to the
-emailed report — so every `delivery_failure` line is automatically part of
-that bundle without any extra wiring.
+which writes to `main.log`. When the user submits the IN-473 "Report
+Problem" form, `src/main/api-proxy.ts:63-66` reads that `main.log` file and
+takes its last 30 lines (`.split('\n').slice(-30)`), base64-encoding them
+into an `X-MN-Recent-Logs` header on the outgoing request; the backend
+(`backend/app/routers/support.py:44-51`) just decodes and inlines that
+header into the emailed report body under "Recent logs (main.log, last ~30
+lines)". So a `delivery_failure` line rides into the bundle automatically
+*if* it's still within the last 30 lines of `main.log` at report time —
+`main.log` is the whole app's log, not filtered to delivery failures, so a
+busy session can scroll an older failure out of that window before the
+user gets around to reporting it.
 
 ## 6. UI surfacing
 
@@ -245,11 +259,15 @@ falls back to `'Processing error'` for `null` or any code not in
 `failedChipLabel()`/worst-first chip ordering (processing → blob →
 sharepoint → email) on the meetings list, and per-concern failure rows
 (category label + stored `*_error_message` + that concern's retry action)
-on the review screen. Neither screen is reachable: `App.tsx`'s `View` type
-is `ScreenId | 'recording'`, and only `view === 'home'` / `view ===
-'settings'` are ever rendered — a remnant of the IN-73/IN-74 UI removals,
-predating IN-391. This work is correct-but-inert; whether to remove it or
-revive routing to it is an open product decision, not addressed here.
+on the review screen. Neither screen is reachable: `App.tsx` renders three
+views — `home`, `settings`, and `recording` (the active-capture screen,
+`view === 'recording'`, `App.tsx:1366`) — and the simplest proof the other
+two aren't among them isn't the render conditions, it's that they can't
+even be named: `lib/nav.ts:3` defines `ScreenId = 'home' | 'settings'`,
+with no id for a meetings list or review screen to route to. A remnant of
+the IN-73/IN-74 UI removals, predating IN-391. This work is
+correct-but-inert; whether to remove it or revive routing to it is an open
+product decision, not addressed here.
 
 ## 7. Known notes / open items
 

@@ -696,7 +696,9 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     `test_pipeline_stage_state.py`, `test_pipeline_watchdog.py`,
     `test_pipeline_voiceprints.py`, `test_blob_delivery.py`,
     `test_delivery_reliability.py`; `scripts/verify-failure-chips.tsx` (new).
-    Commit range `fc0dea0..6585c7b` on `in391-error-reporting` (17 commits).
+    Commit range `830edb8..6585c7b` on `in391-error-reporting` (17 commits,
+    `fc0dea0` through `6585c7b` inclusive — `fc0dea0` is itself the first
+    IN-391 commit, so the range base is its parent).
   - **Verification (this task, 29 Jul 2026):** full backend suite —
     `PYTHONPATH=backend backend/.venv/Scripts/python.exe -m unittest discover
     -s backend/tests -t backend` — **267 tests, 1 failure**: the documented
@@ -704,7 +706,9 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     concurrency-timing flake (`test_storage_api_meetings.py`), unrelated to
     this work. `npm run typecheck`, `npm run build`,
     `npm run verify:failure-chips`, and `npm run verify:email-notice` all
-    passed.
+    passed. Not yet run in this task: `npm run verify:storage-cutover`,
+    which is part of plan Task 9's full verification-sweep gate set (Task 9
+    is outstanding — see Remaining below).
   - **Remaining (plan Task 9 sweep, not done in this task):** (1) a
     table-driven test classifying a real `urllib.error.HTTPError` (not the
     `_FakeHttpError` test double) to pin the `.code`-attribute probe real
