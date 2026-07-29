@@ -68,13 +68,17 @@ export interface Meeting {
   pipelineStatus: PipelineStatus
   pipelineStage: PipelineStage
   pipelineStageMessage: string
+  processingErrorCode: string | null
   deliveryStatus: DeliveryStatus
   deliveryErrorMessage: string | null
+  deliveryErrorCode: string | null
   sharePointStatus: SharePointStatus
   sharePointErrorMessage: string | null
+  sharePointErrorCode: string | null
   sharePointWebUrl: string | null
   blobStatus: BlobStatus
   blobErrorMessage: string | null
+  blobErrorCode: string | null
   source: 'online' | 'in_person' | 'upload'
 }
 
