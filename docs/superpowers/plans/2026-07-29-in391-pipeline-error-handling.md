@@ -541,6 +541,8 @@ export function showUnconfirmedChip(m: FailureChipInput): boolean {
 
 ### Task 9: Full verification sweep
 
+- [ ] **Step 0 (Task 5 review carry-forward — real-shape test fidelity):** add to `backend/tests/test_failure_reasons.py` a table-driven case classifying a REAL `urllib.error.HTTPError("https://graph.microsoft.com/x", 503, "unavailable", {}, io.BytesIO(b""))` → `service_unavailable` (and a 401 → `azure_signin`) — this pins `_status_code`'s `.code` attribute probe, which is the only thing routing real Graph errors correctly (the `_FakeHttpError` fakes use `.status_code` and would stay green if the probe were removed). Also make the startup-reconcile `emailing → unconfirmed` site in `pipeline.py` (~:198-203) pass `error_code=None` explicitly (matching the router site), and extend the Task 5 assertLogs checks to pin `code=` fragments if cheap. Commit as `test: pin real HTTPError classification shape (IN-391)`.
+
 - [ ] **Step 1:** `PYTHONPATH=backend backend/.venv/Scripts/python.exe -m unittest discover -s backend/tests -t backend` — expected: all pass except (possibly) the documented `test_stub_serializes_concurrent_exports_for_one_meeting` flake. Any OTHER failure blocks completion.
 - [ ] **Step 2:** `npm run typecheck && npm run build && npm run verify:failure-chips && npm run verify:email-notice && npm run verify:storage-cutover` — all PASS.
 - [ ] **Step 3:** `git diff --check` (no whitespace errors); `git log --oneline main..HEAD` shows the task commits.
