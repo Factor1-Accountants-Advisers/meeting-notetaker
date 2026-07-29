@@ -6,6 +6,7 @@ import { AvatarStack } from '@renderer/components/ui/Avatar'
 import { toneClasses } from '@renderer/components/ui/tones'
 import { fetchMeetings } from '@renderer/lib/api'
 import { useLive } from '@renderer/lib/useLive'
+import { failedChipLabel, showUnconfirmedChip } from '@renderer/lib/failureDisplay'
 import { meetings as sampleMeetings, type Meeting, type MeetingStatus } from '@renderer/data/mock'
 
 type Filter = 'All' | 'Drafts' | 'Finalized'
@@ -109,6 +110,7 @@ function MeetingRow({
 }): JSX.Element {
   const Icon = meeting.icon
   const itemsLabel = `${meeting.actionItems} action item${meeting.actionItems === 1 ? '' : 's'}`
+  const failedLabel = failedChipLabel(meeting)
 
   return (
     <button
@@ -131,8 +133,9 @@ function MeetingRow({
       </div>
       {meeting.pipelineStatus === 'queued' && <Pill tone="info">Queued</Pill>}
       {meeting.pipelineStatus === 'processing' && <Pill tone="info">Processing…</Pill>}
-      {meeting.pipelineStatus === 'failed' && <Pill tone="danger">Failed</Pill>}
       {meeting.pipelineStatus === 'pending_audio' && <Pill tone="secondary">No recording</Pill>}
+      {failedLabel && <Pill tone="danger">{failedLabel}</Pill>}
+      {showUnconfirmedChip(meeting) && <Pill tone="warning">Email unconfirmed</Pill>}
       {meeting.unknownSpeakers > 0 && (
         <Pill tone="danger">{`${meeting.unknownSpeakers} to name`}</Pill>
       )}

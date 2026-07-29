@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  AlertTriangle,
   ArrowLeft,
   CheckCircle2,
   Circle,
@@ -32,8 +33,10 @@ import {
   mapActionItem,
   nameSpeaker,
   patchActionItem,
+  retryBlobDelivery,
   retryPipeline,
   revokeAccess,
+  saveTranscriptToSharePoint,
   toneFor,
   type AccessEntryDto,
   type AuditEntryDto,
@@ -44,9 +47,13 @@ import {
   meetings,
   staffNames,
   type ActionItem,
-  type PipelineStatus
+  type BlobStatus,
+  type DeliveryStatus,
+  type PipelineStatus,
+  type SharePointStatus
 } from '@renderer/data/mock'
 import type { Tone } from '@renderer/components/ui/tones'
+import { categoryLabel } from '@renderer/lib/failureDisplay'
 
 // ---------------------------------------------------------------------------
 // View model: one shape whether data comes from the backend or sample data.
@@ -59,6 +66,17 @@ interface ReviewVm {
   finalized: boolean
   sourceLabel: string
   pipelineStatus: PipelineStatus
+  pipelineStageMessage: string
+  processingErrorCode: string | null
+  blobStatus: BlobStatus
+  blobErrorMessage: string | null
+  blobErrorCode: string | null
+  sharePointStatus: SharePointStatus
+  sharePointErrorMessage: string | null
+  sharePointErrorCode: string | null
+  deliveryStatus: DeliveryStatus
+  deliveryErrorMessage: string | null
+  deliveryErrorCode: string | null
   summary: string
   participants: { name: string; known: boolean; tone: Tone }[]
   segments: { id: string; speaker: string; known: boolean; time: string; text: string }[]
@@ -89,6 +107,17 @@ function vmFromDto(dto: MeetingReviewDto): ReviewVm {
     finalized: dto.meeting.status === 'finalized',
     sourceLabel: SOURCE_LABELS[dto.meeting.source],
     pipelineStatus: dto.meeting.pipeline_status,
+    pipelineStageMessage: dto.meeting.pipeline_stage_message,
+    processingErrorCode: dto.meeting.processing_error_code,
+    blobStatus: dto.meeting.blob_status,
+    blobErrorMessage: dto.meeting.blob_error_message,
+    blobErrorCode: dto.meeting.blob_error_code,
+    sharePointStatus: dto.meeting.sharepoint_status,
+    sharePointErrorMessage: dto.meeting.sharepoint_error_message,
+    sharePointErrorCode: dto.meeting.sharepoint_error_code,
+    deliveryStatus: dto.meeting.delivery_status,
+    deliveryErrorMessage: dto.meeting.delivery_error_message,
+    deliveryErrorCode: dto.meeting.delivery_error_code,
     summary: dto.summary_text ?? '',
     participants: dto.participants.map((p) => ({
       name: p.name,
@@ -117,6 +146,17 @@ function vmFromSample(meetingId: string): ReviewVm | null {
     finalized: meeting.status === 'Finalized',
     sourceLabel: SOURCE_LABELS[meeting.source],
     pipelineStatus: meeting.pipelineStatus,
+    pipelineStageMessage: meeting.pipelineStageMessage,
+    processingErrorCode: meeting.processingErrorCode,
+    blobStatus: meeting.blobStatus,
+    blobErrorMessage: meeting.blobErrorMessage,
+    blobErrorCode: meeting.blobErrorCode,
+    sharePointStatus: meeting.sharePointStatus,
+    sharePointErrorMessage: meeting.sharePointErrorMessage,
+    sharePointErrorCode: meeting.sharePointErrorCode,
+    deliveryStatus: meeting.deliveryStatus,
+    deliveryErrorMessage: meeting.deliveryErrorMessage,
+    deliveryErrorCode: meeting.deliveryErrorCode,
     summary: detail.summary,
     participants: detail.participants.map((p) => ({
       name: p.name,
@@ -229,7 +269,46 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
   const handleRetry = async (): Promise<void> => {
     const dto = await retryPipeline(meetingId)
     if (dto)
-      setVm((prev) => (prev ? { ...prev, pipelineStatus: dto.pipeline_status } : prev))
+      setVm((prev) =>
+        prev
+          ? {
+              ...prev,
+              pipelineStatus: dto.pipeline_status,
+              pipelineStageMessage: dto.pipeline_stage_message,
+              processingErrorCode: dto.processing_error_code
+            }
+          : prev
+      )
+  }
+
+  const handleRetryBlob = async (): Promise<void> => {
+    const dto = await retryBlobDelivery(meetingId)
+    if (dto)
+      setVm((prev) =>
+        prev
+          ? {
+              ...prev,
+              blobStatus: dto.blob_status,
+              blobErrorMessage: dto.blob_error_message,
+              blobErrorCode: dto.blob_error_code
+            }
+          : prev
+      )
+  }
+
+  const handleRetrySharePoint = async (): Promise<void> => {
+    const dto = await saveTranscriptToSharePoint(meetingId)
+    if (dto)
+      setVm((prev) =>
+        prev
+          ? {
+              ...prev,
+              sharePointStatus: dto.sharepoint_status,
+              sharePointErrorMessage: dto.sharepoint_error_message,
+              sharePointErrorCode: dto.sharepoint_error_code
+            }
+          : prev
+      )
   }
 
   const handleEditSegment = async (index: number, text: string): Promise<void> => {
@@ -294,6 +373,52 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
     )
   }
 
+  const openEmail = (): void => setEmailOpen(true)
+
+  // One row per FAILED concern (spec §3 worst-first: processing → blob →
+  // sharepoint → email). Processing only ever appears here when
+  // pipelineStatus itself is 'failed' — the other three only run after
+  // processing succeeds, so they surface independently while the meeting is
+  // otherwise 'ready'.
+  const failedConcerns: ConcernRow[] = []
+  if (vm.pipelineStatus === 'failed') {
+    failedConcerns.push({
+      key: 'processing',
+      label: categoryLabel(vm.processingErrorCode),
+      message:
+        vm.pipelineStageMessage || 'Processing failed. The recording is saved — retry to try again.',
+      retryLabel: 'Retry processing',
+      onRetry: () => void handleRetry()
+    })
+  }
+  if (vm.blobStatus === 'failed') {
+    failedConcerns.push({
+      key: 'blob',
+      label: categoryLabel(vm.blobErrorCode),
+      message: vm.blobErrorMessage || 'Saving the recording to secure storage failed.',
+      retryLabel: 'Retry storage upload',
+      onRetry: () => void handleRetryBlob()
+    })
+  }
+  if (vm.sharePointStatus === 'failed') {
+    failedConcerns.push({
+      key: 'sharepoint',
+      label: categoryLabel(vm.sharePointErrorCode),
+      message: vm.sharePointErrorMessage || 'Saving the transcript to SharePoint failed.',
+      retryLabel: 'Retry SharePoint save',
+      onRetry: () => void handleRetrySharePoint()
+    })
+  }
+  if (vm.deliveryStatus === 'failed') {
+    failedConcerns.push({
+      key: 'email',
+      label: categoryLabel(vm.deliveryErrorCode),
+      message: vm.deliveryErrorMessage || 'Sending the transcript email failed.',
+      retryLabel: 'Retry email',
+      onRetry: openEmail
+    })
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <BackLink onBack={onBack} />
@@ -302,7 +427,7 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
         live={live}
         unknownLeft={unknownLeft}
         onFinalize={() => void handleFinalize()}
-        onEmail={() => setEmailOpen(true)}
+        onEmail={openEmail}
         onShare={() => setShareOpen(true)}
       />
       {shareOpen && (
@@ -329,13 +454,14 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
       {vm.pipelineStatus === 'queued' || vm.pipelineStatus === 'processing' ? (
         <PipelineCard status={vm.pipelineStatus} />
       ) : vm.pipelineStatus === 'failed' ? (
-        <FailedCard onRetry={() => void handleRetry()} />
+        <FailedCard rows={failedConcerns} />
       ) : vm.pipelineStatus === 'pending_audio' ? (
         <Card className="py-8 text-center text-[13px] text-content-tertiary">
           No recording yet — start a capture or upload an audio file for this meeting.
         </Card>
       ) : (
         <>
+          {failedConcerns.length > 0 && <DeliveryIssuesCard rows={failedConcerns} />}
           {live && <AudioCard meetingId={meetingId} />}
           <ParticipantsCard vm={vm} onName={handleName} />
           <Card>
@@ -366,20 +492,69 @@ function PipelineCard({ status }: { status: 'queued' | 'processing' }): JSX.Elem
   )
 }
 
-function FailedCard({ onRetry }: { onRetry: () => void }): JSX.Element {
+/** One row per failed concern (processing / blob / sharepoint / email). */
+interface ConcernRow {
+  key: 'processing' | 'blob' | 'sharepoint' | 'email'
+  label: string
+  message: string
+  retryLabel: string
+  onRetry: () => void
+}
+
+function ConcernRowView({ row, divider }: { row: ConcernRow; divider: boolean }): JSX.Element {
   return (
-    <Card className="flex flex-col items-center gap-3 !py-10 text-center">
-      <div className="text-[14px] text-content-danger">Processing failed.</div>
-      <div className="max-w-[360px] text-[12px] text-content-tertiary">
-        The recording is stored safely; processing can be retried at any time.
+    <div
+      className={`flex items-center justify-between gap-3 py-2.5 ${
+        divider ? 'border-t-[0.5px] border-edge-tertiary' : ''
+      }`}
+    >
+      <div className="min-w-0">
+        <div className="text-[13px] font-medium text-content-danger">Failed: {row.label}</div>
+        <div className="text-[12px] text-content-tertiary">{row.message}</div>
       </div>
       <button
         type="button"
-        onClick={onRetry}
-        className="flex items-center gap-1.5 rounded-md border-[0.5px] border-edge-info bg-bg-info px-3.5 py-2 text-[13px] text-content-info"
+        onClick={row.onRetry}
+        className="flex shrink-0 items-center gap-1.5 rounded-md border-[0.5px] border-edge-info bg-bg-info px-3 py-1.5 text-[12px] text-content-info"
       >
-        Retry processing
+        {row.retryLabel}
       </button>
+    </div>
+  )
+}
+
+/** Full-page blocking state when the pipeline itself failed — no transcript,
+ * summary, or action items exist yet to show alongside it. */
+function FailedCard({ rows }: { rows: ConcernRow[] }): JSX.Element {
+  return (
+    <Card className="flex flex-col gap-3 !py-8">
+      <div className="text-center">
+        <div className="text-[14px] text-content-danger">Processing failed.</div>
+        <div className="mx-auto max-w-[360px] text-[12px] text-content-tertiary">
+          The recording is stored safely; processing can be retried at any time.
+        </div>
+      </div>
+      <div className="flex flex-col">
+        {rows.map((row, i) => (
+          <ConcernRowView key={row.key} row={row} divider={i > 0} />
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+/** Inline notice for a meeting that finished processing but hit a failure in
+ * blob storage, SharePoint save, or transcript email — shown above the rest
+ * of the (otherwise available) review content. */
+function DeliveryIssuesCard({ rows }: { rows: ConcernRow[] }): JSX.Element {
+  return (
+    <Card>
+      <SectionHeader icon={AlertTriangle} title="Delivery issues" meta={`${rows.length}`} />
+      <div className="flex flex-col">
+        {rows.map((row, i) => (
+          <ConcernRowView key={row.key} row={row} divider={i > 0} />
+        ))}
+      </div>
     </Card>
   )
 }
