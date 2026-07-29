@@ -90,7 +90,7 @@ changes.
 | Site | Change |
 | --- | --- |
 | Pipeline — `services/pipeline.py` catch-all (~:395) | `error_code=<category>`, `error_message=<user sentence>`; raw detail to log only. Startup/watchdog branches keep their behaviour, codes become `interrupted`/`stalled`. |
-| Blob — `services/blob_delivery.py` (`BlobStatus.failed` sites) | Same treatment; new `blob_error_code` field carries category. |
+| Blob — `services/blob_delivery.py` (`BlobStatus.failed` sites) | Same treatment; new `blob_error_code` field carries category. Implementation note: several blob failure branches are condition checks with no bound exception (sign-in / prerequisite constants through `_finish()`, ~:200-322). Those map to categories directly (sign-in → `azure_signin`, prerequisite → `processing_error`) via a `FailureReason.for_category(...)` constructor; `classify(exc)` is only for branches that actually catch an exception, which must be bound (`except Exception as exc:`). |
 | SharePoint — `routers/meetings.py` (~:697) | Replace `f"SharePoint save failed: {exc}"` with user sentence; new `sharepoint_error_code`. The existing explicit sign-in branch (~:661-662) maps to `azure_signin` with its current message retained. |
 | Email — `routers/meetings.py` (~:611) | Replace `f"Email delivery failed: {exc}"` with user sentence; new `delivery_error_code`. `DeliveryStatus.unconfirmed` semantics and its check-your-inbox wording are unchanged (IN-478 outcome). |
 
@@ -102,9 +102,17 @@ Backward-compatible: old `store.json` entries load with `None` codes.
 ## 3. User-visible surfacing (renderer)
 
 - `MeetingsScreen` card: one compact chip `Failed: <Category label>` when
-  any concern is `failed` (or delivery `unconfirmed`). If several concerns
-  failed, show the worst-first order: processing → blob → sharepoint →
-  email (processing failure makes downstream statuses meaningless).
+  any concern is `failed`. If several concerns failed, show the worst-first
+  order: processing → blob → sharepoint → email (processing failure makes
+  downstream statuses meaningless).
+- `DeliveryStatus.unconfirmed` is **not** a failure and never renders a
+  `Failed:` chip: the send may already have been delivered (IN-478), and a
+  "Failed" label would invite exactly the duplicate resend that state
+  exists to prevent. It gets its own distinct chip, `Email unconfirmed`,
+  and keeps the existing check-your-inbox wording and no
+  `delivery_error_code` on the review screen. A failed chip and the
+  unconfirmed chip can co-exist on one card (e.g. blob failed + email
+  unconfirmed).
 - `MeetingReviewScreen`: one row per failed concern — category label, user
   sentence, and that concern's existing Retry action only.
 - Category labels for display: Network, Microsoft sign-in, Service
@@ -127,9 +135,13 @@ Backward-compatible: old `store.json` entries load with `None` codes.
 | failed | failed | Both rows failed; each retried independently. |
 
 - Blob re-upload is idempotent server-side: the Storage API export PUT is
-  write-once with automatic history snapshotting (IN-386), so a duplicate
-  export can never destroy data. SharePoint retry re-runs upload + grant
-  from scratch by design (IN-387).
+  write-once with automatic history snapshotting (IN-386 — merged to
+  storage-api `main` at `4dc0736` and deployed to production 28 Jul 2026,
+  Deploy run `30335569135`; see the IN-386 release addendum in
+  `docs/jira-progress.md`), so a duplicate export can never destroy data.
+  SharePoint retry re-runs upload + grant from scratch by design (IN-387 —
+  Done, live-verified against the real Transcriptions library 29 Jul
+  2026).
 - **Audio preservation guarantee:** local audio is never deleted because of
   a failure; only the retention policy after a successful pipeline
   (`ready`) may remove it. This is stated behaviour, and a test pins it.
