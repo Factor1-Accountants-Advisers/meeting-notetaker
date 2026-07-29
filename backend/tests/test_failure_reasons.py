@@ -1,6 +1,8 @@
 """Tests for the IN-391 failure taxonomy and classifier."""
+import io
 import logging
 import unittest
+import urllib.error
 from datetime import datetime, timezone
 from urllib.error import URLError
 from uuid import uuid4
@@ -117,6 +119,25 @@ class ClassifyTests(unittest.TestCase):
         for category in FailureCategory:
             reason = FailureReason.for_category(category, detail="branch")
             self.assertTrue(reason.user_sentence)
+
+    def test_real_http_error_503_classifies_as_service_unavailable(self) -> None:
+        # Real urllib.error.HTTPError (not the _FakeHttpError stand-in below):
+        # this pins _status_code's attribute probe against the shape Graph
+        # calls actually raise (HTTPError exposes `.code`/`.status`, and also
+        # sets `.filename` to the request URL — which must NOT cause this to
+        # be misclassified as a local file error).
+        exc = urllib.error.HTTPError(
+            "https://graph.microsoft.com/x", 503, "unavailable", {}, io.BytesIO(b"")
+        )
+        reason = classify(exc, stage="blob")
+        self.assertIs(reason.category, FailureCategory.service_unavailable)
+
+    def test_real_http_error_401_classifies_as_azure_signin(self) -> None:
+        exc = urllib.error.HTTPError(
+            "https://graph.microsoft.com/x", 401, "unauthorized", {}, io.BytesIO(b"")
+        )
+        reason = classify(exc, stage="sharepoint")
+        self.assertIs(reason.category, FailureCategory.azure_signin)
 
 
 class LogDeliveryFailureTests(unittest.TestCase):

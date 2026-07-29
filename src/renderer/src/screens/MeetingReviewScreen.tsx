@@ -350,7 +350,12 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
   }
 
   const handleRetryBlob = async (): Promise<void> => {
+    // Capture the generation BEFORE the await: if the meeting switches while
+    // this POST is in flight, blobPollGenRef bumps and this stale `gen` will
+    // fail every check below, instead of seeding a poll for the wrong meeting.
+    const gen = blobPollGenRef.current
     const dto = await retryBlobDelivery(meetingId)
+    if (gen !== blobPollGenRef.current) return
     if (!dto) return
     // The background job hasn't reported a new outcome yet — keep the last
     // known failure label/message on screen (only the button switches to
@@ -358,7 +363,6 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
     // response, which carries no error detail.
     setVm((prev) => (prev ? { ...prev, blobStatus: dto.blob_status } : prev))
     if (dto.blob_status === 'pending') {
-      const gen = blobPollGenRef.current
       setBlobRetrying(true)
       pollBlobRetry(gen)
     } else {

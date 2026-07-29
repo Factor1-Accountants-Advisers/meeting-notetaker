@@ -153,6 +153,7 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("simulated", meeting.delivery_error_message or "")
         self.assertTrue(any("stage=email" in line for line in captured.output))
+        self.assertTrue(any("code=RuntimeError" in line for line in captured.output))
         self.assertEqual(store.SUMMARIES[self.meeting_id], "Summary survives delivery failure.")
         self.assertEqual(store.TRANSCRIPTS[self.meeting_id][0].text, "Transcript survives delivery failure.")
 
@@ -249,6 +250,7 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("simulated", meeting.sharepoint_error_message or "")
         self.assertTrue(any("stage=sharepoint" in line for line in captured.output))
+        self.assertTrue(any("code=RuntimeError" in line for line in captured.output))
         self.assertEqual(len(uploads), 1)
         self.assertEqual(len(grants), 0)
 
@@ -315,6 +317,7 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
             USER_SENTENCES[FailureCategory.service_unavailable],
         )
         self.assertTrue(any("stage=sharepoint" in line for line in captured.output))
+        self.assertTrue(any("code=_FakeHttpError" in line for line in captured.output))
 
     async def test_sharepoint_configured_drive_no_token_returns_401(self):
         """D1: configured SharePoint drive + missing token → 401."""

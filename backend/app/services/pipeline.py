@@ -200,6 +200,10 @@ def reconcile_interrupted_pipelines() -> int:
                 DeliveryStatus.unconfirmed,
                 "Email delivery was interrupted by a backend restart — the email "
                 "may already have been delivered. Check your inbox before resending.",
+                # unconfirmed is not a failure category (IN-478 regression
+                # guard) — explicit to match the router's emailing→unconfirmed
+                # site (meetings.py:614) rather than relying on the default.
+                error_code=None,
             )
             changed += 1
         if meeting.pipeline_status not in (PipelineStatus.queued, PipelineStatus.processing):
