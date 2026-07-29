@@ -527,6 +527,18 @@ export function showUnconfirmedChip(m: FailureChipInput): boolean {
 
 ---
 
+### Task 7b: Wire failure categories into the LIVE surfaces (discovered during Task 7)
+
+**Discovery:** `MeetingsScreen.tsx` and `MeetingReviewScreen.tsx` are dead code — nothing imports them (`App.tsx` renders only Recording/Home/Settings; `ScreenId = 'home' | 'settings'`). They are remnants of the IN-73/IN-74 UI removals. Task 7's work there is correct-but-inert (kept for potential revival; removal is a separate product decision for Joseph). The LIVE failure surfaces are `HomeScreen`'s notice cards, fed from `App.tsx`: `postCaptureNotice` (states incl. `processing_failed`/`upload_failed`/`email_failed`) and `blobDeliveryNotices` (built by `blobDeliveryNotice(...)` ~App.tsx:97-110, retry via `watchBlobDelivery`). Their message text already carries the taxonomy sentences (Tasks 3-5); what's missing is spec §3's `Failed: [category]` labelling.
+
+**Files:**
+- Modify: `src/renderer/src/App.tsx`, `src/renderer/src/screens/HomeScreen.tsx` (reuse `failureDisplay.ts` — no new pure logic unless needed; if added, extend `scripts/verify-failure-chips.tsx`)
+
+- [ ] **Step 1:** Trace where each notice is built in App.tsx and what meeting data is in scope there (the meeting DTO with `*_error_code` fields is available at/near each site — Task 6 mapped them). Thread the relevant category code into `BlobDeliveryNotice` and `PostCaptureNotice` (new optional field, e.g. `errorCode: string | null`).
+- [ ] **Step 2:** In `HomeScreen`, when a notice is in a failed state, render the heading/label as `Failed: <categoryLabel(code)>` (import from `lib/failureDisplay`) above/beside the existing sentence; null/unknown codes fall back exactly like the chips. Keep the existing message, retry, and dismiss behaviour untouched. Email-unconfirmed surfaces keep their existing non-failure treatment (IN-478) — no `Failed:` label on unconfirmed.
+- [ ] **Step 3:** `npm run typecheck && npm run build && npm run verify:failure-chips && npm run verify:email-notice` — all PASS.
+- [ ] **Step 4: Commit** — `git commit -m "feat: label live failure notices with IN-391 categories"`
+
 ### Task 8: Behaviour doc + evidence
 
 **Files:**
