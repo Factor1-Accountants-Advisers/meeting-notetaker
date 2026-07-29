@@ -630,7 +630,7 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - **Implemented on `in391-error-reporting`** per the approved design
     (`docs/superpowers/specs/2026-07-29-in391-pipeline-error-handling-design.md`)
     and plan (`docs/superpowers/plans/2026-07-29-in391-pipeline-error-handling.md`,
-    Tasks 0-8 done; Task 9 sweep partially outstanding, see below). A new pure
+    Tasks 0-9 done, including the Task 9 verification sweep). A new pure
     taxonomy module (`backend/app/services/failure_reasons.py`) maps
     exceptions and exception-less condition branches to 7 fixed categories
     (`network`, `azure_signin`, `service_unavailable`, `audio_problem`
@@ -696,31 +696,49 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     `test_pipeline_stage_state.py`, `test_pipeline_watchdog.py`,
     `test_pipeline_voiceprints.py`, `test_blob_delivery.py`,
     `test_delivery_reliability.py`; `scripts/verify-failure-chips.tsx` (new).
-    Commit range `830edb8..6585c7b` on `in391-error-reporting` (17 commits,
-    `fc0dea0` through `6585c7b` inclusive — `fc0dea0` is itself the first
-    IN-391 commit, so the range base is its parent).
-  - **Verification (this task, 29 Jul 2026):** full backend suite —
-    `PYTHONPATH=backend backend/.venv/Scripts/python.exe -m unittest discover
-    -s backend/tests -t backend` — **267 tests, 1 failure**: the documented
-    pre-existing `test_stub_serializes_concurrent_exports_for_one_meeting`
+    Commit range `fc0dea0..8942ac9` on `in391-error-reporting` (21 commits;
+    20 are IN-391 work, `fc0dea0` through `8942ac9` inclusive — the range
+    base is `fc0dea0`'s parent. `57041ba` "fix: set window icon for dev
+    mode..." inside that range is the user's own unrelated commit, left
+    untouched per instruction).
+  - **Task 9 sweep closure (29 Jul 2026, commit `8942ac9`):** all three
+    carried items from the prior verification pass are done: (1)
+    `test_failure_reasons.py` now has table-driven cases classifying a real
+    `urllib.error.HTTPError` (503 → `service_unavailable`, 401 →
+    `azure_signin`, not just the `_FakeHttpError` test double) — confirms the
+    classifier's attribute probe reads the shape real Graph errors actually
+    have, including that `HTTPError.filename` (set to the request URL) does
+    not trip the local-file-error exclusion; (2) `MeetingReviewScreen.tsx`
+    `handleRetryBlob` now captures `blobPollGenRef.current` *before*
+    `await retryBlobDelivery(meetingId)` and bails out immediately after the
+    await if the generation moved, closing the wrong-meeting-poll window a
+    meeting switch during that POST could open (the general poll-survives-
+    meeting-switch mechanism was already fixed in `ea2fe2e`; this was the
+    specific pre-await ordering gap carried forward, not fixed, in `6585c7b`);
+    (3) `pipeline.py` `reconcile_interrupted_pipelines`'s `emailing →
+    unconfirmed` transition now passes `error_code=None` explicitly, matching
+    the equivalent router site (`meetings.py:614`) instead of relying on
+    `set_delivery_state`'s default (behaviour-neutral — the default was
+    already `None`). Also extended, as an optional-but-cheap addition: the
+    three Task 5 `assertLogs` checks in `test_delivery_reliability.py` now
+    also pin the `code=` fragment of each `delivery_failure` log line, not
+    just `stage=`.
+  - **Verification (final sweep, 29 Jul 2026, commit `8942ac9`):** full
+    backend suite — `PYTHONPATH=backend backend/.venv/Scripts/python.exe -m
+    unittest discover -s backend/tests -t backend` — **269 tests, 1
+    failure**: the documented pre-existing
+    `test_stub_serializes_concurrent_exports_for_one_meeting`
     concurrency-timing flake (`test_storage_api_meetings.py`), unrelated to
-    this work. `npm run typecheck`, `npm run build`,
-    `npm run verify:failure-chips`, and `npm run verify:email-notice` all
-    passed. Not yet run in this task: `npm run verify:storage-cutover`,
-    which is part of plan Task 9's full verification-sweep gate set (Task 9
-    is outstanding — see Remaining below).
-  - **Remaining (plan Task 9 sweep, not done in this task):** (1) a
-    table-driven test classifying a real `urllib.error.HTTPError` (not the
-    `_FakeHttpError` test double) to pin the `.code`-attribute probe real
-    Graph/pyannote errors depend on; (2) `MeetingReviewScreen.tsx`
-    `handleRetryBlob` still captures its poll generation *after*
-    `await retryBlobDelivery(meetingId)` rather than before it, so a
-    meeting switch during that POST can seed a wrong-meeting poll (the
-    general poll-survives-meeting-switch mechanism was fixed in `ea2fe2e`;
-    this specific pre-await ordering was carried forward, not fixed, in
-    `6585c7b`); (3) the pipeline startup-reconcile `emailing → unconfirmed`
-    site (`pipeline.py` `reconcile_interrupted_pipelines`) relies on
-    `set_delivery_state`'s `error_code=None` default rather than passing it
-    explicitly, unlike the equivalent router site.
+    this work (the 2-test increase over the prior pass's 267 is the two new
+    real-`HTTPError` cases above). All renderer gates pass: `npm run
+    typecheck` (clean, node + web), `npm run build` (electron-vite, all three
+    bundles), `npm run verify:failure-chips`, `npm run verify:email-notice`,
+    and — run on this branch for the first time in this task —
+    `npm run verify:storage-cutover` (Storage API route-classification /
+    identity-header / env-default checks; unaffected by the IN-391
+    schema/API changes, since those touch meeting delivery fields, not the
+    storage-cutover routing surface). `git diff --check` reports no
+    whitespace errors; `git log --oneline main..HEAD` shows a coherent,
+    task-ordered commit sequence.
   - No Jira transition, merge, push, deployment, or production smoke was
     performed from this task.
