@@ -1,8 +1,11 @@
 """Tests for the IN-391 failure taxonomy and classifier."""
 import logging
 import unittest
+from datetime import datetime, timezone
 from urllib.error import URLError
+from uuid import uuid4
 
+from app.schemas import Meeting
 from app.services.failure_reasons import (
     FailureCategory,
     FailureReason,
@@ -80,6 +83,23 @@ class LogDeliveryFailureTests(unittest.TestCase):
         line = captured.output[0]
         for fragment in ("delivery_failure", "stage=blob", "category=azure_signin", "code=signin_check"):
             self.assertIn(fragment, line)
+
+
+class SchemaBackCompatTests(unittest.TestCase):
+    def _legacy_payload(self) -> dict:
+        return {
+            "id": str(uuid4()),
+            "title": "Legacy",
+            "source": "online",
+            "owner_id": "user-1",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def test_legacy_meeting_loads_with_none_error_codes(self) -> None:
+        meeting = Meeting.model_validate(self._legacy_payload())
+        self.assertIsNone(meeting.blob_error_code)
+        self.assertIsNone(meeting.sharepoint_error_code)
+        self.assertIsNone(meeting.delivery_error_code)
 
 
 if __name__ == "__main__":
