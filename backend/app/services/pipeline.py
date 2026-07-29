@@ -148,6 +148,7 @@ def set_delivery_state(
     status: DeliveryStatus,
     error_message: str | None = None,
     *,
+    error_code: str | None = None,
     recipients: list[str] | None = None,
     emailed_at: datetime | None = None,
 ) -> None:
@@ -157,6 +158,7 @@ def set_delivery_state(
             update={
                 "delivery_status": status,
                 "delivery_error_message": error_message,
+                "delivery_error_code": error_code,
                 # Replay fields only survive while the state is emailed; any
                 # other transition (reset, failure, re-upload) clears them so a
                 # regenerated transcript can be emailed fresh.
@@ -447,6 +449,7 @@ def kick_pipeline(
     if meeting is not None:
         meeting.blob_status = BlobStatus.pending
         meeting.blob_error_message = None
+        meeting.blob_error_code = None
     store.BLOB_DELIVERY_STARTED_AT.pop(meeting_id, None)
     set_delivery_state(meeting_id, DeliveryStatus.not_started)
     set_pipeline_state(

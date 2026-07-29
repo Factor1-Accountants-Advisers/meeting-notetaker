@@ -45,6 +45,12 @@ from app.services.email import (
     build_transcript_attachment,
     get_email_provider,
 )
+from app.services.failure_reasons import (
+    FailureCategory,
+    FailureReason,
+    classify,
+    log_delivery_failure,
+)
 from app.services.meeting_export import refresh_meeting_export
 from app.services.blob_delivery import kick_blob_delivery
 from app.services.sharepoint import get_sharepoint_provider, safe_transcript_filename
@@ -542,10 +548,15 @@ async def email_notes(
     if not recipients:
         raise HTTPException(status.HTTP_409_CONFLICT, "No email recipients resolved")
     if not graph_token:
+        reason = FailureReason.for_category(
+            FailureCategory.azure_signin, detail="signin_check"
+        )
+        log_delivery_failure(meeting_id, "email", reason, code="signin_check")
         set_delivery_state(
             meeting_id,
             DeliveryStatus.failed,
             "Outlook sign-in is required before transcript email can be sent",
+            error_code=FailureCategory.azure_signin.value,
         )
         store.save_snapshot()
         raise HTTPException(
@@ -600,6 +611,7 @@ async def email_notes(
             DeliveryStatus.unconfirmed,
             "The transcript email attempt was not confirmed — it may already "
             "have been delivered. Check your inbox before resending.",
+            error_code=None,
         )
         store.save_snapshot()
         raise HTTPException(
@@ -608,7 +620,14 @@ async def email_notes(
         )
     except Exception as exc:
         logger.exception("Email delivery failed for %s", meeting_id)
-        set_delivery_state(meeting_id, DeliveryStatus.failed, f"Email delivery failed: {exc}")
+        reason = classify(exc, stage="email")
+        log_delivery_failure(meeting_id, "email", reason, code=exc.__class__.__name__)
+        set_delivery_state(
+            meeting_id,
+            DeliveryStatus.failed,
+            reason.user_sentence,
+            error_code=reason.category.value,
+        )
         store.save_snapshot()
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
@@ -656,10 +675,15 @@ async def save_transcript_to_sharepoint(
 
     settings = get_settings()
     if settings.sharepoint_drive_id and not graph_token:
+        reason = FailureReason.for_category(
+            FailureCategory.azure_signin, detail="signin_check"
+        )
+        log_delivery_failure(meeting_id, "sharepoint", reason, code="signin_check")
         store.MEETINGS[meeting_id] = meeting.model_copy(
             update={
                 "sharepoint_status": SharePointStatus.failed,
                 "sharepoint_error_message": "SharePoint sign-in is required before transcript can be saved",
+                "sharepoint_error_code": FailureCategory.azure_signin.value,
             }
         )
         store.save_snapshot()
@@ -672,6 +696,7 @@ async def save_transcript_to_sharepoint(
         update={
             "sharepoint_status": SharePointStatus.saving,
             "sharepoint_error_message": None,
+            "sharepoint_error_code": None,
         }
     )
     try:
@@ -690,11 +715,14 @@ async def save_transcript_to_sharepoint(
         )
     except Exception as exc:
         logger.exception("SharePoint transcript save failed for %s", meeting_id)
+        reason = classify(exc, stage="sharepoint")
+        log_delivery_failure(meeting_id, "sharepoint", reason, code=exc.__class__.__name__)
         current = store.MEETINGS[meeting_id]
         store.MEETINGS[meeting_id] = current.model_copy(
             update={
                 "sharepoint_status": SharePointStatus.failed,
-                "sharepoint_error_message": f"SharePoint save failed: {exc}",
+                "sharepoint_error_message": reason.user_sentence,
+                "sharepoint_error_code": reason.category.value,
             }
         )
         store.save_snapshot()
@@ -708,6 +736,7 @@ async def save_transcript_to_sharepoint(
         update={
             "sharepoint_status": SharePointStatus.saved,
             "sharepoint_error_message": None,
+            "sharepoint_error_code": None,
             "sharepoint_web_url": upload.web_url,
         }
     )
