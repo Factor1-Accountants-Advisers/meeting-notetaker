@@ -206,14 +206,24 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
   // and returns 'pending' immediately) so the failure row can show a
   // "Retrying…" state and clear itself once the background job settles.
   const [blobRetrying, setBlobRetrying] = useState(false)
-  const blobPollCancelledRef = useRef(false)
+  // Monotonic generation counter, not a boolean: a boolean reset to `false`
+  // on every meetingId change can be resurrected by a still-in-flight poll
+  // from the PREVIOUS meeting (its setTimeout id is never stored, so it
+  // can't be cancelled directly) — that stale tick would see cancelled ===
+  // false again and merge the old meeting's blob fields into the new
+  // meeting's VM. Bumping the generation on every meeting change instead
+  // means a poll captured against an older generation can never match again.
+  const blobPollGenRef = useRef(0)
 
   const inFlight = vm?.pipelineStatus === 'queued' || vm?.pipelineStatus === 'processing'
 
   useEffect(() => {
-    blobPollCancelledRef.current = false
+    // No reset here — bumping on mount would race a poll's pre-await gen
+    // capture on the same tick. Only the cleanup (meeting change/unmount)
+    // needs to invalidate in-flight polls.
     return () => {
-      blobPollCancelledRef.current = true
+      blobPollGenRef.current += 1
+      setBlobRetrying(false)
     }
   }, [meetingId])
 
@@ -303,12 +313,16 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
   // (never from seeing blobStatus === 'pending' on load — that's also the
   // default, never-delivered-yet state, and polling off it unconditionally
   // would spin forever for a meeting that hasn't started delivery at all).
-  const pollBlobRetry = (): void => {
+  // `gen` is captured at kickoff (handleRetryBlob) and re-checked before and
+  // after every await — a meeting switch bumps blobPollGenRef, so a tick
+  // whose captured gen no longer matches the current one belongs to a stale
+  // (possibly already-switched-away-from) meeting and must not touch state.
+  const pollBlobRetry = (gen: number): void => {
     const startedAt = Date.now()
     const tick = async (): Promise<void> => {
-      if (blobPollCancelledRef.current) return
+      if (gen !== blobPollGenRef.current) return
       const review = await fetchMeetingReview(meetingId)
-      if (blobPollCancelledRef.current) return
+      if (gen !== blobPollGenRef.current) return
       if (review) {
         const m = review.meeting
         setVm((prev) =>
@@ -344,8 +358,9 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
     // response, which carries no error detail.
     setVm((prev) => (prev ? { ...prev, blobStatus: dto.blob_status } : prev))
     if (dto.blob_status === 'pending') {
+      const gen = blobPollGenRef.current
       setBlobRetrying(true)
-      pollBlobRetry()
+      pollBlobRetry(gen)
     } else {
       setVm((prev) =>
         prev
