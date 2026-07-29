@@ -64,8 +64,8 @@ Classification rules (first match wins):
 | HTTP 401/403 from Graph or Storage API; missing/expired token conditions (e.g. the existing "sign-in required" branches) | `azure_signin` |
 | HTTP 408/429/5xx from Graph, Storage API, pyannoteAI, or OpenAI | `service_unavailable` |
 | ffmpeg merge/probe failures, duration/coverage validation, unreadable audio | `audio_problem` |
-| Existing startup interruption marking (`error_code="Interrupted"`) | `interrupted` |
-| Existing watchdog marking (`error_code="Stalled"`) | `stalled` |
+| Existing startup interruption marking | `interrupted` (assigned directly at the marking site, not via `classify(exc)` — there is no exception object there) |
+| Existing watchdog marking | `stalled` (same: assigned directly at the marking site) |
 | Anything else | `processing_error` |
 
 User-sentence table (DRAFT — product-voice review requested from Joseph
@@ -104,7 +104,9 @@ Backward-compatible: old `store.json` entries load with `None` codes.
 - `MeetingsScreen` card: one compact chip `Failed: <Category label>` when
   any concern is `failed`. If several concerns failed, show the worst-first
   order: processing → blob → sharepoint → email (processing failure makes
-  downstream statuses meaningless).
+  downstream statuses meaningless). The card shows only the top chip; the
+  full set of failed concerns is visible on `MeetingReviewScreen` (one row
+  per failed concern, below).
 - `DeliveryStatus.unconfirmed` is **not** a failure and never renders a
   `Failed:` chip: the send may already have been delivered (IN-478), and a
   "Failed" label would invite exactly the duplicate resend that state
@@ -156,8 +158,13 @@ At every hook point, one structured line to the backend logger (surfaces in
 
 ```
 delivery_failure meeting=<uuid> stage=<pipeline|blob|sharepoint|email>
-category=<category> code=<ExceptionClass> detail=<truncated 500>
+category=<category> code=<ExceptionClass|branch-name> detail=<truncated 500>
 ```
+
+For exception-less branches (`FailureReason.for_category(...)` sites and the
+startup/watchdog markings), `code=` carries a stable branch name (e.g.
+`code=signin_check`, `code=watchdog`) instead of an exception class, so the
+log format stays uniform and greppable.
 
 Existing guidance from IN-386 review is preserved: where a provider error
 could embed sensitive material (e.g. SAS URLs), log the class and a
