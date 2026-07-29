@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Search, UserPlus, X } from 'lucide-react'
+import { UserPlus, X } from 'lucide-react'
 import type { StaffMember } from '@renderer/data/mock'
 
 export const MAX_MANUAL_ATTENDEES = 49
@@ -122,23 +122,15 @@ export function AttendeePicker({
 
   return (
     <div className="mb-3">
-      <div className="mb-1.5 flex items-baseline justify-between gap-3">
-        <label htmlFor="manual-attendees" className="text-[12px] text-content-secondary">
-          People attending
-        </label>
-        <span className="text-[11px] text-content-tertiary">
-          Optional · improves speaker matching
-        </span>
-      </div>
-
       {selected.length > 0 && (
-        <div className="mb-2 flex flex-wrap gap-1.5" aria-label="Selected attendees">
+        <div className="mb-2 flex flex-wrap items-center gap-1.5" aria-label="Selected attendees">
+          <span className="text-[14px] font-medium text-content-tertiary">Attendees:</span>
           {selected.map((attendee) => {
             const label = attendee.name || attendee.email
             return (
               <span
                 key={attendee.email}
-                className="inline-flex max-w-full items-center gap-1.5 rounded-full border-[0.5px] border-edge-info bg-bg-info py-1 pl-2.5 pr-1.5 text-[12px] text-content-info"
+                className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-bg-info py-1 pl-2.5 pr-1.5 text-[12px] text-content-info"
               >
                 <span className="truncate">{label}</span>
                 <button
@@ -158,13 +150,13 @@ export function AttendeePicker({
         </div>
       )}
 
+      <label
+        htmlFor="manual-attendees"
+        className="mb-1.5 block text-[14px] font-medium text-content-primary"
+      >
+        Add another person
+      </label>
       <div className="relative">
-        <Search
-          aria-hidden="true"
-          className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-content-tertiary"
-          size={14}
-          strokeWidth={1.75}
-        />
         <input
           id="manual-attendees"
           type="text"
@@ -172,7 +164,7 @@ export function AttendeePicker({
           disabled={disabled || selected.length >= MAX_MANUAL_ATTENDEES}
           aria-label="Search or add attendee"
           autoComplete="off"
-          placeholder="Search staff or enter their work email"
+          placeholder="Search staff or enter a work email"
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           onChange={(event) => {
@@ -185,27 +177,27 @@ export function AttendeePicker({
               addFromInput()
             }
           }}
-          className="h-9 w-full rounded-md border-[0.5px] border-edge-tertiary bg-bg-primary pl-9 pr-3 text-[13px] text-content-primary placeholder:text-content-tertiary focus:border-brand-blue focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
+          className="ui-control h-7 w-full rounded-control border border-edge-tertiary bg-bg-secondary px-2 text-[14px] text-content-primary placeholder:text-content-tertiary focus:border-brand-blue focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
         />
 
         {showMenu && (
-          <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-md border-[0.5px] border-edge-secondary bg-bg-primary">
+          <div className="ui-popover absolute z-20 mt-1 w-full overflow-hidden rounded-[9px] border border-edge-secondary bg-[var(--color-background-popover)] p-1">
             {suggestions.map((person) => (
               <button
                 key={person.id}
                 type="button"
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => choose({ name: person.name, email: person.id })}
-                className="flex w-full items-center gap-2.5 border-b-[0.5px] border-edge-tertiary px-3 py-2 text-left last:border-b-0 hover:bg-bg-secondary focus:bg-bg-secondary focus:outline-none"
+                className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left hover:bg-bg-info focus:bg-bg-info focus:outline-none"
               >
                 <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-bg-info text-[10px] font-medium text-content-info">
                   {initials(person.name)}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px] text-content-primary">
+                  <span className="block truncate text-[14px] text-content-primary">
                     {person.name}
                   </span>
-                  <span className="block truncate text-[11px] text-content-tertiary">
+                  <span className="block truncate text-[12px] text-content-tertiary">
                     {person.id}
                   </span>
                 </span>
@@ -216,14 +208,14 @@ export function AttendeePicker({
                 type="button"
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => choose({ name: null, email: normalizedQuery })}
-                className="flex w-full items-center gap-2.5 px-3 py-2 text-left hover:bg-bg-secondary focus:bg-bg-secondary focus:outline-none"
+                className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left hover:bg-bg-info focus:bg-bg-info focus:outline-none"
               >
                 <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-bg-secondary text-content-secondary">
                   <UserPlus size={13} strokeWidth={1.75} />
                 </span>
                 <span className="min-w-0">
-                  <span className="block text-[13px] text-content-primary">Add by email</span>
-                  <span className="block truncate text-[11px] text-content-tertiary">
+                  <span className="block text-[14px] text-content-primary">Add by email</span>
+                  <span className="block truncate text-[12px] text-content-tertiary">
                     {normalizedQuery}
                   </span>
                 </span>
@@ -235,7 +227,7 @@ export function AttendeePicker({
 
       {(message || directoryUnavailable || selected.length >= MAX_MANUAL_ATTENDEES) && (
         <p
-          className={`mb-0 mt-1.5 text-[11px] ${
+          className={`mb-0 mt-1.5 text-[12px] ${
             message ? 'text-content-danger' : 'text-content-tertiary'
           }`}
         >

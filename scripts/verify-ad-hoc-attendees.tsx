@@ -94,10 +94,11 @@ const picker = renderToStaticMarkup(
     onChange={() => undefined}
   />
 )
-assert.match(picker, /People attending/)
-assert.match(picker, /optional/i)
+assert.match(picker, /Attendees:/)
 assert.match(picker, /David Ahlhaus/)
 assert.match(picker, /aria-label="Remove David Ahlhaus"/)
+assert.match(picker, /Add another person/)
+assert.match(picker, /Search staff or enter a work email/)
 
 const disabledPicker = renderToStaticMarkup(
   <AttendeePicker
@@ -111,11 +112,13 @@ assert.match(disabledPicker, /disabled/)
 
 const home = renderToStaticMarkup(
   <HomeScreen
-    userName="Joseph Guerrero"
+    previewMode
     onStartRecording={() => undefined}
     onUploadRecording={() => undefined}
   />
 )
-assert.match(home, /People attending/)
+assert.match(home, /Add attendees/)
+assert.match(home, /Optional/)
+assert.match(home, /aria-expanded="false"/)
 
 console.log('Ad-hoc attendee verification passed')

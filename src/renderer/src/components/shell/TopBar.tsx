@@ -1,128 +1,141 @@
-import { useState } from 'react'
-import { Bell, Moon, Sun } from 'lucide-react'
-import type { AppNotification } from '@renderer/lib/useNotifications'
-import type { Theme } from '@renderer/lib/theme'
+import { useEffect, useState } from 'react'
+import { AudioLines, LoaderCircle, Settings } from 'lucide-react'
 
 interface TopBarProps {
-  theme: Theme
-  onToggleTheme: () => void
+  settingsActive?: boolean
   recordingState?: 'idle' | 'recording' | 'processing'
-  /** Opens the active recording screen when one exists. */
+  statusText?: string | null
+  statusDetail?: string | null
+  recordingStartedAt?: number | null
+  recordingPausedAt?: number | null
+  recordingPausedAccum?: number
+  onOpenHome: () => void
+  onOpenSettings: () => void
   onOpenRecording?: (() => void) | null
-  onOpenMeeting?: (id: string) => void
-  notifications?: AppNotification[]
-  unreadCount?: number
-  onNotificationsOpened?: () => void
   userName?: string
 }
 
 export function TopBar({
-  theme,
-  onToggleTheme,
+  settingsActive = false,
   recordingState = 'idle',
+  statusText,
+  statusDetail,
+  recordingStartedAt,
+  recordingPausedAt = null,
+  recordingPausedAccum = 0,
+  onOpenHome,
+  onOpenSettings,
   onOpenRecording,
-  onOpenMeeting,
-  notifications = [],
-  unreadCount = 0,
-  onNotificationsOpened,
   userName
 }: TopBarProps): JSX.Element {
-  const [bellOpen, setBellOpen] = useState(false)
-  const recordingActive = recordingState === 'recording' || recordingState === 'processing'
+  const [now, setNow] = useState(Date.now())
   const initials = userName
     ? userName
         .split(' ')
-        .map(function (w) {
-          return w[0]
-        })
+        .map((part) => part[0])
         .filter(Boolean)
         .slice(0, 2)
         .join('')
         .toUpperCase()
     : '?'
+  const recording = recordingState === 'recording'
+  const processing = recordingState === 'processing'
+  const visibleStatus =
+    statusText ?? (recording ? 'Recording' : processing ? 'Processing recording' : null)
+  const recordingElapsed =
+    recording && recordingStartedAt
+      ? formatElapsed(
+          (recordingPausedAt ?? now) - recordingStartedAt - recordingPausedAccum
+        )
+      : null
+
+  useEffect(() => {
+    if (!recording || recordingPausedAt !== null) return
+    setNow(Date.now())
+    const id = window.setInterval(() => setNow(Date.now()), 500)
+    return () => window.clearInterval(id)
+  }, [recording, recordingPausedAt])
+
   return (
     <header
-      className="flex h-10 items-center gap-3 border-b border-edge-tertiary bg-bg-secondary px-3"
+      className="mn-topbar grid h-10 shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-b border-edge-tertiary bg-[var(--color-background-chrome)] px-3"
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
-      <span className="select-none text-[13px] font-medium text-content-secondary">
-        Meeting Notetaker
-      </span>
-
-      <div
-        className="ml-auto flex items-center gap-1"
+      <button
+        type="button"
+        onClick={onOpenHome}
+        className="ui-control flex min-w-0 items-center gap-[7px] justify-self-start rounded-md pr-2 text-content-primary hover:text-content-info"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        aria-label="Go to home"
       >
-        {recordingActive && (
-          <button
-            type="button"
-            onClick={onOpenRecording ?? undefined}
-            title={recordingState === 'recording' ? 'Recording is active' : 'Recording is processing'}
-            className="mr-1 flex items-center gap-1.5 rounded-md bg-bg-danger px-2.5 py-1 text-[11px] font-medium text-content-danger"
-          >
-            <span className={`h-2 w-2 rounded-full bg-edge-danger ${recordingState === 'recording' ? 'animate-pulse' : ''}`} />
-            {recordingState === 'recording' ? 'Recording now' : 'Processing recording'}
-          </button>
-        )}
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-brand-navy text-white">
+          <AudioLines size={16} strokeWidth={1.75} />
+        </span>
+        <span className="mn-brand-label truncate text-[14px] font-medium">Meeting Notetaker</span>
+      </button>
+
+      {visibleStatus ? (
         <button
           type="button"
-          title={theme === 'dark' ? 'Switch to light' : 'Switch to dark'}
-          aria-label="Toggle theme"
-          onClick={onToggleTheme}
-          className="flex h-8 w-8 items-center justify-center rounded-md text-content-tertiary hover:bg-bg-tertiary hover:text-content-secondary"
+          disabled={!recording || !onOpenRecording}
+          onClick={recording ? onOpenRecording ?? undefined : undefined}
+          className={`ui-control flex min-w-0 max-w-full items-center justify-center gap-[7px] justify-self-center rounded-md px-2.5 py-1 text-[12px] ${
+            recording
+              ? 'bg-bg-warning text-content-primary hover:opacity-90'
+              : 'text-content-secondary'
+          } disabled:cursor-default`}
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
-          {theme === 'dark' ? <Sun size={17} strokeWidth={1.75} /> : <Moon size={17} strokeWidth={1.75} />}
-        </button>
-        <div className="relative">
-          <button
-            type="button"
-            title="Notifications"
-            aria-label="Notifications"
-            onClick={() => {
-              const opening = !bellOpen
-              setBellOpen(opening)
-              if (opening) onNotificationsOpened?.()
-            }}
-            className="relative flex h-8 w-8 items-center justify-center rounded-md text-content-tertiary hover:bg-bg-tertiary hover:text-content-secondary"
-          >
-            <Bell size={17} strokeWidth={1.75} />
-            {unreadCount > 0 && (
-              <span className="absolute right-1 top-1 flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-edge-danger px-0.5 text-[9px] font-medium text-white">
-                {unreadCount}
-              </span>
+          {recording ? (
+            <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-[var(--color-button-stop)]" />
+          ) : processing ? (
+            <LoaderCircle
+              size={14}
+              strokeWidth={1.75}
+              className="shrink-0 animate-spin motion-reduce:animate-none"
+            />
+          ) : null}
+          <span className="min-w-0 truncate">
+            {processing ? (
+              <strong className="font-medium text-content-primary">{visibleStatus}</strong>
+            ) : recording ? (
+              <span className="mn-recording-label">{visibleStatus}</span>
+            ) : (
+              visibleStatus
             )}
-          </button>
-          {bellOpen && (
-            <div className="absolute right-0 top-9 z-50 max-h-[300px] w-[280px] overflow-y-auto rounded-md border-[0.5px] border-edge-secondary bg-bg-primary py-1">
-              {notifications.length === 0 && (
-                <div className="px-3 py-2 text-[12px] text-content-tertiary">
-                  Nothing yet — pipeline events show here.
-                </div>
-              )}
-              {notifications.map((n) => (
-                <button
-                  key={n.id}
-                  type="button"
-                  onClick={() => {
-                    setBellOpen(false)
-                    onOpenMeeting?.(n.meetingId)
-                  }}
-                  className="block w-full px-3 py-1.5 text-left hover:bg-bg-secondary"
-                >
-                  <span className="block text-[12px] text-content-primary">{n.text}</span>
-                  <span className="block text-[11px] text-content-tertiary">
-                    {new Date(n.at).toLocaleTimeString('en-GB', {
-                      hour: '2-digit',
-                      minute: '2-digit'
-                    })}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+            {processing && statusDetail ? (
+              <span className="mn-processing-detail text-content-tertiary"> · {statusDetail}</span>
+            ) : null}
+          </span>
+          {recordingElapsed ? (
+            <strong className="shrink-0 font-medium tabular-nums">{recordingElapsed}</strong>
+          ) : null}
+        </button>
+      ) : (
+        <span />
+      )}
+
+      <div
+        data-no-drag
+        className="flex items-center gap-[7px] justify-self-end"
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+      >
+        <button
+          type="button"
+          title="Settings"
+          aria-label="Open settings"
+          aria-pressed={settingsActive}
+          onClick={onOpenSettings}
+          className={`ui-control flex h-8 w-8 items-center justify-center rounded-md ${
+            settingsActive
+              ? 'bg-bg-info text-content-info'
+              : 'text-content-tertiary hover:bg-bg-tertiary hover:text-content-secondary'
+          }`}
+        >
+          <Settings size={17} strokeWidth={1.75} />
+        </button>
         <div
-          className="ml-1 flex h-7 w-7 items-center justify-center rounded-full bg-brand-navy text-[11px] font-medium text-white"
+          className="flex h-7 w-7 items-center justify-center rounded-full bg-brand-navy text-[11px] font-medium text-white"
           title={userName ?? 'Signed-in user'}
         >
           {initials}
@@ -130,4 +143,15 @@ export function TopBar({
       </div>
     </header>
   )
+}
+
+function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const seconds = total % 60
+  const hh = String(hours).padStart(2, '0')
+  const mm = String(minutes).padStart(2, '0')
+  const ss = String(seconds).padStart(2, '0')
+  return `${hh}:${mm}:${ss}`
 }

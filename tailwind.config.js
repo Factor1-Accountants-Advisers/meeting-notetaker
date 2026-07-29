@@ -31,13 +31,16 @@ export default {
           tertiary: 'var(--color-border-tertiary)',
           secondary: 'var(--color-border-secondary)',
           info: 'var(--color-border-info)',
-          danger: 'var(--color-border-danger)'
+          danger: 'var(--color-border-danger)',
+          success: 'var(--color-border-success)'
         },
         page: 'var(--page-bg)'
       },
       borderRadius: {
         md: 'var(--border-radius-md)',
-        lg: 'var(--border-radius-lg)'
+        lg: 'var(--border-radius-lg)',
+        control: 'var(--border-radius-control)',
+        card: 'var(--border-radius-card)'
       },
       fontFamily: {
         sans: 'var(--font-sans)'
