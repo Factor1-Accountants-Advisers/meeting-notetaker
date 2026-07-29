@@ -13,18 +13,19 @@ from app import store
 from app.config import get_settings
 from app.paths import audio_dir
 from app.schemas import BlobStatus, Meeting, PipelineStatus
-from app.services.storage_api import StorageApiClient, get_storage_api_client
+from app.services.failure_reasons import (
+    FailureCategory,
+    FailureReason,
+    classify,
+    log_delivery_failure,
+)
+from app.services.storage_api import (
+    StorageApiClient,
+    StorageApiUnavailable,
+    get_storage_api_client,
+)
 
 
-PREREQUISITE_FAILURE = "Secure storage upload is waiting for processed meeting data."
-SIGN_IN_FAILURE = "Sign in is required to upload this meeting to secure storage."
-AUDIO_FAILURE = (
-    "Secure storage upload failed while uploading audio. Retry when connected."
-)
-EXPORT_FAILURE = (
-    "Secure storage upload failed while uploading the meeting record. "
-    "Retry when connected."
-)
 INTERRUPTED_FAILURE = (
     "Secure storage upload was interrupted. Retry when connected."
 )
@@ -62,6 +63,7 @@ def _set_pending(meeting: Meeting) -> datetime:
     started_at = datetime.now(timezone.utc)
     meeting.blob_status = BlobStatus.pending
     meeting.blob_error_message = None
+    meeting.blob_error_code = None
     store.BLOB_DELIVERY_STARTED_AT[meeting.id] = started_at
     _safe_snapshot()
     return started_at
@@ -110,6 +112,7 @@ def _finish(
     status: BlobStatus,
     error_message: str | None,
     actor: str,
+    error_code: str | None = None,
     require_ready: bool = True,
 ) -> Meeting | None:
     meeting = store.MEETINGS.get(meeting_id)
@@ -127,6 +130,7 @@ def _finish(
     before = meeting.blob_status.value
     meeting.blob_status = status
     meeting.blob_error_message = error_message
+    meeting.blob_error_code = error_code
     _clear_started_marker(meeting_id, started_at)
     try:
         store.add_audit(
@@ -199,12 +203,17 @@ async def deliver_meeting_to_blob(
                 meeting.pipeline_status is not PipelineStatus.ready
                 or stored_export is None
             ):
+                reason = FailureReason.for_category(
+                    FailureCategory.processing_error, detail="prerequisite_check"
+                )
+                log_delivery_failure(meeting_id, "blob", reason, code="prerequisite_check")
                 return _finish(
                     meeting_id,
                     processing_attempt=processing_attempt,
                     started_at=store.BLOB_DELIVERY_STARTED_AT.get(meeting_id),
                     status=BlobStatus.failed,
-                    error_message=PREREQUISITE_FAILURE,
+                    error_message=reason.user_sentence,
+                    error_code=reason.category.value,
                     actor=actor,
                     require_ready=False,
                 )
@@ -213,12 +222,17 @@ async def deliver_meeting_to_blob(
             started_at = _set_pending(meeting)
 
             if settings.storage_api_url and not (access_token or "").strip():
+                reason = FailureReason.for_category(
+                    FailureCategory.azure_signin, detail="signin_check"
+                )
+                log_delivery_failure(meeting_id, "blob", reason, code="signin_check")
                 return _finish(
                     meeting_id,
                     processing_attempt=processing_attempt,
                     started_at=started_at,
                     status=BlobStatus.failed,
-                    error_message=SIGN_IN_FAILURE,
+                    error_message=reason.user_sentence,
+                    error_code=reason.category.value,
                     actor=actor,
                 )
 
@@ -268,13 +282,39 @@ async def deliver_meeting_to_blob(
                         started_at,
                     ) is None:
                         return _abort_superseded(meeting_id, started_at)
-                except Exception:
+                except StorageApiUnavailable as exc:
+                    reason = FailureReason.for_category(
+                        FailureCategory.service_unavailable, detail=str(exc)
+                    )
+                    log_delivery_failure(
+                        meeting_id, "blob", reason, code="StorageApiUnavailable"
+                    )
                     return _finish(
                         meeting_id,
                         processing_attempt=processing_attempt,
                         started_at=started_at,
                         status=BlobStatus.failed,
-                        error_message=AUDIO_FAILURE,
+                        error_message=reason.user_sentence,
+                        error_code=reason.category.value,
+                        actor=actor,
+                    )
+                except Exception as exc:
+                    # The try above spans the local audio-snapshot copy, the
+                    # SAS request, and the upload — they share one handler,
+                    # so a local file error can't be told apart from a
+                    # network/provider failure here without restructuring
+                    # control flow. classify() picks the best fit either way.
+                    reason = classify(exc, stage="blob")
+                    log_delivery_failure(
+                        meeting_id, "blob", reason, code=exc.__class__.__name__
+                    )
+                    return _finish(
+                        meeting_id,
+                        processing_attempt=processing_attempt,
+                        started_at=started_at,
+                        status=BlobStatus.failed,
+                        error_message=reason.user_sentence,
+                        error_code=reason.category.value,
                         actor=actor,
                     )
 
@@ -292,13 +332,34 @@ async def deliver_meeting_to_blob(
                     export_payload,
                     access_token,
                 )
-            except Exception:
+            except StorageApiUnavailable as exc:
+                reason = FailureReason.for_category(
+                    FailureCategory.service_unavailable, detail=str(exc)
+                )
+                log_delivery_failure(
+                    meeting_id, "blob", reason, code="StorageApiUnavailable"
+                )
                 return _finish(
                     meeting_id,
                     processing_attempt=processing_attempt,
                     started_at=started_at,
                     status=BlobStatus.failed,
-                    error_message=EXPORT_FAILURE,
+                    error_message=reason.user_sentence,
+                    error_code=reason.category.value,
+                    actor=actor,
+                )
+            except Exception as exc:
+                reason = classify(exc, stage="blob")
+                log_delivery_failure(
+                    meeting_id, "blob", reason, code=exc.__class__.__name__
+                )
+                return _finish(
+                    meeting_id,
+                    processing_attempt=processing_attempt,
+                    started_at=started_at,
+                    status=BlobStatus.failed,
+                    error_message=reason.user_sentence,
+                    error_code=reason.category.value,
                     actor=actor,
                 )
 
@@ -308,15 +369,34 @@ async def deliver_meeting_to_blob(
                 started_at=started_at,
                 status=BlobStatus.uploaded,
                 error_message=None,
+                error_code=None,
                 actor=actor,
             )
-        except Exception:
+        except StorageApiUnavailable as exc:
+            reason = FailureReason.for_category(
+                FailureCategory.service_unavailable, detail=str(exc)
+            )
+            log_delivery_failure(meeting_id, "blob", reason, code="StorageApiUnavailable")
             return _finish(
                 meeting_id,
                 processing_attempt=processing_attempt,
                 started_at=started_at,
                 status=BlobStatus.failed,
-                error_message=EXPORT_FAILURE,
+                error_message=reason.user_sentence,
+                error_code=reason.category.value,
+                actor=actor,
+                require_ready=started_at is not None,
+            )
+        except Exception as exc:
+            reason = classify(exc, stage="blob")
+            log_delivery_failure(meeting_id, "blob", reason, code=exc.__class__.__name__)
+            return _finish(
+                meeting_id,
+                processing_attempt=processing_attempt,
+                started_at=started_at,
+                status=BlobStatus.failed,
+                error_message=reason.user_sentence,
+                error_code=reason.category.value,
                 actor=actor,
                 require_ready=started_at is not None,
             )
