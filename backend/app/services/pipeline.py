@@ -265,7 +265,7 @@ def sweep_stuck_pipelines() -> int:
             meeting_id,
             PipelineStatus.failed,
             PipelineStage.failed,
-            "Processing stalled before finishing. The recording is saved — retry to try again.",
+            USER_SENTENCES[FailureCategory.stalled],
             error_code=FailureCategory.stalled.value,
             error_message=USER_SENTENCES[FailureCategory.stalled],
         )

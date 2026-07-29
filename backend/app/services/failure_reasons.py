@@ -52,6 +52,20 @@ class FailureReason:
 _SIGNIN_STATUSES = {401, 403}
 _UNAVAILABLE_STATUSES = {408, 429}
 
+# Always local file-op errors, never network — regardless of whether they
+# were constructed with enough args to populate `filename` (e.g.
+# `FileNotFoundError(local_path)` is a valid single-arg raise and leaves
+# `filename` as None, indistinguishable from a socket error by that
+# attribute alone). Exclude the whole subtree before the OSError+filename
+# heuristic runs.
+_FILE_ERROR_TYPES = (
+    FileNotFoundError,
+    PermissionError,
+    IsADirectoryError,
+    NotADirectoryError,
+    FileExistsError,
+)
+
 
 def _status_code(exc: BaseException) -> int | None:
     for attribute in ("status_code", "status", "code"):
@@ -64,12 +78,13 @@ def _status_code(exc: BaseException) -> int | None:
 
 
 def _is_network_error(exc: BaseException) -> bool:
+    if isinstance(exc, _FILE_ERROR_TYPES):
+        return False
     # OSError covers DNS/socket/connection/timeout failures (ConnectionError,
     # TimeoutError, and urllib's URLError all subclass it) — none of those
-    # carry a `filename`. Local file errors (FileNotFoundError,
-    # PermissionError, ...) are also OSError subclasses but always set
-    # `filename`, so we exclude them here rather than misclassify a local
-    # file problem as a network problem.
+    # carry a `filename`. Other local file errors are also OSError subclasses
+    # and usually set `filename`, so we exclude them by attribute as a
+    # secondary net for subclasses not covered by `_FILE_ERROR_TYPES` above.
     return isinstance(exc, OSError) and getattr(exc, "filename", None) is None
 
 

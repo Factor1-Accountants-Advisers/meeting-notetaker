@@ -59,9 +59,21 @@ class PipelineFailureClassificationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(meeting.processing_error_code, "processing_error")
             self.assertNotIn("SECRET", meeting.processing_error_message)
 
-            self.assertTrue(
-                any("delivery_failure" in line for line in captured.output)
-            )
+            failure_lines = [
+                line for line in captured.output if "delivery_failure" in line
+            ]
+            self.assertTrue(failure_lines)
+            failure_line = failure_lines[0]
+            for fragment in (
+                "stage=pipeline",
+                "category=processing_error",
+                "code=ValueError",
+            ):
+                self.assertIn(fragment, failure_line)
+            # The raw exception text (including anything sensitive) belongs
+            # in the log, not the user-facing message — this pins the other
+            # half of that invariant.
+            self.assertIn("SECRET", failure_line)
 
             self.assertTrue(audio_path.exists())
 

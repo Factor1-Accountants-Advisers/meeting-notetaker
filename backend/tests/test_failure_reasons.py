@@ -75,6 +75,14 @@ class ClassifyTests(unittest.TestCase):
         )
         self.assertIs(reason.category, FailureCategory.processing_error)
 
+    def test_single_arg_file_not_found_is_not_misclassified_as_network(self) -> None:
+        # pyannote_client.upload_media_file raises `FileNotFoundError(local_path)`
+        # (single arg) — the `filename` attribute stays None in that form, so a
+        # filename-based check alone would misclassify a missing local recording
+        # as a network problem. The exception-type exclusion must catch this too.
+        reason = classify(FileNotFoundError("C:/x/audio.webm"), stage="pipeline")
+        self.assertIs(reason.category, FailureCategory.processing_error)
+
     def test_socket_style_os_error_without_filename_classifies_as_network(self) -> None:
         reason = classify(OSError("connection reset"), stage="blob")
         self.assertIs(reason.category, FailureCategory.network)
