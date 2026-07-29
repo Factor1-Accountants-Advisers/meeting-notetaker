@@ -344,6 +344,11 @@ and after `sharepoint_error_message`:
 
 - [ ] **Step 2: Run, verify fails** (today `processing_error_code` is `"ValueError"` and the message contains the exception text).
 
+- [ ] **Step 2b: Tighten the classifier (Task 1 code-review carry-forward, do BEFORE wiring):** in `backend/app/services/failure_reasons.py`:
+  1. `_is_network_error`: a bare `isinstance(root, OSError)` misclassifies local file errors (`FileNotFoundError`, `PermissionError`) as `network` — the pipeline catch-all wraps heavy local file work. Tighten to: `isinstance(root, OSError) and getattr(root, "filename", None) is None` (socket/DNS errors carry no `filename`; file-op errors do). The separate `_NETWORK_TYPES`/`URLError`-name checks are redundant (all subclass `OSError`) — simplify and fix the comment.
+  2. `classify()` detail: flatten newlines (`.replace("\n", " ")` keeps the log line greppable) and when `root is not exc` append `\" (cause: {root})\"` before truncating to 500 — otherwise the root cause's text never reaches the `delivery_failure` line for stages that don't also call `logger.exception`.
+  3. New table-driven tests in `test_failure_reasons.py`: `FileNotFoundError(2, "No such file", "x.webm")` → `processing_error` (NOT network); a socket-style `OSError("connection reset")` without filename → `network`; `raise RuntimeError(...) from None` does NOT unwrap past the wrapper; multiline exception text yields a single-line `technical_detail` containing `"(cause: ...)"` when wrapped.
+
 - [ ] **Step 3: Implement.** In the catch-all (~:395), replace the `set_pipeline_state(...)` call:
 
 ```python
@@ -404,7 +409,8 @@ Startup marking (~:203): `error_code="Interrupted"` → `error_code=FailureCateg
          )
      ```
      Same for the audio branch (~:271, category via `classify`, but if the caught error is the audio-snapshot copy failure, prefer `for_category(audio_problem)`) and the outer catch-all (~:313).
-  3. Condition branches (no exception): sign-in (~:216) → `for_category(azure_signin, detail="signin_check")`, `code="signin_check"`; prerequisite (~:202) → `for_category(processing_error, detail="prerequisite_check")`, `code="prerequisite_check"`. Keep the existing `SIGN_IN_FAILURE`/`PREREQUISITE_FAILURE`/`AUDIO_FAILURE`/`EXPORT_FAILURE` constants only if their text is reused as the category sentences; otherwise delete them and their imports.
+  3. Condition branches (no exception): sign-in (~:216) → `for_category(azure_signin, detail="signin_check")`, `code="signin_check"`; prerequisite (~:202) → `for_category(processing_error, detail="prerequisite_check")`, `code="prerequisite_check"`.
+  3b. **`StorageApiUnavailable` special-case (Task 1 code-review carry-forward):** `storage_api.py:544` raises it on a 5xx with NO cause attached, and `:551` uses `from None` — generic `classify()` would land those on `processing_error`, hiding a real Azure outage. In each blob branch, catch `StorageApiUnavailable` BEFORE the generic `except Exception` and use `FailureReason.for_category(FailureCategory.service_unavailable, detail=str(exc))`, `code="StorageApiUnavailable"`. Add a test: provider raising `StorageApiUnavailable` (no cause) → `blob_error_code == "service_unavailable"`. Keep the existing `SIGN_IN_FAILURE`/`PREREQUISITE_FAILURE`/`AUDIO_FAILURE`/`EXPORT_FAILURE` constants only if their text is reused as the category sentences; otherwise delete them and their imports.
   4. Success `_finish` call passes `error_code=None`.
 
 - [ ] **Step 4: Update existing pinned assertions in `backend/tests/test_blob_delivery.py`** (part of this task): `:552-555` pins the literal `"Sign in is required to upload this meeting to secure storage."` → update to the `azure_signin` sentence ("Microsoft sign-in is needed. Sign in again, then retry.") and assert `blob_error_code == "azure_signin"`. Sweep the sibling assertions at `:593-649` that pin other literal blob failure texts (`AUDIO_FAILURE`/`EXPORT_FAILURE`/`PREREQUISITE_FAILURE` strings) and update each to the corresponding category sentence + code.
