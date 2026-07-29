@@ -44,6 +44,10 @@ const LOOPBACK_SILENCE_WARN_AFTER_S = 60
 // Bluetooth connects fire several devicechange events in a burst (A2DP/HFP
 // re-profiling); coalesce before re-acquiring.
 const DEVICE_CHANGE_DEBOUNCE_MS = 1500
+// Chromium can leave either promise/event pending after a Windows audio-device
+// transition. Neither is allowed to hold the recording controls indefinitely.
+const LOOPBACK_REACQUIRE_TIMEOUT_MS = 10_000
+const RECORDER_STOP_TIMEOUT_MS = 1_500
 
 export interface CaptureStatus {
   mic: StreamState
@@ -124,7 +128,7 @@ export class SegmentTimeline {
   }
 }
 
-class CaptureController {
+export class CaptureController {
   private micRecorder: MediaRecorder | null = null
   private systemRecorder: MediaRecorder | null = null
   private micChunks: BlobPart[] = []
@@ -147,6 +151,9 @@ class CaptureController {
   private deviceChangeTimer: ReturnType<typeof setTimeout> | null = null
   private deviceChangeRegistered = false
   private reacquiring = false
+  private reacquireGeneration = 0
+  private cancelReacquire: (() => void) | null = null
+  private stopping = false
   // Chunks must reach the main process in emission order or the spilled WebM
   // stream corrupts; blob→ArrayBuffer conversion is async, so chain per stream.
   private spillChains: Record<'mic' | 'sys', Promise<void>> = {
@@ -236,20 +243,48 @@ class CaptureController {
   }
 
   pause(): void {
-    for (const recorder of [this.micRecorder, this.systemRecorder]) {
-      if (recorder?.state === 'recording') recorder.pause()
+    for (const [stream, recorder] of [
+      ['mic', this.micRecorder],
+      ['sys', this.systemRecorder]
+    ] as const) {
+      if (recorder?.state !== 'recording') continue
+      try {
+        recorder.pause()
+      } catch (err) {
+        // A device swap can leave a recorder reporting "recording" while its
+        // track is already unusable. Pause the rest of the session anyway.
+        this.logRecorderControlFailure('pause', stream, err)
+      }
     }
     this.systemTimeline.pause()
   }
 
   resume(): void {
-    for (const recorder of [this.micRecorder, this.systemRecorder]) {
-      if (recorder?.state === 'paused') recorder.resume()
+    for (const [stream, recorder] of [
+      ['mic', this.micRecorder],
+      ['sys', this.systemRecorder]
+    ] as const) {
+      if (recorder?.state !== 'paused') continue
+      try {
+        recorder.resume()
+      } catch (err) {
+        this.logRecorderControlFailure('resume', stream, err)
+      }
     }
     this.systemTimeline.resume()
   }
 
   async stop(durationMs?: number): Promise<CaptureResult | null> {
+    // Stop owns the capture from this point. A pending getDisplayMedia must not
+    // attach another recorder after we snapshot/finalize the live recorders.
+    this.stopping = true
+    this.unregisterDeviceChangeListener()
+    if (this.deviceChangeTimer) {
+      clearTimeout(this.deviceChangeTimer)
+      this.deviceChangeTimer = null
+    }
+    this.cancelLoopbackReacquisition()
+
     // Detach the spill from the live session: it must survive stop() until the
     // caller confirms the audio is safe (discardCompletedSpill), or be dropped
     // right away when there is no audio worth keeping.
@@ -390,7 +425,7 @@ class CaptureController {
   }
 
   private onDeviceChange = (): void => {
-    if (!this.systemRecorder) return
+    if (this.stopping || !this.systemRecorder) return
     if (this.deviceChangeTimer) clearTimeout(this.deviceChangeTimer)
     this.deviceChangeTimer = setTimeout(() => {
       this.deviceChangeTimer = null
@@ -409,10 +444,15 @@ class CaptureController {
    * things worse than the pre-fix behaviour.
    */
   private async reacquireLoopback(): Promise<void> {
-    if (this.reacquiring || !this.systemRecorder) return
+    if (this.reacquiring || this.stopping || !this.systemRecorder) return
     this.reacquiring = true
+    const generation = ++this.reacquireGeneration
     try {
-      const sys = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+      const sys = await this.acquireLoopbackWithTimeout(generation)
+      if (generation !== this.reacquireGeneration || this.stopping || !this.systemRecorder) {
+        sys.getTracks().forEach((track) => track.stop())
+        return
+      }
       if (sys.getAudioTracks().length === 0) {
         sys.getTracks().forEach((t) => t.stop())
         throw new Error('no loopback track')
@@ -446,11 +486,52 @@ class CaptureController {
         segments: this.finalizedSystemSegments.length + 1
       })
     } catch (err) {
+      if (generation !== this.reacquireGeneration || this.stopping) return
       window.api?.debugLog?.('loopback re-acquisition failed — keeping existing capture', {
         message: err instanceof Error ? err.message : String(err)
       })
     } finally {
-      this.reacquiring = false
+      // A cancelled older attempt must not clear the guard/canceller belonging
+      // to a newer recording session.
+      if (generation === this.reacquireGeneration) {
+        this.reacquiring = false
+        this.cancelReacquire = null
+      }
+    }
+  }
+
+  private async acquireLoopbackWithTimeout(generation: number): Promise<MediaStream> {
+    let timedOut = false
+    let timeout: ReturnType<typeof setTimeout> | null = null
+    let rejectCancelled: ((reason: Error) => void) | null = null
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      rejectCancelled = reject
+    })
+    this.cancelReacquire = () =>
+      rejectCancelled?.(new Error('loopback re-acquisition cancelled'))
+
+    const acquisition = navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+    // getDisplayMedia itself is not abortable. If it resolves after cancellation
+    // or timeout, immediately release the orphan stream instead of attaching it.
+    void acquisition
+      .then((stream) => {
+        if (timedOut || generation !== this.reacquireGeneration || this.stopping) {
+          stream.getTracks().forEach((track) => track.stop())
+        }
+      })
+      .catch(() => {})
+
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        timedOut = true
+        reject(new Error('loopback re-acquisition timed out'))
+      }, LOOPBACK_REACQUIRE_TIMEOUT_MS)
+    })
+
+    try {
+      return await Promise.race([acquisition, cancelled, deadline])
+    } finally {
+      if (timeout) clearTimeout(timeout)
     }
   }
 
@@ -519,10 +600,44 @@ class CaptureController {
     chunks: BlobPart[],
     durationMs?: number
   ): Promise<Blob | null> {
-    if (!recorder || recorder.state === 'inactive') return null
+    if (!recorder) return null
+    const toBlob = (): Blob => new Blob(chunks, { type: recorder.mimeType || 'audio/webm' })
     let blob = await new Promise<Blob>((resolve) => {
-      recorder.onstop = () => resolve(new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }))
-      recorder.stop()
+      let settled = false
+      let timeout: ReturnType<typeof setTimeout> | null = null
+      const finish = (timedOut = false): void => {
+        if (settled) return
+        settled = true
+        if (timeout) clearTimeout(timeout)
+        if (timedOut) {
+          window.api?.debugLog?.('media recorder stop timed out — salvaging emitted chunks', {
+            state: recorder.state,
+            chunks: chunks.length
+          })
+        }
+        resolve(toBlob())
+      }
+
+      recorder.onstop = () => finish()
+      if (recorder.state === 'inactive') {
+        finish()
+        return
+      }
+
+      timeout = setTimeout(() => finish(true), RECORDER_STOP_TIMEOUT_MS)
+      try {
+        // Ask for the most recent buffered data before stop. Both calls are
+        // best-effort because a device-swapped recorder may reject either one.
+        recorder.requestData()
+      } catch {
+        // Existing timeslice chunks remain salvageable.
+      }
+      try {
+        recorder.stop()
+      } catch (err) {
+        this.logRecorderControlFailure('stop', 'unknown', err)
+        finish()
+      }
     })
     if (blob.size === 0) return null
     if (durationMs && durationMs > 0) {
@@ -533,6 +648,17 @@ class CaptureController {
       }
     }
     return blob
+  }
+
+  private logRecorderControlFailure(
+    action: 'pause' | 'resume' | 'stop',
+    stream: 'mic' | 'sys' | 'unknown',
+    err: unknown
+  ): void {
+    window.api?.debugLog?.(`media recorder ${action} failed — continuing control transition`, {
+      stream,
+      message: err instanceof Error ? err.message : String(err)
+    })
   }
 
   /**
@@ -659,7 +785,8 @@ class CaptureController {
       clearTimeout(this.deviceChangeTimer)
       this.deviceChangeTimer = null
     }
-    this.reacquiring = false
+    this.cancelLoopbackReacquisition()
+    this.stopping = false
     this.micRecorder = null
     this.systemRecorder = null
     this.micChunks = []
@@ -671,6 +798,14 @@ class CaptureController {
     this.streams.forEach((s) => s.getTracks().forEach((t) => t.stop()))
     this.streams = []
     this.status = { ...IDLE }
+  }
+
+  private cancelLoopbackReacquisition(): void {
+    this.reacquireGeneration += 1
+    const cancel = this.cancelReacquire
+    this.cancelReacquire = null
+    this.reacquiring = false
+    cancel?.()
   }
 }
 
