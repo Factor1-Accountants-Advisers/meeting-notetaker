@@ -443,7 +443,7 @@ Startup marking (~:203): `error_code="Interrupted"` → `error_code=FailureCateg
 ### Task 6: API surface to renderer
 
 **Files:**
-- Modify: `src/renderer/src/lib/api.ts` (meeting mapping — find the existing `pipelineStatus`/`sharepointStatus` snake→camel mapping and add the three codes)
+- Modify: `src/renderer/src/lib/api.ts` (`MeetingDto` + `mapMeeting`, :162-188) and `src/renderer/src/data/mock.ts` (renderer `Meeting` interface, :54-79)
 - Test: covered by Task 7's verify script + `npm run typecheck`
 
 - [ ] **Step 1:** Add `processingErrorCode`, `blobErrorCode`, `sharePointErrorCode`, `deliveryErrorCode` as `string | null` to the renderer Meeting type and to `mapMeeting` (`api.ts:162-188`). Two specifics: (a) `processing_error_code` is NOT currently mapped — add it, don't assume; (b) follow the existing capital-P `sharePoint*` naming convention (`sharePointStatus` in `src/renderer/src/data/mock.ts:73`), so `sharePointErrorCode`, not `sharepointErrorCode`.
@@ -515,7 +515,7 @@ export function showUnconfirmedChip(m: FailureChipInput): boolean {
 
 - [ ] **Step 3: Wire the screens.**
   - `MeetingsScreen.tsx:134`: replace `{meeting.pipelineStatus === 'failed' && <Pill tone="danger">Failed</Pill>}` with the `failedChipLabel(...)` chip plus, independently, `showUnconfirmedChip(...) && <Pill tone="warning">Email unconfirmed</Pill>`.
-  - `MeetingReviewScreen.tsx`: extend the `FailedCard` area into one row per failed concern — category label + the meeting's stored `*_error_message` sentence + that concern's retry action. Wiring specifics: processing retry already exists on this screen (`handleRetry`, ~:229); blob and SharePoint retries do NOT have handlers on this screen yet — import and call the existing API functions `retryBlobDelivery` and `saveTranscriptToSharePoint` from `src/renderer/src/lib/api.ts` (currently wired only in `App.tsx` — follow that call pattern, including the Graph-token argument for SharePoint); email retry reuses the existing `EmailModal` flow (~:779). Do not add backend endpoints — all four exist. Unconfirmed email keeps its existing notice (`lib/deliveryNotice.ts`) untouched.
+  - `MeetingReviewScreen.tsx`: extend the `FailedCard` area into one row per failed concern — category label + the meeting's stored `*_error_message` sentence + that concern's retry action. Wiring specifics: processing retry already exists on this screen (`handleRetry`, ~:229); blob and SharePoint retries do NOT have handlers on this screen yet — import and call the existing API functions `retryBlobDelivery` and `saveTranscriptToSharePoint` from `src/renderer/src/lib/api.ts` (currently wired only in `App.tsx:798,891,950` — follow that call pattern; the Graph token is injected by the main-process bridge, not passed at the renderer call site); email retry reuses the existing `EmailModal` flow (~:779). Do not add backend endpoints — all four exist. Unconfirmed email keeps its existing notice (`lib/deliveryNotice.ts`) untouched.
 - [ ] **Step 4:** `npm run typecheck && npm run build && npm run verify:failure-chips` — all PASS. Also `npm run verify:email-notice` (guards the unconfirmed notice untouched).
 - [ ] **Step 5: Commit** — `git commit -m "feat: Failed:[category] chips and per-concern failure rows (IN-391)"`
 
