@@ -344,6 +344,11 @@ and after `sharepoint_error_message`:
 
 - [ ] **Step 2: Run, verify fails** (today `processing_error_code` is `"ValueError"` and the message contains the exception text).
 
+- [ ] **Step 2b: Tighten the classifier (Task 1 code-review carry-forward, do BEFORE wiring):** in `backend/app/services/failure_reasons.py`:
+  1. `_is_network_error`: a bare `isinstance(root, OSError)` misclassifies local file errors (`FileNotFoundError`, `PermissionError`) as `network` — the pipeline catch-all wraps heavy local file work. Tighten to: `isinstance(root, OSError) and getattr(root, "filename", None) is None` (socket/DNS errors carry no `filename`; file-op errors do). The separate `_NETWORK_TYPES`/`URLError`-name checks are redundant (all subclass `OSError`) — simplify and fix the comment.
+  2. `classify()` detail: flatten newlines (`.replace("\n", " ")` keeps the log line greppable) and when `root is not exc` append `\" (cause: {root})\"` before truncating to 500 — otherwise the root cause's text never reaches the `delivery_failure` line for stages that don't also call `logger.exception`.
+  3. New table-driven tests in `test_failure_reasons.py`: `FileNotFoundError(2, "No such file", "x.webm")` → `processing_error` (NOT network); a socket-style `OSError("connection reset")` without filename → `network`; `raise RuntimeError(...) from None` does NOT unwrap past the wrapper; multiline exception text yields a single-line `technical_detail` containing `"(cause: ...)"` when wrapped.
+
 - [ ] **Step 3: Implement.** In the catch-all (~:395), replace the `set_pipeline_state(...)` call:
 
 ```python
@@ -404,7 +409,8 @@ Startup marking (~:203): `error_code="Interrupted"` → `error_code=FailureCateg
          )
      ```
      Same for the audio branch (~:271, category via `classify`, but if the caught error is the audio-snapshot copy failure, prefer `for_category(audio_problem)`) and the outer catch-all (~:313).
-  3. Condition branches (no exception): sign-in (~:216) → `for_category(azure_signin, detail="signin_check")`, `code="signin_check"`; prerequisite (~:202) → `for_category(processing_error, detail="prerequisite_check")`, `code="prerequisite_check"`. Keep the existing `SIGN_IN_FAILURE`/`PREREQUISITE_FAILURE`/`AUDIO_FAILURE`/`EXPORT_FAILURE` constants only if their text is reused as the category sentences; otherwise delete them and their imports.
+  3. Condition branches (no exception): sign-in (~:216) → `for_category(azure_signin, detail="signin_check")`, `code="signin_check"`; prerequisite (~:202) → `for_category(processing_error, detail="prerequisite_check")`, `code="prerequisite_check"`.
+  3b. **`StorageApiUnavailable` special-case (Task 1 code-review carry-forward):** `storage_api.py:544` raises it on a 5xx with NO cause attached, and `:551` uses `from None` — generic `classify()` would land those on `processing_error`, hiding a real Azure outage. In each blob branch, catch `StorageApiUnavailable` BEFORE the generic `except Exception` and use `FailureReason.for_category(FailureCategory.service_unavailable, detail=str(exc))`, `code="StorageApiUnavailable"`. Add a test: provider raising `StorageApiUnavailable` (no cause) → `blob_error_code == "service_unavailable"`. Keep the existing `SIGN_IN_FAILURE`/`PREREQUISITE_FAILURE`/`AUDIO_FAILURE`/`EXPORT_FAILURE` constants only if their text is reused as the category sentences; otherwise delete them and their imports.
   4. Success `_finish` call passes `error_code=None`.
 
 - [ ] **Step 4: Update existing pinned assertions in `backend/tests/test_blob_delivery.py`** (part of this task): `:552-555` pins the literal `"Sign in is required to upload this meeting to secure storage."` → update to the `azure_signin` sentence ("Microsoft sign-in is needed. Sign in again, then retry.") and assert `blob_error_code == "azure_signin"`. Sweep the sibling assertions at `:593-649` that pin other literal blob failure texts (`AUDIO_FAILURE`/`EXPORT_FAILURE`/`PREREQUISITE_FAILURE` strings) and update each to the corresponding category sentence + code.
@@ -430,7 +436,7 @@ Startup marking (~:203): `error_code="Interrupted"` → `error_code=FailureCateg
 
 - [ ] **Step 2: Run, verify fails.**
 
-- [ ] **Step 3: Implement.** `set_delivery_state` gains `error_code: str | None = None` writing `delivery_error_code`; `unconfirmed` transition explicitly passes `error_code=None`. Email generic handler (~:609): classify, log, store sentence + category; keep the raised `HTTPException` detail as-is (it feeds the renderer toast today — the stored fields are what the chips read). SharePoint generic handler (~:696): same, replacing `f"SharePoint save failed: {exc}"`. Both sign-in branches: `for_category(azure_signin, ...)` but keep their existing user-visible strings (assert in tests). Set `sharepoint_error_code`/`delivery_error_code = None` on the success paths that already null the messages.
+- [ ] **Step 3: Implement.** `set_delivery_state` gains `error_code: str | None = None` writing `delivery_error_code`; `unconfirmed` transition explicitly passes `error_code=None`. Also (Task 4 spec-review carry-forward): `kick_pipeline` (`pipeline.py:~447-449`) nulls `blob_error_message` on re-kick but not the new `blob_error_code` — add `"blob_error_code": None` beside it so the pair always moves together. Email generic handler (~:609): classify, log, store sentence + category; keep the raised `HTTPException` detail as-is (it feeds the renderer toast today — the stored fields are what the chips read). SharePoint generic handler (~:696): same, replacing `f"SharePoint save failed: {exc}"`. Both sign-in branches: `for_category(azure_signin, ...)` but keep their existing user-visible strings (assert in tests). Set `sharepoint_error_code`/`delivery_error_code = None` on the success paths that already null the messages.
 
 - [ ] **Step 4: Update existing pinned assertions in `backend/tests/test_delivery_reliability.py`** (part of this task): `:121` asserts `"simulated Graph send failure"` appears in `delivery_error_message`, and `:162` asserts `"simulated Graph invite failure"` appears in `sharepoint_error_message` — both flip to asserting the stored field equals the fixed category sentence AND that the simulated text is ABSENT from the stored field (that absence is the point of IN-391). If those tests also assert on the raised `HTTPException` detail, leave that part unchanged — the HTTP detail intentionally still carries `{exc}` for the transient toast.
 
@@ -521,6 +527,18 @@ export function showUnconfirmedChip(m: FailureChipInput): boolean {
 
 ---
 
+### Task 7b: Wire failure categories into the LIVE surfaces (discovered during Task 7)
+
+**Discovery:** `MeetingsScreen.tsx` and `MeetingReviewScreen.tsx` are dead code — nothing imports them (`App.tsx` renders only Recording/Home/Settings; `ScreenId = 'home' | 'settings'`). They are remnants of the IN-73/IN-74 UI removals. Task 7's work there is correct-but-inert (kept for potential revival; removal is a separate product decision for Joseph). The LIVE failure surfaces are `HomeScreen`'s notice cards, fed from `App.tsx`: `postCaptureNotice` (states incl. `processing_failed`/`upload_failed`/`email_failed`) and `blobDeliveryNotices` (built by `blobDeliveryNotice(...)` ~App.tsx:97-110, retry via `watchBlobDelivery`). Their message text already carries the taxonomy sentences (Tasks 3-5); what's missing is spec §3's `Failed: [category]` labelling.
+
+**Files:**
+- Modify: `src/renderer/src/App.tsx`, `src/renderer/src/screens/HomeScreen.tsx` (reuse `failureDisplay.ts` — no new pure logic unless needed; if added, extend `scripts/verify-failure-chips.tsx`)
+
+- [ ] **Step 1:** Trace where each notice is built in App.tsx and what meeting data is in scope there (the meeting DTO with `*_error_code` fields is available at/near each site — Task 6 mapped them). Thread the relevant category code into `BlobDeliveryNotice` and `PostCaptureNotice` (new optional field, e.g. `errorCode: string | null`).
+- [ ] **Step 2:** In `HomeScreen`, when a notice is in a failed state, render the heading/label as `Failed: <categoryLabel(code)>` (import from `lib/failureDisplay`) above/beside the existing sentence; null/unknown codes fall back exactly like the chips. Keep the existing message, retry, and dismiss behaviour untouched. Email-unconfirmed surfaces keep their existing non-failure treatment (IN-478) — no `Failed:` label on unconfirmed.
+- [ ] **Step 3:** `npm run typecheck && npm run build && npm run verify:failure-chips && npm run verify:email-notice` — all PASS.
+- [ ] **Step 4: Commit** — `git commit -m "feat: label live failure notices with IN-391 categories"`
+
 ### Task 8: Behaviour doc + evidence
 
 **Files:**
@@ -534,6 +552,10 @@ export function showUnconfirmedChip(m: FailureChipInput): boolean {
 ---
 
 ### Task 9: Full verification sweep
+
+- [ ] **Step 0a (Task 7 review carry-forward, REQUIRED before merge):** `MeetingReviewScreen.tsx` `handleRetryBlob` (~:361) captures the poll generation AFTER `await retryBlobDelivery(meetingId)` — a meeting switch during that POST lets the handler seed a wrong-meeting poll that passes every gen check. Two-line fix: capture `const gen = blobPollGenRef.current` BEFORE the await; `if (gen !== blobPollGenRef.current) return` immediately after it. Optional cosmetic notes from the same review (take only if trivially cheap): collapse the tri-state at one decision point via `failureLabel?: string`; dedupe the IN-478 `errorCode:` ternary into an `emailFailureCode()` helper; shared `<FailureLabel>` component; fix indentation at App.tsx ~:1015-1024.
+
+- [ ] **Step 0 (Task 5 review carry-forward — real-shape test fidelity):** add to `backend/tests/test_failure_reasons.py` a table-driven case classifying a REAL `urllib.error.HTTPError("https://graph.microsoft.com/x", 503, "unavailable", {}, io.BytesIO(b""))` → `service_unavailable` (and a 401 → `azure_signin`) — this pins `_status_code`'s `.code` attribute probe, which is the only thing routing real Graph errors correctly (the `_FakeHttpError` fakes use `.status_code` and would stay green if the probe were removed). Also make the startup-reconcile `emailing → unconfirmed` site in `pipeline.py` (~:198-203) pass `error_code=None` explicitly (matching the router site), and extend the Task 5 assertLogs checks to pin `code=` fragments if cheap. Commit as `test: pin real HTTPError classification shape (IN-391)`.
 
 - [ ] **Step 1:** `PYTHONPATH=backend backend/.venv/Scripts/python.exe -m unittest discover -s backend/tests -t backend` — expected: all pass except (possibly) the documented `test_stub_serializes_concurrent_exports_for_one_meeting` flake. Any OTHER failure blocks completion.
 - [ ] **Step 2:** `npm run typecheck && npm run build && npm run verify:failure-chips && npm run verify:email-notice && npm run verify:storage-cutover` — all PASS.

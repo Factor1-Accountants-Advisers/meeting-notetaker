@@ -40,13 +40,17 @@ export interface MeetingDto {
   pipeline_status: PipelineStatus
   pipeline_stage: PipelineStage
   pipeline_stage_message: string
+  processing_error_code: string | null
   delivery_status: DeliveryStatus
   delivery_error_message: string | null
+  delivery_error_code: string | null
   sharepoint_status: SharePointStatus
   sharepoint_error_message: string | null
+  sharepoint_error_code: string | null
   sharepoint_web_url: string | null
   blob_status: BlobStatus
   blob_error_message: string | null
+  blob_error_code: string | null
   graph_metadata?: GraphMeetingMetadataDto | null
   manual_attendees: ManualMeetingAttendee[]
 }
@@ -176,13 +180,17 @@ function mapMeeting(dto: MeetingDto): Meeting {
     pipelineStatus: dto.pipeline_status,
     pipelineStage: dto.pipeline_stage,
     pipelineStageMessage: dto.pipeline_stage_message,
+    processingErrorCode: dto.processing_error_code,
     deliveryStatus: dto.delivery_status,
     deliveryErrorMessage: dto.delivery_error_message,
+    deliveryErrorCode: dto.delivery_error_code,
     sharePointStatus: dto.sharepoint_status,
     sharePointErrorMessage: dto.sharepoint_error_message,
+    sharePointErrorCode: dto.sharepoint_error_code,
     sharePointWebUrl: dto.sharepoint_web_url,
     blobStatus: dto.blob_status,
     blobErrorMessage: dto.blob_error_message,
+    blobErrorCode: dto.blob_error_code,
     source: dto.source
   }
 }

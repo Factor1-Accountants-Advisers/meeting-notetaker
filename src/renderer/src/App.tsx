@@ -77,6 +77,13 @@ type PostCaptureNotice = {
   meetingId: string
   title: string
   message: string
+  // IN-391 category code for the *_failed states (Task 7b). Three-way:
+  // a real FailureCategory string when a classified DTO was in scope; null
+  // when the state is a genuine failure but no DTO carried a code (renders
+  // the same "Processing error" fallback the chips use); omitted/undefined
+  // when the notice is NOT actually a failure (the email-unconfirmed
+  // sub-case of 'email_failed' — IN-478 — must never show a Failed: label).
+  errorCode?: string | null
 } | null
 
 type BlobDeliveryNotice = {
@@ -85,9 +92,10 @@ type BlobDeliveryNotice = {
   title: string
   message: string
   retrying: boolean
+  errorCode?: string | null
 }
 
-type BlobDeliveryState = Pick<MeetingDto, 'blob_status' | 'blob_error_message'>
+type BlobDeliveryState = Pick<MeetingDto, 'blob_status' | 'blob_error_message' | 'blob_error_code'>
 
 const BLOB_DELIVERY_FALLBACK = 'Secure storage upload failed. Retry when connected.'
 const BLOB_DELIVERY_TAKING_LONGER =
@@ -112,7 +120,10 @@ function blobDeliveryNotice(
         : status === 'pending'
           ? pendingMessage
           : meeting.blob_error_message ?? BLOB_DELIVERY_FALLBACK,
-    retrying: status === 'pending' && retrying
+    retrying: status === 'pending' && retrying,
+    // No blob-status equivalent of "unconfirmed" exists, so it's always safe
+    // to thread the DTO's code straight through (null on success/pending).
+    errorCode: meeting.blob_error_code
   }
 }
 
@@ -482,7 +493,10 @@ function App(): JSX.Element {
                 state: 'upload_failed',
                 meetingId,
                 title: session?.title ?? graphMetadata?.title ?? 'Recording',
-                message: 'Recording saved locally, but upload failed. Retry once the backend is reachable.'
+                message: 'Recording saved locally, but upload failed. Retry once the backend is reachable.',
+                // uploadAudio() returned null (unreachable backend/non-2xx) —
+                // no DTO body to source a category from.
+                errorCode: null
               })
             }
           }
@@ -586,7 +600,8 @@ function App(): JSX.Element {
             const epoch = nextBlobDeliveryEpoch(meeting.id)
             const delivery: BlobDeliveryState = {
               blob_status: meeting.blobStatus,
-              blob_error_message: meeting.blobErrorMessage
+              blob_error_message: meeting.blobErrorMessage,
+              blob_error_code: meeting.blobErrorCode
             }
             if (meeting.blobStatus === 'pending') {
               watchBlobDelivery(meeting.id, meeting.title, delivery, epoch, false)
@@ -813,7 +828,13 @@ function App(): JSX.Element {
             state: 'email_failed',
             meetingId,
             title,
-            message: 'Transcript email was sent, but SharePoint save failed. Sign in again, then retry delivery.'
+            message: 'Transcript email was sent, but SharePoint save failed. Sign in again, then retry delivery.',
+            // Email succeeded here — this is actually a SharePoint failure
+            // surfaced under the shared 'email_failed' state. sharePointResult
+            // is null on failure (the save endpoint raises rather than
+            // returning a DTO), so no fresh sharepoint_error_code is in scope;
+            // fall back to the same "Processing error" label the chips use.
+            errorCode: null
           })
         } else if (sharePointResult?.sharepoint_web_url) {
           setPostCaptureNotice({
@@ -824,7 +845,13 @@ function App(): JSX.Element {
               deliveryAfterFailure?.delivery_status,
               deliveryAfterFailure?.delivery_error_message,
               'Transcript saved to SharePoint, but email was not sent. Sign in to Outlook, then retry email.'
-            )
+            ),
+            // IN-478: 'unconfirmed' is not a failure — omit errorCode so
+            // HomeScreen never renders a Failed: label for it.
+            errorCode:
+              deliveryAfterFailure?.delivery_status === 'unconfirmed'
+                ? undefined
+                : (deliveryAfterFailure?.delivery_error_code ?? null)
           })
         } else {
           setPostCaptureNotice({
@@ -835,7 +862,13 @@ function App(): JSX.Element {
               deliveryAfterFailure?.delivery_status,
               deliveryAfterFailure?.delivery_error_message,
               'Notes are ready, but SharePoint save and transcript email failed. Sign in to Microsoft, then retry delivery.'
-            )
+            ),
+            // Same IN-478 guard as above — email's own outcome here may still
+            // be 'unconfirmed' even though SharePoint definitively failed too.
+            errorCode:
+              deliveryAfterFailure?.delivery_status === 'unconfirmed'
+                ? undefined
+                : (deliveryAfterFailure?.delivery_error_code ?? null)
           })
         }
         return
@@ -845,7 +878,8 @@ function App(): JSX.Element {
           state: 'processing_failed',
           meetingId,
           title,
-          message: 'Processing failed. The recording is saved and can be retried.'
+          message: 'Processing failed. The recording is saved and can be retried.',
+          errorCode: review?.meeting.processing_error_code ?? null
         })
         return
       }
@@ -867,7 +901,10 @@ function App(): JSX.Element {
         state: 'processing_failed',
         meetingId,
         title,
-        message: 'Processing status is taking longer than expected. The recording is saved; retry will check the backend and continue from the saved state.'
+        message: 'Processing status is taking longer than expected. The recording is saved; retry will check the backend and continue from the saved state.',
+        // The backend's own status is still queued/processing — this is a
+        // client-side give-up, not a classified backend failure.
+        errorCode: null
       })
     }
 
@@ -904,7 +941,9 @@ function App(): JSX.Element {
         meetingId,
         title,
         message: BLOB_DELIVERY_FALLBACK,
-        retrying: false
+        retrying: false,
+        // The retry call itself threw or returned null (no DTO) — no code to source.
+        errorCode: null
       })
     }
   }
@@ -935,7 +974,10 @@ function App(): JSX.Element {
           state: 'email_failed',
           meetingId,
           title,
-          message: signedIn.error || 'Outlook sign-in did not complete. Transcript email was not sent.'
+          message: signedIn.error || 'Outlook sign-in did not complete. Transcript email was not sent.',
+          // Client-side MSAL sign-in failure — no backend DTO/classification
+          // exists yet for this attempt (no delivery call was even made).
+          errorCode: null
         })
         return
       }
@@ -970,7 +1012,16 @@ function App(): JSX.Element {
                 deliveryAfterFailure?.delivery_status,
                 deliveryAfterFailure?.delivery_error_message,
                 'SharePoint save and email still failed. The notes are ready and the recording is safe.'
-              )
+              ),
+      // Mirrors the three email_failed sub-cases in watchProcessing's poll():
+      // email succeeded (sharepoint-only failure, no fresh DTO) -> null;
+      // email failed and 'unconfirmed' (IN-478, not a failure) -> omit;
+      // email genuinely failed -> its delivery_error_code.
+      errorCode: emailResult
+        ? null
+        : deliveryAfterFailure?.delivery_status === 'unconfirmed'
+          ? undefined
+          : (deliveryAfterFailure?.delivery_error_code ?? null)
     })
   }
 
@@ -988,7 +1039,9 @@ function App(): JSX.Element {
         state: 'upload_failed',
         meetingId,
         title,
-        message: 'Could not find the saved local recording to retry upload. Please keep this app open and contact support.'
+        message: 'Could not find the saved local recording to retry upload. Please keep this app open and contact support.',
+        // Local-disk read failure — never reached the backend, no DTO.
+        errorCode: null
       })
       return
     }
@@ -1053,7 +1106,9 @@ function App(): JSX.Element {
         state: 'upload_failed',
         meetingId,
         title,
-        message: 'Upload still failed. The recording remains saved locally; retry once the backend is healthy.'
+        message: 'Upload still failed. The recording remains saved locally; retry once the backend is healthy.',
+        // uploadAudio() returned null again — same as the initial attempt, no DTO.
+        errorCode: null
       })
     }
   }
@@ -1155,7 +1210,9 @@ function App(): JSX.Element {
           title: entry.title,
           message: savedLocally
             ? 'Recovered recording saved locally, but upload failed. Retry once the backend is reachable.'
-            : 'Upload failed. The recovered audio is kept; retry once the backend is reachable.'
+            : 'Upload failed. The recovered audio is kept; retry once the backend is reachable.',
+          // uploadAudio() returned null — no DTO, same as the other upload_failed sites.
+          errorCode: null
         })
         if (!savedLocally) setInterrupted((list) => [entry, ...list])
       }

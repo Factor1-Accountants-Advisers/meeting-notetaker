@@ -173,8 +173,10 @@ class Meeting(BaseModel):
     processing_attempt: int = 0
     blob_status: BlobStatus = BlobStatus.pending
     blob_error_message: str | None = None
+    blob_error_code: str | None = None  # FailureCategory value (IN-391)
     delivery_status: DeliveryStatus = DeliveryStatus.not_started
     delivery_error_message: str | None = None
+    delivery_error_code: str | None = None  # FailureCategory value (IN-391)
     # Who the transcript email actually went to and when, kept so a repeated
     # POST /email can replay the original result instead of sending twice.
     # Cleared whenever delivery leaves the emailed state (e.g. re-upload).
@@ -182,6 +184,7 @@ class Meeting(BaseModel):
     delivery_emailed_at: datetime | None = None
     sharepoint_status: SharePointStatus = SharePointStatus.not_started
     sharepoint_error_message: str | None = None
+    sharepoint_error_code: str | None = None  # FailureCategory value (IN-391)
     sharepoint_web_url: str | None = None
     # The uploaded mic track measured as digital silence (recorder's own voice
     # absent). Set at upload; surfaced in the minutes header.

@@ -625,3 +625,120 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     Storage API Bicep lifecycle policy (`meetings-audio/` Cool-at-30/
     delete-at-365) has not been applied — that remains a separate,
     David-reviewed `what-if` step per `notetaker-storage-api/infra/README.md`.
+
+- [ ] IN-391 — Pipeline error handling and status reporting
+  - **Implemented on `in391-error-reporting`** per the approved design
+    (`docs/superpowers/specs/2026-07-29-in391-pipeline-error-handling-design.md`)
+    and plan (`docs/superpowers/plans/2026-07-29-in391-pipeline-error-handling.md`,
+    Tasks 0-9 done, including the Task 9 verification sweep). A new pure
+    taxonomy module (`backend/app/services/failure_reasons.py`) maps
+    exceptions and exception-less condition branches to 7 fixed categories
+    (`network`, `azure_signin`, `service_unavailable`, `audio_problem`
+    [reserved, currently unreachable by design], `processing_error`,
+    `interrupted`, `stalled`), each with one fixed user sentence — raw
+    exception text never reaches a user-facing field again. Classification
+    unwraps `__cause__` chains (bounded depth 5) so wrapper exceptions (e.g.
+    `MeetingVoiceprintsUnavailable`) classify by their root cause; excludes
+    local file errors (`FileNotFoundError`/`PermissionError`/etc.) from the
+    network bucket via an explicit type list before falling back to the
+    `OSError`-without-`filename` heuristic; and gives `StorageApiUnavailable`
+    (which has no `__cause__`) an explicit `service_unavailable` mapping so a
+    real Azure outage isn't hidden as a generic processing error.
+  - **Four hook sites wired**, all logging a structured `delivery_failure
+    meeting=<uuid> stage=<pipeline|blob|sharepoint|email> category=<cat>
+    code=<ExceptionClass|branch-name> detail=<...>` line: the pipeline
+    catch-all plus its startup interrupted-marking and stall-watchdog sites
+    (`services/pipeline.py`); every Blob delivery failure branch *including*
+    the previously-uncovered startup reconcile site for orphaned
+    pending/ready deliveries (`services/blob_delivery.py`
+    `reconcile_interrupted_blob_deliveries` — added mid-implementation, not
+    in the original 4-site list, because it shared the same
+    ad-hoc-string problem); and SharePoint/email in
+    `routers/meetings.py` (both explicit sign-in branches keep their
+    existing distinct wording but now also set the category code).
+  - **Schema:** three new nullable `blob_error_code` / `sharepoint_error_code`
+    / `delivery_error_code` fields on `Meeting` (`backend/app/schemas.py`),
+    backward-compatible (legacy `store.json` entries load with `None`).
+    `processing_error_code` already existed and is reused.
+  - **Renderer:** `processingErrorCode`/`blobErrorCode`/`sharePointErrorCode`/
+    `deliveryErrorCode` mapped in `lib/api.ts`; new pure
+    `lib/failureDisplay.ts` (`failedChipLabel`, `categoryLabel`,
+    `showUnconfirmedChip`). Wired into the **live** surfaces — `HomeScreen`'s
+    `postCaptureNotice`/`blobDeliveryNotices` cards now render `Failed:
+    <category>` labels with tri-state `errorCode` semantics (string =
+    labelled, `null` = generic fallback, `undefined` = not actually a
+    failure, e.g. `unconfirmed` email — IN-478). Also wired into
+    `MeetingsScreen.tsx`/`MeetingReviewScreen.tsx` (chips + per-concern
+    failure rows with retry), **discovered mid-Task-7 to be dead code**
+    (nothing routes to them since the IN-73/IN-74 UI removals, predating
+    IN-391) — kept for potential revival; removal is a separate product
+    decision, documented as Task 7b in the plan.
+  - **Full reference doc:** `docs/pipeline-error-handling.md` — the four
+    state machines, taxonomy + sentence table, classification rules as
+    implemented, retry/partial-success matrix, audio-preservation guarantee
+    (verified: no failure path deletes audio; retention is age-based via
+    `retention.py`, not status-based), support log-line format incl. the
+    `code=` branch-name convention, live-vs-dead UI surfacing, and two open
+    notes (the startup-interrupted stage-message/error-message text
+    intentionally differs; pyannoteAI 401 currently misclassifies as
+    `azure_signin` — flagged for a future taxonomy revision).
+  - **File-level evidence:** `backend/app/services/failure_reasons.py`
+    (new); `backend/app/schemas.py` (+3 fields); `backend/app/services/pipeline.py`
+    (catch-all, startup reconcile, watchdog); `backend/app/services/blob_delivery.py`
+    (`_finish`, every failure branch, reconcile); `backend/app/routers/meetings.py`
+    (email + SharePoint); `src/renderer/src/lib/api.ts`,
+    `src/renderer/src/lib/failureDisplay.ts` (new),
+    `src/renderer/src/App.tsx`, `src/renderer/src/screens/HomeScreen.tsx`,
+    `src/renderer/src/screens/MeetingsScreen.tsx`,
+    `src/renderer/src/screens/MeetingReviewScreen.tsx`; tests in
+    `backend/tests/test_failure_reasons.py` (new),
+    `backend/tests/test_pipeline_failures.py` (new), plus updates across
+    `test_pipeline_stage_state.py`, `test_pipeline_watchdog.py`,
+    `test_pipeline_voiceprints.py`, `test_blob_delivery.py`,
+    `test_delivery_reliability.py`; `scripts/verify-failure-chips.tsx` (new).
+    Commit range `fc0dea0..8942ac9` on `in391-error-reporting` (21 commits;
+    20 are IN-391 work, `fc0dea0` through `8942ac9` inclusive — the range
+    base is `fc0dea0`'s parent. `57041ba` "fix: set window icon for dev
+    mode..." inside that range is the user's own unrelated commit, left
+    untouched per instruction).
+  - **Task 9 sweep closure (29 Jul 2026, commit `8942ac9`):** all three
+    carried items from the prior verification pass are done: (1)
+    `test_failure_reasons.py` now has table-driven cases classifying a real
+    `urllib.error.HTTPError` (503 → `service_unavailable`, 401 →
+    `azure_signin`, not just the `_FakeHttpError` test double) — confirms the
+    classifier's attribute probe reads the shape real Graph errors actually
+    have, including that `HTTPError.filename` (set to the request URL) does
+    not trip the local-file-error exclusion; (2) `MeetingReviewScreen.tsx`
+    `handleRetryBlob` now captures `blobPollGenRef.current` *before*
+    `await retryBlobDelivery(meetingId)` and bails out immediately after the
+    await if the generation moved, closing the wrong-meeting-poll window a
+    meeting switch during that POST could open (the general poll-survives-
+    meeting-switch mechanism was already fixed in `ea2fe2e`; this was the
+    specific pre-await ordering gap carried forward, not fixed, in `6585c7b`);
+    (3) `pipeline.py` `reconcile_interrupted_pipelines`'s `emailing →
+    unconfirmed` transition now passes `error_code=None` explicitly, matching
+    the equivalent router site (`meetings.py:614`) instead of relying on
+    `set_delivery_state`'s default (behaviour-neutral — the default was
+    already `None`). Also extended, as an optional-but-cheap addition: the
+    three Task 5 `assertLogs` checks in `test_delivery_reliability.py` now
+    also pin the `code=` fragment of each `delivery_failure` log line, not
+    just `stage=`.
+  - **Verification (final sweep, 29 Jul 2026, commit `8942ac9`):** full
+    backend suite — `PYTHONPATH=backend backend/.venv/Scripts/python.exe -m
+    unittest discover -s backend/tests -t backend` — **269 tests, 1
+    failure**: the documented pre-existing
+    `test_stub_serializes_concurrent_exports_for_one_meeting`
+    concurrency-timing flake (`test_storage_api_meetings.py`), unrelated to
+    this work (the 2-test increase over the prior pass's 267 is the two new
+    real-`HTTPError` cases above). All renderer gates pass: `npm run
+    typecheck` (clean, node + web), `npm run build` (electron-vite, all three
+    bundles), `npm run verify:failure-chips`, `npm run verify:email-notice`,
+    and — run on this branch for the first time in this task —
+    `npm run verify:storage-cutover` (Storage API route-classification /
+    identity-header / env-default checks; unaffected by the IN-391
+    schema/API changes, since those touch meeting delivery fields, not the
+    storage-cutover routing surface). `git diff --check` reports no
+    whitespace errors; `git log --oneline main..HEAD` shows a coherent,
+    task-ordered commit sequence.
+  - No Jira transition, merge, push, deployment, or production smoke was
+    performed from this task.

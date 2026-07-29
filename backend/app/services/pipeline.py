@@ -31,6 +31,13 @@ from app.schemas import (
 from app.paths import audio_dir
 from app.services import audio_checks
 from app.services.blob_delivery import deliver_meeting_to_blob
+from app.services.failure_reasons import (
+    FailureCategory,
+    FailureReason,
+    USER_SENTENCES,
+    classify,
+    log_delivery_failure,
+)
 from app.services.llm import get_llm_provider
 from app.services.meeting_export import refresh_meeting_export
 from app.services.meeting_voiceprints import resolve_meeting_voiceprints
@@ -141,6 +148,7 @@ def set_delivery_state(
     status: DeliveryStatus,
     error_message: str | None = None,
     *,
+    error_code: str | None = None,
     recipients: list[str] | None = None,
     emailed_at: datetime | None = None,
 ) -> None:
@@ -150,6 +158,7 @@ def set_delivery_state(
             update={
                 "delivery_status": status,
                 "delivery_error_message": error_message,
+                "delivery_error_code": error_code,
                 # Replay fields only survive while the state is emailed; any
                 # other transition (reset, failure, re-upload) clears them so a
                 # regenerated transcript can be emailed fresh.
@@ -191,17 +200,29 @@ def reconcile_interrupted_pipelines() -> int:
                 DeliveryStatus.unconfirmed,
                 "Email delivery was interrupted by a backend restart — the email "
                 "may already have been delivered. Check your inbox before resending.",
+                # unconfirmed is not a failure category (IN-478 regression
+                # guard) — explicit to match the router's emailing→unconfirmed
+                # site (meetings.py:614) rather than relying on the default.
+                error_code=None,
             )
             changed += 1
         if meeting.pipeline_status not in (PipelineStatus.queued, PipelineStatus.processing):
             continue
+        log_delivery_failure(
+            meeting_id,
+            "pipeline",
+            FailureReason.for_category(
+                FailureCategory.interrupted, detail="startup_reconcile"
+            ),
+            code="startup_reconcile",
+        )
         set_pipeline_state(
             meeting_id,
             PipelineStatus.failed,
             PipelineStage.failed,
             "Processing was interrupted by a backend restart. Retry processing when ready.",
-            error_code="Interrupted",
-            error_message="Backend restarted while this meeting was processing.",
+            error_code=FailureCategory.interrupted.value,
+            error_message=USER_SENTENCES[FailureCategory.interrupted],
         )
         changed += 1
     if changed:
@@ -239,13 +260,20 @@ def sweep_stuck_pipelines() -> int:
         )
         if reference is None or (now - reference).total_seconds() <= limit:
             continue
+        stall_detail = f"No pipeline progress for over {int(limit)}s while {status.value}."
+        log_delivery_failure(
+            meeting_id,
+            "pipeline",
+            FailureReason.for_category(FailureCategory.stalled, detail=stall_detail),
+            code="watchdog",
+        )
         set_pipeline_state(
             meeting_id,
             PipelineStatus.failed,
             PipelineStage.failed,
-            "Processing stalled before finishing. The recording is saved — retry to try again.",
-            error_code="Stalled",
-            error_message=f"No pipeline progress for over {int(limit)}s while {status.value}.",
+            USER_SENTENCES[FailureCategory.stalled],
+            error_code=FailureCategory.stalled.value,
+            error_message=USER_SENTENCES[FailureCategory.stalled],
         )
         changed += 1
     if changed:
@@ -394,13 +422,15 @@ async def run_pipeline(
         logger.info("pipeline ready for %s at %s", meeting_id, _now())
     except Exception as exc:
         logger.exception("pipeline failed for %s", meeting_id)
+        reason = classify(exc, stage="pipeline")
+        log_delivery_failure(meeting_id, "pipeline", reason, code=exc.__class__.__name__)
         set_pipeline_state(
             meeting_id,
             PipelineStatus.failed,
             PipelineStage.failed,
-            "Processing failed. The recording is saved and can be retried.",
-            error_code=exc.__class__.__name__,
-            error_message=str(exc)[:500] or "Processing failed",
+            reason.user_sentence,
+            error_code=reason.category.value,
+            error_message=reason.user_sentence,
         )
     finally:
         # Async task runs outside any request, so persist explicitly.
@@ -423,6 +453,7 @@ def kick_pipeline(
     if meeting is not None:
         meeting.blob_status = BlobStatus.pending
         meeting.blob_error_message = None
+        meeting.blob_error_code = None
     store.BLOB_DELIVERY_STARTED_AT.pop(meeting_id, None)
     set_delivery_state(meeting_id, DeliveryStatus.not_started)
     set_pipeline_state(

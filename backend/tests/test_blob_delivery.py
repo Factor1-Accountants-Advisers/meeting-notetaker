@@ -44,7 +44,8 @@ from app.services.blob_delivery import (
     meeting_time_basis_utc,
     reconcile_interrupted_blob_deliveries,
 )
-from app.services.storage_api import AudioUploadGrant
+from app.services.failure_reasons import FailureCategory, USER_SENTENCES
+from app.services.storage_api import AudioUploadGrant, StorageApiUnavailable
 
 
 def _meeting(**updates) -> Meeting:
@@ -545,13 +546,21 @@ class BlobDeliveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_configured_storage_without_token_fails_before_provider_call(self):
         client = CaptureStorageClient()
 
-        result = await self._deliver(client, token="   ")
+        with self.assertLogs("app.services.failure_reasons", level="WARNING") as captured:
+            result = await self._deliver(client, token="   ")
 
         self.assertEqual(client.calls, [])
         self.assertEqual(result.blob_status, BlobStatus.failed)
+        self.assertEqual(result.blob_error_code, "azure_signin")
         self.assertEqual(
             result.blob_error_message,
-            "Sign in is required to upload this meeting to secure storage.",
+            USER_SENTENCES[FailureCategory.azure_signin],
+        )
+        self.assertTrue(
+            any(
+                "delivery_failure" in line and "stage=blob" in line
+                for line in captured.output
+            )
         )
 
     async def test_disabled_storage_skips_without_mutating_or_calling_provider(self):
@@ -589,9 +598,10 @@ class BlobDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(client.calls, [])
                 self.assertEqual(result.blob_status, BlobStatus.failed)
+                self.assertEqual(result.blob_error_code, "processing_error")
                 self.assertEqual(
                     result.blob_error_message,
-                    "Secure storage upload is waiting for processed meeting data.",
+                    USER_SENTENCES[FailureCategory.processing_error],
                 )
                 self.meeting.pipeline_status = PipelineStatus.ready
                 store.MEETING_EXPORTS[self.meeting.id] = _export_payload(
@@ -606,24 +616,26 @@ class BlobDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(client.calls, [])
         self.assertEqual(result.blob_status, BlobStatus.failed)
+        self.assertEqual(result.blob_error_code, "processing_error")
         self.assertEqual(
             result.blob_error_message,
-            "Secure storage upload failed while uploading audio. Retry when connected.",
+            USER_SENTENCES[FailureCategory.processing_error],
         )
 
-    async def test_audio_filesystem_error_is_contained_as_audio_failure(self):
+    async def test_audio_filesystem_error_classifies_as_processing_error(self):
         client = CaptureStorageClient()
         with patch(
             "app.services.blob_delivery.audio_dir",
-            side_effect=OSError("private filesystem path"),
+            side_effect=PermissionError("private filesystem path"),
         ):
             result = await self._deliver(client)
 
         self.assertEqual(client.calls, [])
         self.assertEqual(result.blob_status, BlobStatus.failed)
+        self.assertEqual(result.blob_error_code, "processing_error")
         self.assertEqual(
             result.blob_error_message,
-            "Secure storage upload failed while uploading audio. Retry when connected.",
+            USER_SENTENCES[FailureCategory.processing_error],
         )
 
     async def test_audio_failure_stops_before_export(self):
@@ -633,9 +645,10 @@ class BlobDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([call[0] for call in client.calls], ["sas", "audio"])
         self.assertEqual(result.blob_status, BlobStatus.failed)
+        self.assertEqual(result.blob_error_code, "network")
         self.assertEqual(
             result.blob_error_message,
-            "Secure storage upload failed while uploading audio. Retry when connected.",
+            USER_SENTENCES[FailureCategory.network],
         )
 
     async def test_json_failure_happens_after_audio_and_uses_record_failure(self):
@@ -645,9 +658,61 @@ class BlobDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([call[0] for call in client.calls], ["sas", "audio", "export"])
         self.assertEqual(result.blob_status, BlobStatus.failed)
+        self.assertEqual(result.blob_error_code, "network")
         self.assertEqual(
             result.blob_error_message,
-            "Secure storage upload failed while uploading the meeting record. Retry when connected.",
+            USER_SENTENCES[FailureCategory.network],
+        )
+
+    async def test_export_connection_error_classifies_as_network_failure(self):
+        client = CaptureStorageClient()
+
+        def _raise_connection_error(*args, **kwargs):
+            raise ConnectionError("network down")
+
+        client.upload_meeting_export = _raise_connection_error
+
+        with self.assertLogs("app.services.failure_reasons", level="WARNING") as captured:
+            result = await self._deliver(client, include_audio=False)
+
+        self.assertEqual(result.blob_status, BlobStatus.failed)
+        self.assertEqual(result.blob_error_code, "network")
+        self.assertEqual(
+            result.blob_error_message,
+            USER_SENTENCES[FailureCategory.network],
+        )
+        self.assertNotIn("network down", result.blob_error_message)
+        self.assertTrue(
+            any(
+                "delivery_failure" in line and "stage=blob" in line
+                for line in captured.output
+            )
+        )
+
+    async def test_audio_storage_unavailable_classifies_as_service_unavailable(self):
+        client = CaptureStorageClient()
+
+        def _raise_unavailable(*args, **kwargs):
+            raise StorageApiUnavailable(
+                "blob storage was unavailable for audio upload"
+            )
+
+        client.upload_audio_to_grant = _raise_unavailable
+
+        with self.assertLogs("app.services.failure_reasons", level="WARNING") as captured:
+            result = await self._deliver(client)
+
+        self.assertEqual(result.blob_status, BlobStatus.failed)
+        self.assertEqual(result.blob_error_code, "service_unavailable")
+        self.assertEqual(
+            result.blob_error_message,
+            USER_SENTENCES[FailureCategory.service_unavailable],
+        )
+        self.assertTrue(
+            any(
+                "delivery_failure" in line and "stage=blob" in line
+                for line in captured.output
+            )
         )
 
     async def test_unexpected_error_never_escapes_and_audit_contains_no_secrets(self):
@@ -888,19 +953,32 @@ class BlobDeliveryReconciliationTests(unittest.TestCase):
             meeting.id: meeting.model_dump() for meeting in untouched
         }
 
-        with patch("app.services.blob_delivery.store.save_snapshot") as save:
+        with self.assertLogs(
+            "app.services.failure_reasons", level="WARNING"
+        ) as captured, patch(
+            "app.services.blob_delivery.store.save_snapshot"
+        ) as save:
             changed = reconcile_interrupted_blob_deliveries()
 
         self.assertEqual(changed, 1)
         self.assertEqual(ready_pending.blob_status, BlobStatus.failed)
+        self.assertEqual(ready_pending.blob_error_code, "interrupted")
         self.assertEqual(
             ready_pending.blob_error_message,
-            "Secure storage upload was interrupted. Retry when connected.",
+            USER_SENTENCES[FailureCategory.interrupted],
         )
         self.assertEqual(ready_pending.pipeline_status, PipelineStatus.ready)
         self.assertEqual(ready_pending.action_item_count, 4)
         self.assertNotIn(ready_pending.id, store.BLOB_DELIVERY_STARTED_AT)
         save.assert_called_once_with()
+        self.assertTrue(
+            any(
+                "delivery_failure" in line
+                and "stage=blob" in line
+                and "code=startup_reconcile" in line
+                for line in captured.output
+            )
+        )
         for meeting in untouched:
             self.assertEqual(meeting.model_dump(), untouched_before[meeting.id])
 

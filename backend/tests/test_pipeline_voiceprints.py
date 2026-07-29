@@ -137,7 +137,7 @@ class PipelineVoiceprintTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(failed.pipeline_status, PipelineStatus.failed)
             self.assertEqual(
                 failed.processing_error_code,
-                "MeetingVoiceprintsUnavailable",
+                "processing_error",
             )
             self.assertIn("retry", failed.processing_error_message.lower())
 
