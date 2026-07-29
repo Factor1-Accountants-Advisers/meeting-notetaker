@@ -49,7 +49,10 @@ class Settings(BaseSettings):
     pyannote_hf_token: str = ""  # legacy/dev only; not the Slice 1 pyannoteAI API credential
 
     # SharePoint transcript delivery. Empty values use the local locked-folder stand-in.
-    sharepoint_drive_id: str = ""
+    # Default drive ID is the real InnovationsandSystems/Transcriptions library
+    # (provisioned by David A, 30 Jun 2026; discovered 29 Jul 2026). Safe to
+    # commit — this is a non-secret identifier like the Storage API URL.
+    sharepoint_drive_id: str = "b!its7p8x1KUWVWYJnCLxVhp1w_W9IycxPs8OjtR0Tbd_9RFZUGE0fTJ_8PkmnBf55"
     sharepoint_folder_path: str = ""
 
     # Raw-audio retention (requirements §6.2 engineering default).
