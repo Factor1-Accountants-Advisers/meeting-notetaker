@@ -67,6 +67,44 @@ class ClassifyTests(unittest.TestCase):
         reason = classify(ValueError("x" * 2000), stage="pipeline")
         self.assertLessEqual(len(reason.technical_detail), 500)
 
+    def test_local_file_errors_are_not_misclassified_as_network(self) -> None:
+        # Bare `isinstance(root, OSError)` used to catch these too — a local
+        # file error is not a network problem.
+        reason = classify(
+            FileNotFoundError(2, "No such file", "x.webm"), stage="pipeline"
+        )
+        self.assertIs(reason.category, FailureCategory.processing_error)
+
+    def test_socket_style_os_error_without_filename_classifies_as_network(self) -> None:
+        reason = classify(OSError("connection reset"), stage="blob")
+        self.assertIs(reason.category, FailureCategory.network)
+
+    def test_raise_from_none_does_not_unwrap_the_swallowed_context(self) -> None:
+        try:
+            try:
+                raise ConnectionError("reset by peer")
+            except ConnectionError:
+                raise RuntimeError("wrapped, cause suppressed") from None
+        except RuntimeError as wrapper:
+            reason = classify(wrapper, stage="pipeline")
+        # `from None` explicitly suppresses the cause; classify must not
+        # reach into __context__ to find the swallowed ConnectionError.
+        self.assertIs(reason.category, FailureCategory.processing_error)
+
+    def test_multiline_exception_text_yields_single_line_detail(self) -> None:
+        reason = classify(ValueError("line one\nline two\nline three"), stage="pipeline")
+        self.assertNotIn("\n", reason.technical_detail)
+
+    def test_wrapped_exception_detail_contains_cause_marker(self) -> None:
+        try:
+            try:
+                raise ConnectionError("reset by peer")
+            except ConnectionError as cause:
+                raise RuntimeError("voiceprint lookup unavailable") from cause
+        except RuntimeError as wrapper:
+            reason = classify(wrapper, stage="pipeline")
+        self.assertIn("(cause: ", reason.technical_detail)
+
     def test_every_category_has_a_user_sentence(self) -> None:
         for category in FailureCategory:
             reason = FailureReason.for_category(category, detail="branch")

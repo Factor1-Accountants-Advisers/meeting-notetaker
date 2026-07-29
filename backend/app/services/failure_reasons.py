@@ -49,7 +49,6 @@ class FailureReason:
         return cls(category, USER_SENTENCES[category], detail[:_DETAIL_LIMIT])
 
 
-_NETWORK_TYPES = (ConnectionError, TimeoutError)
 _SIGNIN_STATUSES = {401, 403}
 _UNAVAILABLE_STATUSES = {408, 429}
 
@@ -65,11 +64,13 @@ def _status_code(exc: BaseException) -> int | None:
 
 
 def _is_network_error(exc: BaseException) -> bool:
-    if isinstance(exc, _NETWORK_TYPES):
-        return True
-    # urllib.error.URLError without importing urllib at module scope for
-    # every caller; OSError covers DNS/socket failures raised by urllib.
-    return exc.__class__.__name__ == "URLError" or isinstance(exc, OSError)
+    # OSError covers DNS/socket/connection/timeout failures (ConnectionError,
+    # TimeoutError, and urllib's URLError all subclass it) — none of those
+    # carry a `filename`. Local file errors (FileNotFoundError,
+    # PermissionError, ...) are also OSError subclasses but always set
+    # `filename`, so we exclude them here rather than misclassify a local
+    # file problem as a network problem.
+    return isinstance(exc, OSError) and getattr(exc, "filename", None) is None
 
 
 def classify(exc: BaseException, *, stage: str) -> FailureReason:
@@ -85,12 +86,17 @@ def classify(exc: BaseException, *, stage: str) -> FailureReason:
     assigned directly at the startup/watchdog marking sites, which have no
     exception object.
     """
-    detail = f"{exc.__class__.__name__}: {exc}"[:_DETAIL_LIMIT]
     root: BaseException = exc
     for _ in range(5):  # bounded: cause chains are short; avoid cycles
         if root.__cause__ is None:
             break
         root = root.__cause__
+    detail = f"{exc.__class__.__name__}: {exc}"
+    if root is not exc:
+        # The wrapper's own text rarely says what actually went wrong —
+        # append the root cause so the delivery_failure log line is useful.
+        detail += f" (cause: {root})"
+    detail = detail.replace("\n", " ")[:_DETAIL_LIMIT]
     status = _status_code(root)
     if status in _SIGNIN_STATUSES:
         category = FailureCategory.azure_signin

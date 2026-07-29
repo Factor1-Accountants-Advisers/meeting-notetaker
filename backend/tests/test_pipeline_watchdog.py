@@ -43,7 +43,7 @@ class PipelineWatchdogTests(unittest.TestCase):
         mid = _put(PipelineStatus.queued, now - timedelta(minutes=5))
         self.assertEqual(sweep_stuck_pipelines(), 1)
         self.assertEqual(store.MEETINGS[mid].pipeline_status, PipelineStatus.failed)
-        self.assertEqual(store.MEETINGS[mid].processing_error_code, "Stalled")
+        self.assertEqual(store.MEETINGS[mid].processing_error_code, "stalled")
 
     def test_freshly_queued_meeting_is_left_alone(self):
         now = datetime.now(timezone.utc)

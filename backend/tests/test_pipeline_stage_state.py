@@ -142,10 +142,10 @@ class PipelineStageStateTests(unittest.TestCase):
             meeting = store.MEETINGS[interrupted_id]
             self.assertEqual(meeting.pipeline_status, PipelineStatus.failed)
             self.assertEqual(meeting.pipeline_stage, PipelineStage.failed)
-            self.assertEqual(meeting.processing_error_code, "Interrupted")
+            self.assertEqual(meeting.processing_error_code, "interrupted")
             self.assertEqual(
                 meeting.processing_error_message,
-                "Backend restarted while this meeting was processing.",
+                "The app restarted while this meeting was processing. Retry to continue.",
             )
             self.assertIn("retry", meeting.pipeline_stage_message.lower())
             self.assertIsNotNone(meeting.pipeline_completed_at)
