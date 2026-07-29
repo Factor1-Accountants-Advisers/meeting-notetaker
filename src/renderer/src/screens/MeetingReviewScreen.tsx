@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -88,6 +88,12 @@ const SOURCE_LABELS = {
   in_person: 'In person · microphone',
   upload: 'Uploaded recording'
 } as const
+
+// POST /blob/retry kicks a background delivery task and returns immediately
+// with blob_status='pending' — bound how long the review screen polls for a
+// definitive outcome before giving up and letting the user retry again.
+const BLOB_RETRY_POLL_CAP_MS = 60_000
+const BLOB_RETRY_POLL_INTERVAL_MS = 2000
 
 function msToClock(ms: number): string {
   const total = Math.floor(ms / 1000)
@@ -196,8 +202,20 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
   const [audit, setAudit] = useState<AuditEntryDto[]>([])
   const [emailOpen, setEmailOpen] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
+  // Tracks an in-flight blob retry (POST /blob/retry kicks a background task
+  // and returns 'pending' immediately) so the failure row can show a
+  // "Retrying…" state and clear itself once the background job settles.
+  const [blobRetrying, setBlobRetrying] = useState(false)
+  const blobPollCancelledRef = useRef(false)
 
   const inFlight = vm?.pipelineStatus === 'queued' || vm?.pipelineStatus === 'processing'
+
+  useEffect(() => {
+    blobPollCancelledRef.current = false
+    return () => {
+      blobPollCancelledRef.current = true
+    }
+  }, [meetingId])
 
   useEffect(() => {
     let cancelled = false
@@ -281,19 +299,60 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
       )
   }
 
+  // Bounded poll for a blob retry's outcome. Starts ONLY from a retry click
+  // (never from seeing blobStatus === 'pending' on load — that's also the
+  // default, never-delivered-yet state, and polling off it unconditionally
+  // would spin forever for a meeting that hasn't started delivery at all).
+  const pollBlobRetry = (): void => {
+    const startedAt = Date.now()
+    const tick = async (): Promise<void> => {
+      if (blobPollCancelledRef.current) return
+      const review = await fetchMeetingReview(meetingId)
+      if (blobPollCancelledRef.current) return
+      if (review) {
+        const m = review.meeting
+        setVm((prev) =>
+          prev
+            ? {
+                ...prev,
+                blobStatus: m.blob_status,
+                blobErrorMessage: m.blob_error_message,
+                blobErrorCode: m.blob_error_code
+              }
+            : prev
+        )
+        if (m.blob_status !== 'pending') {
+          setBlobRetrying(false)
+          return
+        }
+      }
+      if (Date.now() - startedAt >= BLOB_RETRY_POLL_CAP_MS) {
+        setBlobRetrying(false)
+        return
+      }
+      window.setTimeout(() => void tick(), BLOB_RETRY_POLL_INTERVAL_MS)
+    }
+    void tick()
+  }
+
   const handleRetryBlob = async (): Promise<void> => {
     const dto = await retryBlobDelivery(meetingId)
-    if (dto)
+    if (!dto) return
+    // The background job hasn't reported a new outcome yet — keep the last
+    // known failure label/message on screen (only the button switches to
+    // "Retrying…") rather than overwriting it with the transient pending
+    // response, which carries no error detail.
+    setVm((prev) => (prev ? { ...prev, blobStatus: dto.blob_status } : prev))
+    if (dto.blob_status === 'pending') {
+      setBlobRetrying(true)
+      pollBlobRetry()
+    } else {
       setVm((prev) =>
         prev
-          ? {
-              ...prev,
-              blobStatus: dto.blob_status,
-              blobErrorMessage: dto.blob_error_message,
-              blobErrorCode: dto.blob_error_code
-            }
+          ? { ...prev, blobErrorMessage: dto.blob_error_message, blobErrorCode: dto.blob_error_code }
           : prev
       )
+    }
   }
 
   const handleRetrySharePoint = async (): Promise<void> => {
@@ -391,13 +450,17 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
       onRetry: () => void handleRetry()
     })
   }
-  if (vm.blobStatus === 'failed') {
+  // Kept visible while a retry is in flight even though blobStatus has
+  // already flipped to 'pending' — otherwise the row (and its only outcome
+  // indicator) would vanish for as long as the background job runs.
+  if (vm.blobStatus === 'failed' || blobRetrying) {
     failedConcerns.push({
       key: 'blob',
       label: categoryLabel(vm.blobErrorCode),
       message: vm.blobErrorMessage || 'Saving the recording to secure storage failed.',
       retryLabel: 'Retry storage upload',
-      onRetry: () => void handleRetryBlob()
+      onRetry: () => void handleRetryBlob(),
+      retrying: blobRetrying
     })
   }
   if (vm.sharePointStatus === 'failed') {
@@ -448,6 +511,12 @@ export function MeetingReviewScreen({ meetingId, onBack }: Props): JSX.Element {
           onClose={() => {
             setEmailOpen(false)
             refreshAudit()
+            // The backend updates delivery_status synchronously on send, but
+            // the modal itself never pushes that outcome into the VM — and
+            // polling is off once the pipeline is 'ready'. Without this
+            // refetch a successful resend leaves the "Failed: …" email row
+            // showing until the user leaves and re-enters the screen.
+            void fetchMeetingReview(meetingId).then((dto) => dto && setVm(vmFromDto(dto)))
           }}
         />
       )}
@@ -499,6 +568,8 @@ interface ConcernRow {
   message: string
   retryLabel: string
   onRetry: () => void
+  /** True while a previously-kicked retry's outcome is still in flight. */
+  retrying?: boolean
 }
 
 function ConcernRowView({ row, divider }: { row: ConcernRow; divider: boolean }): JSX.Element {
@@ -515,9 +586,10 @@ function ConcernRowView({ row, divider }: { row: ConcernRow; divider: boolean })
       <button
         type="button"
         onClick={row.onRetry}
-        className="flex shrink-0 items-center gap-1.5 rounded-md border-[0.5px] border-edge-info bg-bg-info px-3 py-1.5 text-[12px] text-content-info"
+        disabled={row.retrying}
+        className="flex shrink-0 items-center gap-1.5 rounded-md border-[0.5px] border-edge-info bg-bg-info px-3 py-1.5 text-[12px] text-content-info disabled:cursor-not-allowed disabled:opacity-45"
       >
-        {row.retryLabel}
+        {row.retrying ? 'Retrying…' : row.retryLabel}
       </button>
     </div>
   )

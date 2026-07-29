@@ -40,9 +40,7 @@ export function failedChipLabel(m: FailureChipInput): string | null {
   ]
   for (const [status, code] of ordered) {
     if (status === 'failed') {
-      const label =
-        code && code in CATEGORY_LABELS ? CATEGORY_LABELS[code as FailureCategory] : 'Processing error'
-      return `Failed: ${label}`
+      return `Failed: ${categoryLabel(code)}`
     }
   }
   return null
