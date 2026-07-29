@@ -5,6 +5,7 @@ import {
   Check,
   ChevronRight,
   CircleCheck,
+  Fingerprint,
   Loader2,
   LogOut,
   MessageSquareWarning,
@@ -23,6 +24,8 @@ interface Props {
   onSetTheme: (theme: Theme) => void
   userName: string
   userEmail: string
+  isStorageAdmin: boolean
+  onOpenVoiceprintAdmin: () => void
   onSignOut: () => void
   onClose: () => void
 }
@@ -46,6 +49,8 @@ export function SettingsScreen({
   onSetTheme,
   userName,
   userEmail,
+  isStorageAdmin,
+  onOpenVoiceprintAdmin,
   onSignOut,
   onClose
 }: Props): JSX.Element {
@@ -212,6 +217,22 @@ export function SettingsScreen({
             </span>
             <ChevronRight size={16} strokeWidth={1.75} className="text-content-tertiary" />
           </button>
+
+          {isStorageAdmin && (
+            <SettingsGroup title="Administration">
+              <button
+                type="button"
+                onClick={onOpenVoiceprintAdmin}
+                className="ui-control flex w-full items-center justify-between gap-3 py-2.5 text-left text-[14px] text-content-primary hover:text-content-info"
+              >
+                <span className="flex items-center gap-2">
+                  <Fingerprint size={16} strokeWidth={1.75} />
+                  Voiceprint management
+                </span>
+                <ChevronRight size={16} className="text-content-tertiary" />
+              </button>
+            </SettingsGroup>
+          )}
         </div>
       ) : (
         <div key="settings-advanced" className="ui-enter flex flex-col gap-3">

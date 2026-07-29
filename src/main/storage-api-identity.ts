@@ -36,6 +36,24 @@ export function storageTokenAcquireOptions(scope: string): StorageTokenAcquireOp
   return { scopes: [scope], forceRefresh: true }
 }
 
+/**
+ * Presentation-only capability check for IN-380. The Storage API remains the
+ * enforcement point and validates the signed token again on every admin call.
+ */
+export function hasStorageAdminRole(accessToken: string | null | undefined): boolean {
+  if (!accessToken) return false
+  const parts = accessToken.split('.')
+  if (parts.length !== 3) return false
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as {
+      roles?: unknown
+    }
+    return Array.isArray(payload.roles) && payload.roles.includes('StorageApi.Admin')
+  } catch {
+    return false
+  }
+}
+
 export function storageIdentityHeaders(identity: StorageIdentity): Record<string, string> {
   const headers: Record<string, string> = {}
   const email = clean(identity.email)

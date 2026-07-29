@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import store
 from app.config import get_settings
-from app.routers import action_items, health, meetings, people, search, support
+from app.routers import action_items, health, meetings, people, search, support, voiceprint_admin
 from app.services.blob_delivery import reconcile_interrupted_blob_deliveries
 from app.services.pipeline import pipeline_watchdog_loop, reconcile_interrupted_pipelines
 from app.services.retention import retention_loop
@@ -58,6 +58,7 @@ def create_app() -> FastAPI:
     app.include_router(people.router, prefix=settings.api_v1_prefix)
     app.include_router(search.router, prefix=settings.api_v1_prefix)
     app.include_router(support.router, prefix=settings.api_v1_prefix)
+    app.include_router(voiceprint_admin.router, prefix=settings.api_v1_prefix)
     return app
 
 

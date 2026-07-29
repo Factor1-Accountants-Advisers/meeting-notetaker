@@ -3,6 +3,7 @@ import { AppShell } from './components/shell/AppShell'
 import { EnrollmentModal } from './components/EnrollmentModal'
 import { HomeScreen } from './screens/HomeScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
+import { VoiceprintAdminScreen } from './screens/VoiceprintAdminScreen'
 import { LoginScreen, type User } from './screens/LoginScreen'
 import { RecordingScreen, type RecordingSession } from './screens/RecordingScreen'
 import {
@@ -43,7 +44,7 @@ function loadUser(): User | null {
   }
 }
 
-type View = ScreenId | 'recording'
+type View = ScreenId | 'recording' | 'voiceprint-admin'
 
 // IN-129: interrupted-recording spill entries surfaced for recovery on launch.
 type SpillEntry = Awaited<ReturnType<Window['api']['spillList']>>[number]
@@ -128,6 +129,7 @@ function blobDeliveryNotice(
 
 function App(): JSX.Element {
   const [user, setUser] = useState<User | null>(loadUser)
+  const [storageAdmin, setStorageAdmin] = useState(false)
   const [authChecked, setAuthChecked] = useState(Boolean(loadUser()))
   const [currentPerson, setCurrentPerson] = useState<StaffMember | null>(null)
   const [enrolmentStatus, setEnrolmentStatus] = useState<EnrolmentStatus | null>(null)
@@ -228,6 +230,25 @@ function App(): JSX.Element {
       setAuthChecked(true)
     })
   }, [authChecked])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!user || typeof window.api?.getStorageAdminStatus !== 'function') {
+      setStorageAdmin(false)
+      return
+    }
+    void window.api
+      .getStorageAdminStatus()
+      .then((status) => {
+        if (!cancelled) setStorageAdmin(status.isAdmin)
+      })
+      .catch(() => {
+        if (!cancelled) setStorageAdmin(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [user?.email])
 
   // Keep the latest recording session available to auto-stop callbacks.
   useEffect(() => {
@@ -1281,6 +1302,7 @@ function App(): JSX.Element {
     setEnrollmentError(null)
     setEnrollmentLoading(false)
     setBlobDeliveryNotices({})
+    setStorageAdmin(false)
     setView('home')
     setUser(null)
     if (typeof window.api?.signOut === 'function') {
@@ -1385,7 +1407,7 @@ function App(): JSX.Element {
 
   return (
     <AppShell
-      active={view === 'recording' ? null : view}
+      active={view === 'recording' || view === 'voiceprint-admin' ? null : view}
       onSelect={navigate}
       recordingState={shellRecordingState}
       statusText={shellStatusText}
@@ -1456,7 +1478,15 @@ function App(): JSX.Element {
           onSetTheme={setTheme}
           userName={user.name}
           userEmail={user.email}
+          isStorageAdmin={storageAdmin}
+          onOpenVoiceprintAdmin={() => setView('voiceprint-admin')}
           onSignOut={signOut}
+          onClose={() => setView('home')}
+        />
+      )}
+      {view === 'voiceprint-admin' && storageAdmin && (
+        <VoiceprintAdminScreen
+          onBack={() => setView('settings')}
           onClose={() => setView('home')}
         />
       )}

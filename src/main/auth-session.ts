@@ -10,7 +10,11 @@ import {
   signInInteractively
 } from './auth-msal'
 import { logger } from './logger'
-import { storageTokenAcquireOptions } from './storage-api-identity'
+import {
+  hasStorageAdminRole,
+  isStorageApiEnabled,
+  storageTokenAcquireOptions
+} from './storage-api-identity'
 
 // Signed-in display name; sent as the audit actor on every backend call.
 // Replaced by the Entra ID token subject once real auth lands.
@@ -153,4 +157,11 @@ export function registerAuthSessionIpc(): void {
   })
 
   ipcMain.handle('auth:status', () => getSignedInState())
+
+  ipcMain.handle('auth:storage-admin-status', async () => {
+    const scope = process.env.MN_STORAGE_API_SCOPE
+    if (!scope || !isStorageApiEnabled(process.env)) return { isAdmin: false }
+    const token = await getStorageApiAccessToken(scope)
+    return { isAdmin: hasStorageAdminRole(token) }
+  })
 }

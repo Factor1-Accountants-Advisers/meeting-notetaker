@@ -477,6 +477,83 @@ export interface EnrolmentStatus {
   central_required: boolean
 }
 
+export type VoiceprintAdminStatus = 'active' | 'disabled' | 'deleted'
+
+export interface VoiceprintAdminRecord {
+  person_id: string
+  email: string | null
+  display_name: string
+  status: VoiceprintAdminStatus
+  sample_sources: ('recorded' | 'uploaded')[]
+  consent_recorded_at: string
+  created_at: string | null
+  updated_at: string | null
+  disabled_at: string | null
+  deleted_at: string | null
+  last_used_at: string | null
+  voiceprint_count: number
+}
+
+export interface VoiceprintAdminActionResponse {
+  record: VoiceprintAdminRecord
+  audit_event_id: string
+}
+
+export interface VoiceprintAuditEvent {
+  schema_version: 1
+  event_id: string
+  occurred_at: string
+  actor_oid: string
+  actor_name: string
+  action: string
+  target: string
+  correlation_id: string
+  details: Record<string, unknown>
+}
+
+export async function fetchVoiceprintAdminRecords(): Promise<VoiceprintAdminRecord[]> {
+  const response = await callRequired<{ items: VoiceprintAdminRecord[] }>(
+    'GET',
+    '/voiceprint-admin'
+  )
+  return response.items
+}
+
+export async function fetchVoiceprintAuditEvents(): Promise<VoiceprintAuditEvent[]> {
+  const response = await callRequired<{ items: VoiceprintAuditEvent[] }>(
+    'GET',
+    '/voiceprint-admin/audit-events'
+  )
+  return response.items
+}
+
+export async function disableVoiceprint(
+  personOid: string
+): Promise<VoiceprintAdminActionResponse> {
+  return callRequired<VoiceprintAdminActionResponse>(
+    'POST',
+    `/voiceprint-admin/${encodeURIComponent(personOid)}/disable`
+  )
+}
+
+export async function enableVoiceprint(
+  personOid: string
+): Promise<VoiceprintAdminActionResponse> {
+  return callRequired<VoiceprintAdminActionResponse>(
+    'POST',
+    `/voiceprint-admin/${encodeURIComponent(personOid)}/enable`
+  )
+}
+
+export async function deleteVoiceprint(
+  personOid: string
+): Promise<VoiceprintAdminActionResponse> {
+  return callRequired<VoiceprintAdminActionResponse>(
+    'DELETE',
+    `/voiceprint-admin/${encodeURIComponent(personOid)}`
+  )
+}
+
 export async function fetchEnrolmentStatus(): Promise<EnrolmentStatus | null> {
   return call<EnrolmentStatus>('GET', '/people/me/enrolment-status')
 }

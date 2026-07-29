@@ -151,6 +151,8 @@ export function PreviewApp(): JSX.Element {
           onSetTheme={setTheme}
           userName={USER.name}
           userEmail={USER.email}
+          isStorageAdmin={false}
+          onOpenVoiceprintAdmin={() => undefined}
           onSignOut={() => undefined}
           onClose={() => setView('home')}
         />

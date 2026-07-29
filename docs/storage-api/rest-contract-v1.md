@@ -5,7 +5,8 @@ implemented and live. The voiceprint GET/PUT resource described in section 5
 was implemented under IN-377 and verified live on 23 July 2026. The IN-378
 meeting-candidate operation was deployed and verified live on 24 July 2026.
 The additive IN-381 event taxonomy and administrator audit-read operation are
-implemented on their feature branch and are not deployed. The section 7
+implemented. The IN-380/IN-382 administrator lifecycle operations described
+below are implemented on their feature branch and are not deployed. The section 7
 meeting JSON/audio delivery endpoints were ratified and implemented under
 IN-386 on their feature branch and are not yet deployed. Sections marked
 "reserved" describe future work only.
@@ -78,10 +79,10 @@ Notes:
   deliberate leak-safe default. A sanitized field-list may be **added**
   later (e.g. `error.details.fields`) — that would be an additive change,
   compatible with v1 clients that ignore unknown fields.
-- **409 is reserved, not produced.** No v1.0 operation returns 409. It is
-  reserved for future optimistic-concurrency control (e.g. conditional
-  writes on the voiceprint resource) and will be documented here before any
-  endpoint starts returning it.
+- **409 is produced only for invalid voiceprint lifecycle transitions** (for
+  example trying to enable a deleted tombstone or enable a record that is not
+  disabled). It remains reserved for future optimistic-concurrency control on
+  other resources.
 - 401 is always raised before any storage code runs — the FastAPI auth
   dependency (`require_user`) is attached at router-include time for every
   non-health router, so an unauthenticated or unauthorized request never
@@ -107,8 +108,8 @@ Notes:
   permitted. Path/dependency parameter names must match exactly; this is
   enforced by FastAPI request validation (a misnamed route parameter fails
   closed as `validation_error`, not open).
-- **`require_admin`:** protects
-  `GET /api/v1/voiceprints/audit-events` and any future admin-only operation.
+- **`require_admin`:** protects voiceprint enumeration, lifecycle mutations,
+  and `GET /api/v1/voiceprints/audit-events`.
   It requires the exact `StorageApi.Admin` role regardless of the path.
 
 ## 4. Health
@@ -201,6 +202,8 @@ Field-for-field, this is the same shape the IN-379 client already defines
 | `consent_recorded_at` | timestamp | UTC ISO-8601; when consent for central storage was recorded. |
 | `created_at` | timestamp | UTC ISO-8601. **Server-set.** Preserved across updates. |
 | `updated_at` | timestamp | UTC ISO-8601. **Server-set.** Refreshed on every write. |
+| `disabled_at` | timestamp \| null | Server-set when an administrator disables the record; cleared by enable. |
+| `deleted_at` | timestamp \| null | Server-set tombstone timestamp when artifacts are deleted. |
 
 ### Blob layout
 
@@ -226,6 +229,43 @@ exact normalized-email match plus `status == "active"`. Missing, malformed,
 or stale index entries therefore fail closed. Existing records without an
 `email` remain valid for self GET/PUT but cannot be returned by meeting
 lookup until they are PUT/re-enrolled again or an approved backfill is run.
+
+Meeting use metadata is stored separately so updating last-used cannot race
+with and overwrite a lifecycle mutation:
+
+```
+last-used/{oid}.json
+```
+
+### Administrator voiceprint management — IN-380/IN-382
+
+All operations in this subsection require the exact `StorageApi.Admin` app
+role via `require_admin`; a delegated non-admin receives 403 before storage is
+read or written.
+
+- `GET /api/v1/voiceprints` returns
+  `{"items": VoiceprintAdminRecord[]}` for every status. Each item includes
+  `person_id`, `display_name`, `email`, `status`, `sample_sources`,
+  `consent_recorded_at`, lifecycle timestamps, `last_used_at`, and
+  `voiceprint_count`. It never includes the opaque `voiceprints` array.
+- `POST /api/v1/voiceprints/{person_oid}/disable` sets `status=disabled`,
+  stamps `disabled_at`, appends `voiceprint_disabled`, and returns the safe
+  admin record plus `audit_event_id`.
+- `POST /api/v1/voiceprints/{person_oid}/enable` reactivates only a disabled
+  record, clears `disabled_at`, appends `voiceprint_enabled`, and returns the
+  safe record plus `audit_event_id`.
+- `DELETE /api/v1/voiceprints/{person_oid}` permanently clears the opaque
+  voiceprint artifacts, sets `status=deleted` and `deleted_at`, and retains the
+  metadata tombstone. It appends `voiceprint_deleted` and returns the safe
+  tombstone plus `audit_event_id`.
+- Deleted tombstones cannot be enabled or disabled (409 `conflict`). Missing
+  targets return 404. Disabled and deleted records remain excluded from
+  meeting-candidate results.
+
+Lifecycle data writes and audit appends are separate operations. If the data
+write succeeds and the audit append fails, the request returns 503; retrying
+disable is safe and creates the required audit event. Existing audit entries
+are never mutated or deleted.
 
 ### `POST /api/v1/voiceprints/meeting-candidates` — IN-378
 
@@ -339,6 +379,9 @@ New events use these exact underscore-separated action names:
 | An existing PUT changes status to `disabled` | `voiceprint_disabled` | Target person OID | `status` |
 | An existing PUT changes status to `deleted` | `voiceprint_deleted` | Target person OID | `status` |
 | Any other existing-record PUT | `voiceprint_updated` | Target person OID | `status` |
+| Admin disable | `voiceprint_disabled` | Target person OID | `status`, `previous_status` |
+| Admin enable | `voiceprint_enabled` | Target person OID | `status`, `previous_status` |
+| Admin delete | `voiceprint_deleted` | Target person OID | `status`, `previous_status` |
 | A section 7 export PUT stores meeting JSON | `meeting_json_written` | Current meeting JSON blob path | `meeting_id`, `schema_version`, `revision` |
 | A section 7 audio upload SAS is issued | `meeting_audio_sas_issued` | Audio blob path | `meeting_id` |
 

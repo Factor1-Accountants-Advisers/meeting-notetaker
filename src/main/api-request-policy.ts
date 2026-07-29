@@ -24,6 +24,7 @@ export function isStorageRoute(req: Pick<ApiRequest, 'method' | 'path'>): boolea
     /^\/api\/v1\/meetings\/[^/]+\/(?:audio|retry|finalize|blob\/retry)$/.test(path)
   return (
     storageBackedMeetingRoute ||
+    /^\/api\/v1\/voiceprint-admin(?:\/|$)/.test(path) ||
     (req.method === 'GET' && path === '/api/v1/people/me/enrolment-status') ||
     (req.method === 'POST' && /^\/api\/v1\/people\/[^/]+\/enroll$/.test(path))
   )

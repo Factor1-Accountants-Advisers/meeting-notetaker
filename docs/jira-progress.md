@@ -751,3 +751,42 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     task-ordered commit sequence.
   - No Jira transition, merge, push, deployment, or production smoke was
     performed from this task.
+
+## IN-380 + IN-382 — Voiceprint administration and offboarding (29 Jul 2026)
+
+- Added an administrator-only management surface for every central
+  voiceprint status. The screen shows name, email, status, sample source,
+  consent time, last-used time, artifact count, and the immutable central
+  audit log. Active records can be disabled, disabled records can be
+  re-enabled, and non-deleted records can be permanently deleted after an
+  explicit confirmation.
+- Client-side visibility is derived from the exact `StorageApi.Admin` role in
+  the delegated Storage API token. This is presentation gating only: the
+  renderer never receives the token, every request is relayed through the
+  main process and local FastAPI proxy, and the central Storage API
+  `require_admin` dependency remains the enforcement point. A remote 403 is
+  preserved as 403 by the desktop proxy.
+- Added `backend/app/routers/voiceprint_admin.py` and extended the typed
+  Storage API client with admin-safe list/action/audit models. Lifecycle
+  mutations also write the desktop's required local audit evidence while
+  returning the central immutable audit event id. The desktop copy of
+  `docs/storage-api/rest-contract-v1.md` was refreshed byte-for-byte from the
+  IN-380/IN-382 API branch.
+- Regression coverage: `scripts/verify-voiceprint-admin.tsx` verifies exact
+  role gating, token-injected route classification, admin/non-admin Settings
+  visibility, all lifecycle statuses and metadata, the SelectMenu filter,
+  read-only audit rendering, and explicit disable/delete confirmation copy.
+  `backend/tests/test_voiceprint_admin.py` covers REST paths, safe response
+  models, bounded audit queries, remote 403 preservation, proxy forwarding,
+  and local audit evidence.
+- Verification: full backend suite **275 tests passed, 1 skipped** (`ffmpeg`
+  unavailable); `npm run typecheck`, `npm run
+  verify:voiceprint-admin`, `npm run verify:storage-cutover`, `npm run build`,
+  and `git diff --check` passed. The initial build attempt exposed an
+  incomplete local `node_modules` tree; `npm ci` restored the lockfile-defined
+  dependencies without changing tracked files, after which the build passed.
+- Branch: `codex/in-380-382-voiceprint-admin-ui`, based on required ancestor
+  `1aff07e`. The storage API implementation is the prerequisite draft PR.
+  Real Entra tenant role/claim and production Storage API checks are
+  explicitly deferred to Joseph; no live evidence is claimed here. Jira was
+  not changed.

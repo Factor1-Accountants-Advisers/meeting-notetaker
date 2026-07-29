@@ -139,6 +139,10 @@ const api = {
   getAuthStatus: (): Promise<{ signedIn: boolean; email?: string; name?: string }> =>
     ipcRenderer.invoke('auth:status'),
 
+  /** Presentation-only admin capability; the Storage API authorizes every action. */
+  getStorageAdminStatus: (): Promise<{ isAdmin: boolean }> =>
+    ipcRenderer.invoke('auth:storage-admin-status'),
+
   /** Listen for main→renderer auto-start recording commands. Returns unsubscribe function. */
   onAutoStartRequest: (callback: (data: AutoStartRequest) => void): (() => void) => {
     const handler = (_event: IpcRendererEvent, data: AutoStartRequest) => callback(data)
