@@ -79,6 +79,19 @@ class ClassifyTests(unittest.TestCase):
         reason = classify(ValueError("boom"), stage="pipeline")
         self.assertIs(reason.category, FailureCategory.processing_error)
 
+    def test_wrapper_exception_inherits_cause_category(self) -> None:
+        # e.g. MeetingVoiceprintsUnavailable raised `from` a transport error
+        try:
+            try:
+                raise ConnectionError("reset by peer")
+            except ConnectionError as cause:
+                raise RuntimeError("voiceprint lookup unavailable") from cause
+        except RuntimeError as wrapper:
+            reason = classify(wrapper, stage="pipeline")
+        self.assertIs(reason.category, FailureCategory.network)
+        # detail still names the outer wrapper for grep-ability
+        self.assertIn("RuntimeError", reason.technical_detail)
+
     def test_user_sentence_never_contains_exception_text(self) -> None:
         reason = classify(ValueError("SECRET sas token"), stage="pipeline")
         self.assertNotIn("SECRET", reason.user_sentence)
@@ -195,17 +208,28 @@ def _is_network_error(exc: BaseException) -> bool:
 def classify(exc: BaseException, *, stage: str) -> FailureReason:
     """Map a caught exception to a fixed category + user sentence.
 
+    Wrapper exceptions raised with `raise ... from cause` (e.g.
+    `MeetingVoiceprintsUnavailable` in meeting_voiceprints.py:178) inherit
+    their cause's category: we unwrap explicit `__cause__` links (bounded
+    depth) before applying the rules, so the wrapper classifies by what
+    actually went wrong underneath (network vs 5xx vs auth).
+
     `interrupted`/`stalled` are never produced here — those categories are
     assigned directly at the startup/watchdog marking sites, which have no
     exception object.
     """
     detail = f"{exc.__class__.__name__}: {exc}"[:_DETAIL_LIMIT]
-    status = _status_code(exc)
+    root: BaseException = exc
+    for _ in range(5):  # bounded: cause chains are short; avoid cycles
+        if root.__cause__ is None:
+            break
+        root = root.__cause__
+    status = _status_code(root)
     if status in _SIGNIN_STATUSES:
         category = FailureCategory.azure_signin
     elif status is not None and (status in _UNAVAILABLE_STATUSES or status >= 500):
         category = FailureCategory.service_unavailable
-    elif _is_network_error(exc):
+    elif _is_network_error(root):
         category = FailureCategory.network
     else:
         category = FailureCategory.processing_error
@@ -315,7 +339,8 @@ and after `sharepoint_error_message`:
 - [ ] **Step 1: Write the failing test** — inject a `ValueError("boom SECRET")` into the pipeline (monkeypatch the first processing step, per existing pipeline-test fixtures) and assert:
   - `pipeline_status == failed`, `processing_error_code == "processing_error"`;
   - `"SECRET" not in meeting.processing_error_message`;
-  - a `delivery_failure` line was logged (assertLogs on `app.services.failure_reasons`).
+  - a `delivery_failure` line was logged (assertLogs on `app.services.failure_reasons`);
+  - the meeting's local audio file still exists on disk after the failure (spec §6 audio-preservation guarantee — `self.assertTrue(audio_path.exists())`, same pattern as `test_pipeline_voiceprints.py:134`).
 
 - [ ] **Step 2: Run, verify fails** (today `processing_error_code` is `"ValueError"` and the message contains the exception text).
 
@@ -338,9 +363,14 @@ and after `sharepoint_error_message`:
 
 Startup marking (~:203): `error_code="Interrupted"` → `error_code=FailureCategory.interrupted.value`, message → `USER_SENTENCES[FailureCategory.interrupted]`, plus `log_delivery_failure(meeting_id, "pipeline", FailureReason.for_category(FailureCategory.interrupted, detail="startup_reconcile"), code="startup_reconcile")`. Watchdog (~:247): same shape with `stalled` / `code="watchdog"` (keep the existing "No pipeline progress for over Ns" text as the `detail`). Audio-specific failures raised by the merge/probe steps: where the pipeline catches them distinctly (if it does not, leave to the generic catch-all — do NOT invent new catch sites), use `FailureReason.for_category(FailureCategory.audio_problem, detail=...)`.
 
-- [ ] **Step 4: Run** the new test module + full backend suite. Expected: green (known flake excepted). Grep check: `grep -n "Interrupted\|Stalled" backend/app/services/pipeline.py` returns no remaining PascalCase codes.
+- [ ] **Step 4: Update the existing tests that pin the OLD codes/messages** (these will go red after Step 3 — updating them is part of this task, not improvisation):
+  - `backend/tests/test_pipeline_stage_state.py:145-149` — expects `processing_error_code == "Interrupted"` and the message `"Backend restarted while this meeting was processing."` → update to `"interrupted"` and `USER_SENTENCES[FailureCategory.interrupted]` ("The app restarted while this meeting was processing. Retry to continue.").
+  - `backend/tests/test_pipeline_watchdog.py:46` — expects `"Stalled"` → update to `"stalled"` (message likewise if pinned).
+  - `backend/tests/test_pipeline_voiceprints.py:138-142` — expects `processing_error_code == "MeetingVoiceprintsUnavailable"`. Decision (made here, not implementer's): the wrapper classifies by its `__cause__` (Task 1 unwrapping). Check what cause the test fixture raises the wrapper from and assert that category (`ConnectionError` cause → `"network"`; 5xx-shaped cause → `"service_unavailable"`; if the fixture raises it with no cause → `"processing_error"`). Keep the `:134` `audio.exists()` assertion untouched.
 
-- [ ] **Step 5: Commit** — `git commit -m "feat: classify pipeline failures with IN-391 taxonomy"`
+- [ ] **Step 5: Run** the new test module + the three updated modules + full backend suite. Expected: green (known flake excepted). Grep check: `grep -n "Interrupted\|Stalled" backend/app/services/pipeline.py` returns no remaining PascalCase codes.
+
+- [ ] **Step 6: Commit** — `git commit -m "feat: classify pipeline failures with IN-391 taxonomy"`
 
 ---
 
@@ -377,9 +407,11 @@ Startup marking (~:203): `error_code="Interrupted"` → `error_code=FailureCateg
   3. Condition branches (no exception): sign-in (~:216) → `for_category(azure_signin, detail="signin_check")`, `code="signin_check"`; prerequisite (~:202) → `for_category(processing_error, detail="prerequisite_check")`, `code="prerequisite_check"`. Keep the existing `SIGN_IN_FAILURE`/`PREREQUISITE_FAILURE`/`AUDIO_FAILURE`/`EXPORT_FAILURE` constants only if their text is reused as the category sentences; otherwise delete them and their imports.
   4. Success `_finish` call passes `error_code=None`.
 
-- [ ] **Step 4: Run** blob tests + full suite. Expected: green (known flake excepted).
+- [ ] **Step 4: Update existing pinned assertions in `backend/tests/test_blob_delivery.py`** (part of this task): `:552-555` pins the literal `"Sign in is required to upload this meeting to secure storage."` → update to the `azure_signin` sentence ("Microsoft sign-in is needed. Sign in again, then retry.") and assert `blob_error_code == "azure_signin"`. Sweep the sibling assertions at `:593-649` that pin other literal blob failure texts (`AUDIO_FAILURE`/`EXPORT_FAILURE`/`PREREQUISITE_FAILURE` strings) and update each to the corresponding category sentence + code.
 
-- [ ] **Step 5: Commit** — `git commit -m "feat: classify blob delivery failures with IN-391 taxonomy"`
+- [ ] **Step 5: Run** blob tests + full suite. Expected: green (known flake excepted).
+
+- [ ] **Step 6: Commit** — `git commit -m "feat: classify blob delivery failures with IN-391 taxonomy"`
 
 ---
 
@@ -400,9 +432,11 @@ Startup marking (~:203): `error_code="Interrupted"` → `error_code=FailureCateg
 
 - [ ] **Step 3: Implement.** `set_delivery_state` gains `error_code: str | None = None` writing `delivery_error_code`; `unconfirmed` transition explicitly passes `error_code=None`. Email generic handler (~:609): classify, log, store sentence + category; keep the raised `HTTPException` detail as-is (it feeds the renderer toast today — the stored fields are what the chips read). SharePoint generic handler (~:696): same, replacing `f"SharePoint save failed: {exc}"`. Both sign-in branches: `for_category(azure_signin, ...)` but keep their existing user-visible strings (assert in tests). Set `sharepoint_error_code`/`delivery_error_code = None` on the success paths that already null the messages.
 
-- [ ] **Step 4: Run** `tests.test_delivery_reliability` + full suite. Expected: green (known flake excepted).
+- [ ] **Step 4: Update existing pinned assertions in `backend/tests/test_delivery_reliability.py`** (part of this task): `:121` asserts `"simulated Graph send failure"` appears in `delivery_error_message`, and `:162` asserts `"simulated Graph invite failure"` appears in `sharepoint_error_message` — both flip to asserting the stored field equals the fixed category sentence AND that the simulated text is ABSENT from the stored field (that absence is the point of IN-391). If those tests also assert on the raised `HTTPException` detail, leave that part unchanged — the HTTP detail intentionally still carries `{exc}` for the transient toast.
 
-- [ ] **Step 5: Commit** — `git commit -m "feat: classify sharepoint/email failures with IN-391 taxonomy"`
+- [ ] **Step 5: Run** `tests.test_delivery_reliability` + full suite. Expected: green (known flake excepted).
+
+- [ ] **Step 6: Commit** — `git commit -m "feat: classify sharepoint/email failures with IN-391 taxonomy"`
 
 ---
 
@@ -412,7 +446,7 @@ Startup marking (~:203): `error_code="Interrupted"` → `error_code=FailureCateg
 - Modify: `src/renderer/src/lib/api.ts` (meeting mapping — find the existing `pipelineStatus`/`sharepointStatus` snake→camel mapping and add the three codes)
 - Test: covered by Task 7's verify script + `npm run typecheck`
 
-- [ ] **Step 1:** Add `blobErrorCode`, `sharepointErrorCode`, `deliveryErrorCode` (and `processingErrorCode` if not already mapped) as `string | null` to the renderer Meeting type and its mapper.
+- [ ] **Step 1:** Add `processingErrorCode`, `blobErrorCode`, `sharePointErrorCode`, `deliveryErrorCode` as `string | null` to the renderer Meeting type and to `mapMeeting` (`api.ts:162-188`). Two specifics: (a) `processing_error_code` is NOT currently mapped — add it, don't assume; (b) follow the existing capital-P `sharePoint*` naming convention (`sharePointStatus` in `src/renderer/src/data/mock.ts:73`), so `sharePointErrorCode`, not `sharepointErrorCode`.
 - [ ] **Step 2:** `npm run typecheck` — expected PASS.
 - [ ] **Step 3: Commit** — `git commit -m "feat: expose failure categories to renderer (IN-391)"`
 
@@ -447,8 +481,8 @@ export interface FailureChipInput {
   processingErrorCode: string | null
   blobStatus: string
   blobErrorCode: string | null
-  sharepointStatus: string
-  sharepointErrorCode: string | null
+  sharePointStatus: string
+  sharePointErrorCode: string | null
   deliveryStatus: string
   deliveryErrorCode: string | null
 }
@@ -460,7 +494,7 @@ export function failedChipLabel(m: FailureChipInput): string | null {
   const ordered: Array<[string, string | null]> = [
     [m.pipelineStatus, m.processingErrorCode],
     [m.blobStatus, m.blobErrorCode],
-    [m.sharepointStatus, m.sharepointErrorCode],
+    [m.sharePointStatus, m.sharePointErrorCode],
     [m.deliveryStatus, m.deliveryErrorCode],
   ]
   for (const [status, code] of ordered) {
@@ -481,7 +515,7 @@ export function showUnconfirmedChip(m: FailureChipInput): boolean {
 
 - [ ] **Step 3: Wire the screens.**
   - `MeetingsScreen.tsx:134`: replace `{meeting.pipelineStatus === 'failed' && <Pill tone="danger">Failed</Pill>}` with the `failedChipLabel(...)` chip plus, independently, `showUnconfirmedChip(...) && <Pill tone="warning">Email unconfirmed</Pill>`.
-  - `MeetingReviewScreen.tsx`: extend the `FailedCard` area into one row per failed concern — category label + the meeting's stored `*_error_message` sentence + that concern's existing retry action (processing retry exists at ~:229; blob/sharepoint/email retries are the existing re-POST actions on this screen — reuse those handlers, do not add endpoints). Unconfirmed email keeps its existing notice (`lib/deliveryNotice.ts`) untouched.
+  - `MeetingReviewScreen.tsx`: extend the `FailedCard` area into one row per failed concern — category label + the meeting's stored `*_error_message` sentence + that concern's retry action. Wiring specifics: processing retry already exists on this screen (`handleRetry`, ~:229); blob and SharePoint retries do NOT have handlers on this screen yet — import and call the existing API functions `retryBlobDelivery` and `saveTranscriptToSharePoint` from `src/renderer/src/lib/api.ts` (currently wired only in `App.tsx` — follow that call pattern, including the Graph-token argument for SharePoint); email retry reuses the existing `EmailModal` flow (~:779). Do not add backend endpoints — all four exist. Unconfirmed email keeps its existing notice (`lib/deliveryNotice.ts`) untouched.
 - [ ] **Step 4:** `npm run typecheck && npm run build && npm run verify:failure-chips` — all PASS. Also `npm run verify:email-notice` (guards the unconfirmed notice untouched).
 - [ ] **Step 5: Commit** — `git commit -m "feat: Failed:[category] chips and per-concern failure rows (IN-391)"`
 
