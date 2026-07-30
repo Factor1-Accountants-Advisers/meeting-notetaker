@@ -363,9 +363,29 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - **C5a** (c34772b): two-layer credential loading — bundled `backend.env` (base, shipped in installer per plan §3 amendment) then `%PROGRAMDATA%` on top (per-machine override, wins on conflict). Logs paths only. `email_notes` `require()` moved above `_delivery_artifacts()` so 403 returns before any 409 pipeline-state leak.
   - **C5b** (2140a74): `scripts/prepackage.js` copies `backend.env` into bundle staging dir; `MN_ALLOW_STUB_PACKAGE=1` bypass. `.gitignore` guards `backend.env` and `backend/backend.env` from ever being committed.
   - **C5c** (acb6c87): CI `build-backend` job writes `backend.env` from GitHub secrets (`MN_OPENAI_API_KEY`, `MN_PYANNOTE_API_KEY`). `AGENTS.md` exception documented. `rollout-runbook.md` updated: removed manual key step, added key-rotation section.
+  - **E2 code signing — repo side landed 30 Jul** per DV's Azure Artifact
+    Signing brief (email attached to IN-81; account `as-factor1`, profile
+    `cp-private-factor1`, endpoint `eus.codesigning.azure.net`, **Private
+    Trust** — unmanaged machines are expected to warn until IT pushes the
+    root via Intune): electron-builder upgraded 25.1.8 → 26.15.3 (first
+    version with `azureSignOptions`; base-config `--dir` smoke green, signing
+    correctly skipped locally), new `electron-builder.azure.yml` (extends
+    base; signs inner binaries + NSIS installer, RFC3161 timestamp pinned to
+    `timestamp.acs.microsoft.com` per DV — short-lived certs), `release.yml`
+    signs via azure/login OIDC (`id-token: write`, no stored secret) and
+    asserts signature + signer subject + timestamp on both the setup exe and
+    the app exe (chain check deliberately skipped — Private Trust root absent
+    on runners). Azure-config packaging smoke reached the Invoke-TrustedSigning
+    call and failed only on missing local credentials — expected.
+    **Remaining before a signed release:** Entra app registration + federated
+    credential for this repo's Actions OIDC → send client ID to DV for the
+    "Artifact Signing Certificate Profile Signer" role grant; repo secrets
+    `AZURE_SIGNING_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID`;
+    then tag a 2.0.x and hand the signed installer to DV/Gabby for Intune
+    validation.
   - **Remaining for human**:
     - Workstream B build: Windows-side PyInstaller run (`docs/windows-backend-build.md`)
-    - Workstream E (external): E1 Blob update-feed URL, E2 code-signing cert, E3 org keys, E4 `GET /audio` auth (deferred), E5 Intune wrap
+    - Workstream E (external): E1 Blob update-feed URL, ~~E2 code-signing cert~~ (repo side done 30 Jul, see above; role grant + secrets pending), E3 org keys, E4 `GET /audio` auth (deferred), E5 Intune wrap
     - Workstream F: manual verification checklist (see `docs/rollout-runbook.md` sanity checklist)
 
 - [ ] `IN-82` — Confirm PyannoteAI API availability, credentials, and costs for production

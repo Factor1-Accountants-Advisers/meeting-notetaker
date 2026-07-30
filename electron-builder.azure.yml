@@ -1,0 +1,30 @@
+# Release signing config (IN-81) — used ONLY by the Release workflow.
+#
+# Extends the base config with Azure Artifact Signing (formerly Trusted
+# Signing) against IT's account, per DV's 29 Jul brief on IN-81. Local builds
+# keep the unsigned base electron-builder.yml; keeping the Azure block out of
+# the base config is what stops local `npm run package:dir` from attempting
+# (and failing) a signing call it has no credentials for.
+#
+# Auth comes from the workflow's azure/login OIDC session — no secrets here.
+# All identifiers below are non-secret resource names (source: DV's
+# "Note Taker App Deployment for Intune" email, attached to IN-81).
+#
+# Trust model is PRIVATE TRUST: the signature is only trusted on
+# Intune-managed devices once IT pushes the root. "Unknown publisher" on an
+# unmanaged machine is expected, not a broken signature.
+extends: ./electron-builder.yml
+win:
+  # Re-enable resedit metadata editing + signing (base config disables it for
+  # dev machines without the symlink privilege).
+  signAndEditExecutable: true
+  azureSignOptions:
+    publisherName: CN=factor1.com.au, O=factor1.com.au, OU=IT Shared Services
+    endpoint: https://eus.codesigning.azure.net/
+    codeSigningAccountName: as-factor1
+    certificateProfileName: cp-private-factor1
+    # Explicit even though these are the electron-builder defaults: the
+    # Private Trust certs are short-lived, so an unstamped signature stops
+    # validating as soon as the cert rolls over (DV's brief calls this out).
+    timestampRfc3161: http://timestamp.acs.microsoft.com
+    timestampDigest: SHA256

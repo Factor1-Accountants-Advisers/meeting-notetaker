@@ -1,11 +1,20 @@
 # Release build (decision #12): tag vX.Y.Z -> build, sign, publish.
 #
-# Until the code-signing certificate and the Azure Blob update feed exist,
-# this produces an UNSIGNED installer as a workflow artifact. To go live:
-#   1. Add secrets CSC_LINK (base64 PFX) + CSC_KEY_PASSWORD, or switch to
-#      Azure Trusted Signing, and remove the signAndEditExecutable override.
-#   2. Add AZURE_STORAGE_CONNECTION_STRING and uncomment the publish step
-#      so the installer + latest.yml land in the Blob update feed.
+# Signing (IN-81): Azure Artifact Signing (formerly Trusted Signing) against
+# IT's as-factor1 account — config in electron-builder.azure.yml, auth via
+# azure/login OIDC (no stored secrets). Prerequisites, once per repo:
+#   1. Entra app registration with a federated credential for this repo's
+#      GitHub Actions OIDC (subject: repo:Factor1-Accountants-Advisers/
+#      meeting-notetaker:ref:refs/tags/v*), granted "Artifact Signing
+#      Certificate Profile Signer" on as-factor1 by IT (DV).
+#   2. Repo secrets: AZURE_SIGNING_CLIENT_ID, AZURE_TENANT_ID,
+#      AZURE_SUBSCRIPTION_ID (IT-Shared-Services).
+# The signature uses PRIVATE TRUST: only Intune-managed devices trust it, so
+# the verify step below asserts signature presence + timestamp, not chain.
+#
+# Still pending to go fully live:
+#   - Add AZURE_STORAGE_CONNECTION_STRING and uncomment the publish step
+#     so the installer + latest.yml land in the Blob update feed.
 
 name: Release
 
@@ -13,6 +22,10 @@ on:
   push:
     tags:
       - 'v*'
+
+permissions:
+  contents: read
+  id-token: write # azure/login OIDC federation (IN-81 signing)
 
 jobs:
   build-backend:
@@ -118,10 +131,52 @@ jobs:
       - name: Pre-package checks (bundle + ffmpeg + credentials into staging)
         run: node scripts/prepackage.cjs
 
-      - name: Build installer (unsigned until cert lands)
-        # CI runners have symlink rights, so exe metadata editing is re-enabled
-        # here (it is disabled in electron-builder.yml for dev machines).
-        run: npx electron-vite build && npx electron-builder --publish never --config.win.signAndEditExecutable=true
+      - name: Azure login for Artifact Signing (OIDC, IN-81)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build signed installer (Azure Artifact Signing, IN-81)
+        # electron-builder.azure.yml extends the base config with the signing
+        # account/profile and re-enables exe metadata editing (disabled in the
+        # base config for dev machines without the symlink privilege). Signing
+        # covers the inner binaries and the NSIS setup exe, timestamped per
+        # DV's brief.
+        run: npx electron-vite build && npx electron-builder --publish never --config electron-builder.azure.yml
+
+      - name: Assert installer and app binary are signed and timestamped
+        # Private Trust: the runner does NOT have the factor1 root, so chain
+        # validation is expected to fail here — assert signature presence,
+        # signer subject, and timestamp instead. Managed-device validation is
+        # DV's step.
+        shell: pwsh
+        run: |
+          $targets = @(
+            (Get-ChildItem "dist\*setup.exe" | Select-Object -First 1).FullName,
+            "dist\win-unpacked\Meeting Notetaker.exe"
+          )
+          foreach ($target in $targets) {
+            if (-not $target -or -not (Test-Path $target)) {
+              Write-Error "Expected build output missing: $target"
+              exit 1
+            }
+            $sig = Get-AuthenticodeSignature -FilePath $target
+            if ($sig.Status -eq 'NotSigned' -or -not $sig.SignerCertificate) {
+              Write-Error "$target is NOT signed (status: $($sig.Status))"
+              exit 1
+            }
+            if ($sig.SignerCertificate.Subject -notmatch 'factor1\.com\.au') {
+              Write-Error "$target signed by unexpected subject: $($sig.SignerCertificate.Subject)"
+              exit 1
+            }
+            if (-not $sig.TimeStamperCertificate) {
+              Write-Error "$target signature is not timestamped — will break on cert rollover"
+              exit 1
+            }
+            Write-Host "OK: $target signed by '$($sig.SignerCertificate.Subject)', timestamped by '$($sig.TimeStamperCertificate.Subject)' (chain status on runner: $($sig.Status) — untrusted chain is expected under Private Trust)"
+          }
 
       - name: Assert credentials shipped in packaged output
         shell: pwsh
