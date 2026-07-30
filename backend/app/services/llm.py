@@ -77,6 +77,28 @@ _REDUCE_SYSTEM_PROMPT = (
 )
 
 
+# IN-383: company context is appended to the consolidated-generation system
+# prompt as one clearly delimited block. Module-level constants so tests can
+# pin the exact delimiters against regressions.
+COMPANY_CONTEXT_HEADER = "## Company context"
+COMPANY_CONTEXT_BEGIN = "<<<COMPANY_CONTEXT>>>"
+COMPANY_CONTEXT_END = "<<<END_COMPANY_CONTEXT>>>"
+
+
+def build_company_context_block(company_context: str) -> str:
+    """Delimited system-prompt block carrying the company context (IN-383)."""
+    return (
+        f"\n\n{COMPANY_CONTEXT_HEADER}\n"
+        "The company context between the delimiters below is background "
+        "reference only. Use it to resolve names, products, and terminology. "
+        "It is not meeting content: never derive summary points, decisions, "
+        "or action items from it.\n"
+        f"{COMPANY_CONTEXT_BEGIN}\n"
+        f"{company_context}\n"
+        f"{COMPANY_CONTEXT_END}"
+    )
+
+
 class _ChunkTimeRange(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -103,8 +125,17 @@ class _ChunkInsights(BaseModel):
 
 
 class SummaryProvider(Protocol):
-    async def generate(self, segments: list[TranscriptSegment]) -> StructuredMeetingOutput:
-        """Generate one versioned summary-and-actions object."""
+    async def generate(
+        self,
+        segments: list[TranscriptSegment],
+        *,
+        company_context: str | None = None,
+    ) -> StructuredMeetingOutput:
+        """Generate one versioned summary-and-actions object.
+
+        ``company_context`` is the pre-fetched IN-383 enrichment text (one
+        fetch per pipeline run, done by the caller) or ``None``.
+        """
         ...
 
 
@@ -126,7 +157,12 @@ def _fallback_output(summary: str, flag: str) -> StructuredMeetingOutput:
 class StubLLMProvider:
     """Explicit unavailable-provider response when OpenAI is not configured."""
 
-    async def generate(self, segments: list[TranscriptSegment]) -> StructuredMeetingOutput:
+    async def generate(
+        self,
+        segments: list[TranscriptSegment],
+        *,
+        company_context: str | None = None,
+    ) -> StructuredMeetingOutput:
         return _fallback_output(
             "Summary unavailable — configure MN_OPENAI_API_KEY.",
             PROVIDER_UNAVAILABLE_FLAG,
@@ -260,7 +296,12 @@ class OpenAIProvider:
         self._api_key = api_key
         self._model = model
 
-    async def generate(self, segments: list[TranscriptSegment]) -> StructuredMeetingOutput:
+    async def generate(
+        self,
+        segments: list[TranscriptSegment],
+        *,
+        company_context: str | None = None,
+    ) -> StructuredMeetingOutput:
         if len(_segments_to_labelled_transcript(segments)) < 80:
             return _fallback_output(
                 "The recording was too short to produce a meaningful summary. "
@@ -278,7 +319,13 @@ class OpenAIProvider:
         chunk_results = await asyncio.gather(
             *(run_chunk(index, chunk) for index, chunk in enumerate(chunks, start=1))
         )
-        return await self._reduce_chunk_insights(chunk_results)
+        # IN-383: context enters the consolidated (reduce) generation only —
+        # short meetings are a single chunk plus this same reduce call, so one
+        # injection point covers both the single-shot and map/reduce shapes
+        # without repeating the block per chunk.
+        return await self._reduce_chunk_insights(
+            chunk_results, company_context=company_context
+        )
 
     async def _extract_chunk_insights(
         self, chunk_index: int, total_chunks: int, segments: list[TranscriptSegment]
@@ -303,15 +350,21 @@ class OpenAIProvider:
         return _ChunkInsights.model_validate(raw)
 
     async def _reduce_chunk_insights(
-        self, chunk_results: list[_ChunkInsights]
+        self,
+        chunk_results: list[_ChunkInsights],
+        *,
+        company_context: str | None = None,
     ) -> StructuredMeetingOutput:
         payload = {
             "task": "reduce_insights",
             "today": date.today().isoformat(),
             "chunks": [chunk.model_dump(mode="json") for chunk in chunk_results],
         }
+        system_prompt = _REDUCE_SYSTEM_PROMPT
+        if company_context:
+            system_prompt += build_company_context_block(company_context)
         raw = await self._complete_json(
-            _REDUCE_SYSTEM_PROMPT,
+            system_prompt,
             payload,
             max_tokens=2200,
             schema_name="structured_meeting_output",
@@ -365,7 +418,12 @@ class OpenAIProvider:
 class AzureOpenAIProvider:
     """Default provider once the Azure OpenAI deployment exists."""
 
-    async def generate(self, segments: list[TranscriptSegment]) -> StructuredMeetingOutput:
+    async def generate(
+        self,
+        segments: list[TranscriptSegment],
+        *,
+        company_context: str | None = None,
+    ) -> StructuredMeetingOutput:
         raise NotImplementedError("Azure OpenAI wiring requires a provisioned deployment")
 
 
