@@ -386,7 +386,7 @@ function ConsentPage({ consented, onChange }: { consented: boolean; onChange: (c
   return (
     <div className="space-y-4">
       <p className="m-0 text-[13px] leading-relaxed text-content-secondary">
-        Your voice samples are used only to create a voiceprint that identifies you in meeting transcripts. The original recordings are deleted immediately after the voiceprint is created — only the voiceprint reference is stored, centrally and securely, so any Factor1 Notetaker can recognise you. You can ask an administrator to disable or delete your voiceprint at any time. If you enrolled before central storage was introduced, this enrolment replaces that one.
+        Your voice samples are used only to create a voiceprint that identifies you in meeting transcripts. The original recordings are deleted immediately after the voiceprint is created — only the voiceprint reference is stored, centrally and securely, so any Factor1 Notetaker can recognise you.
       </p>
       <label className="flex items-start gap-2 rounded-md border-[0.5px] border-edge-tertiary p-3 text-[12px] leading-relaxed text-content-secondary">
         <input
