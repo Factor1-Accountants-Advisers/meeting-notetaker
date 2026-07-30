@@ -749,8 +749,31 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     storage-cutover routing surface). `git diff --check` reports no
     whitespace errors; `git log --oneline main..HEAD` shows a coherent,
     task-ordered commit sequence.
-  - No Jira transition, merge, push, deployment, or production smoke was
-    performed from this task.
+  - **30 Jul follow-ups (commit `c109c8e`, branch
+    `codex/in-391-followups`):** retention now deletes old canonical audio
+    only for `ready` meetings. Failed, queued, processing, pending, and
+    unmatched audio remains available for retry regardless of mtime. A retry
+    that reaches `ready` keeps the original mtime clock. Because the schema
+    has no terminal-failure state or timestamp, permanently failed audio is
+    retained rather than guessed safe to delete; a future terminal-failure
+    flow must add both before starting its proposed 30-day clock. Processing
+    HTTP 401/403 failures now classify as the eighth category,
+    `provider_credentials`, with administrator-facing remediation, while
+    Graph delivery stages remain `azure_signin`. Inspection found the
+    renderer labels are a typed shared map rather than unconstrained server
+    text, so `Provider credentials` was added to that map and its fixture.
+    The dead meetings/review screens cited above were removed from `main` by
+    `9e8e454`; no routing or screen work was needed.
+  - **30 Jul follow-up verification:** full backend discovery **283 tests
+    passed, 1 skipped** (ffmpeg unavailable on PATH); focused IN-391 suite
+    **27 passed**; `python -m compileall app`, `npm run
+    verify:failure-chips`, `npm run verify:graph`, `npm run typecheck`,
+    `npm run build`, and `git diff --check` all passed. Live provider
+    verification remains out of scope for the personal PC handoff.
+  - The 29 Jul task performed no Jira transition, merge, push, deployment,
+    or production smoke. The 30 Jul follow-up is branch-only for review; it
+    likewise performs no Jira transition, merge, deployment, or live
+    provider smoke.
 
 ## IN-380 + IN-382 — Voiceprint administration and offboarding (29 Jul 2026)
 
