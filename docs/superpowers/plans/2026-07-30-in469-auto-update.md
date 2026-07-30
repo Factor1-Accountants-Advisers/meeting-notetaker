@@ -34,6 +34,12 @@ The predicate is pure — no Electron imports — so the verify script can pin i
 // no Electron imports — so verify-update-gate.ts can pin the truth table.
 
 export const AUTO_RECORD_LEAD_MS = 15 * 60_000
+/** Small look-back so the instant around a meeting's start (before the
+ * auto-start dispatch flips pendingAutoStart) still blocks. Starts older
+ * than this are NOT imminent — a recording in progress is caught by
+ * recordingState/pendingAutoStart, and without a lower bound a stale past
+ * start would block installs forever (plan-review finding #1). */
+export const AUTO_RECORD_GRACE_MS = 2 * 60_000
 export const SYSTEM_IDLE_MIN_SECONDS = 300
 export const SNOOZE_MS = 4 * 60 * 60_000
 export const COUNTDOWN_SECONDS = 60
@@ -62,11 +68,12 @@ export function evaluateUpdateGate(input: UpdateGateInput): UpdateGateVerdict {
   if (!input.updateDownloaded) return { allow: false, reason: 'no_update_downloaded' }
   if (input.recordingState !== 'idle') return { allow: false, reason: 'recording_active' }
   if (input.pendingAutoStart) return { allow: false, reason: 'auto_start_pending' }
-  if (
-    input.nextAutoRecordStartUtcMs !== null &&
-    input.nextAutoRecordStartUtcMs - input.nowUtcMs <= AUTO_RECORD_LEAD_MS
-  ) {
-    return { allow: false, reason: 'auto_record_imminent' }
+  if (input.nextAutoRecordStartUtcMs !== null) {
+    const untilStart = input.nextAutoRecordStartUtcMs - input.nowUtcMs
+    // Bounded window: a stale PAST start must not block forever.
+    if (untilStart <= AUTO_RECORD_LEAD_MS && untilStart >= -AUTO_RECORD_GRACE_MS) {
+      return { allow: false, reason: 'auto_record_imminent' }
+    }
   }
   if (input.backendBusy) return { allow: false, reason: 'backend_processing' }
   if (input.systemIdleSeconds < SYSTEM_IDLE_MIN_SECONDS) {
@@ -123,9 +130,15 @@ input and spread overrides):
 
 1. all-clear → `{ allow: true }`
 2. `updateDownloaded: false` → reason `no_update_downloaded`
-3. `recordingState: 'recording'` → `recording_active`; also `'paused'` blocks
+3. `recordingState: 'recording'` → `recording_active`; also `'processing'`
+   blocks (the real `RecordingState` union is `'idle' | 'recording' |
+   'processing'` — pause is a separate flag, and a paused recording is state
+   `'recording'`, so non-idle covers it)
 4. `pendingAutoStart: true` → `auto_start_pending`
-5. next auto-record in 14 min → `auto_record_imminent`; in 16 min → allowed
+5. next auto-record in 14 min → `auto_record_imminent`; in 16 min → allowed;
+   started 1 min ago (within grace) → `auto_record_imminent`; started 30 min
+   ago → **allowed** (regression case for the stale-past-start bug: without
+   the lower bound this blocked forever)
 6. `backendBusy: true` → `backend_processing`
 7. `systemIdleSeconds: 299` → `user_active`; `300` → allowed
 8. snoozed until now+1ms → `snoozed`; snooze expired → allowed
@@ -135,6 +148,11 @@ input and spread overrides):
     `created_at` not busy
 11. countdown/snooze arithmetic: `SNOOZE_MS === 4h`, `COUNTDOWN_SECONDS === 60`
     (pins the spec numbers so a silent constant edit fails loudly)
+
+Scope note: the spec's testing section also lists "placeholder-URL publish
+gating" — that logic is inline pwsh in the workflow (Task 7) and is
+deliberately NOT covered by this Node script; it is exercised by the YAML
+check plus the first real tag run. This narrowing is intentional.
 
 - [ ] **Step 2: Add the npm script**
 
@@ -175,13 +193,18 @@ export function hasPendingAutoStart(): boolean {
 
 - [ ] **Step 2: In `index.ts`, track the next auto-record start**
 
-`handleAutoRecordEligible(decisions)` (~line 113) already receives every
-auto-record-eligible decision with `startUtc`. Add a module-level
+`handleAutoRecordEligible(decisions)` (~line 113) already receives
+auto-record-eligible decisions with `startUtc` — an ISO **string**: store
+`Date.parse(startUtc)` (ms), never the string. Add a module-level
 `let nextAutoRecordStartUtcMs: number | null = null`, updated inside that
-handler: the earliest `startUtc` among eligible candidate decisions that is
-still in the future; null when none. Export a getter
-`getNextAutoRecordStartUtcMs()` OR pass a closure into the updater in Task 5
-(prefer the closure — no new export surface).
+handler to the earliest parsed start among eligible candidate decisions.
+IMPORTANT (plan-review finding #1): the runtime only invokes this callback
+when there ARE eligible decisions (`graph/runtime.ts` guards on
+`autoRecordEligible.length > 0`), so this tracker can go stale and is NEVER
+reset to null here — staleness is neutralised by the predicate's bounded
+window (`-AUTO_RECORD_GRACE_MS..AUTO_RECORD_LEAD_MS`), which is why that
+lower bound is not optional. Pass a closure into the updater in Task 5
+(no new export surface).
 
 - [ ] **Step 3: Typecheck + commit**
 
@@ -201,9 +224,14 @@ git commit -m "feat: expose pending/imminent auto-start seams for the update gat
 
 ```ts
 async function fetchBackendBusy(getActor: () => string): Promise<boolean> {
+  const actor = getActor()
+  // Fail-open guard (plan review): list_meetings filters by can_see(actor).
+  // An unauthenticated/default actor gets an EMPTY list — which would read
+  // as "not busy" while work may be in flight. Can't prove quiet → busy.
+  if (!actor || actor === 'Unknown user') return true
   try {
     const res = await fetch('http://127.0.0.1:8787/api/v1/meetings', {
-      headers: { 'X-MN-User': getActor() },
+      headers: { 'X-MN-User': actor },
       signal: AbortSignal.timeout(5_000)
     })
     if (!res.ok) return true // can't prove quiet — fail safe, block install
@@ -215,9 +243,11 @@ async function fetchBackendBusy(getActor: () => string): Promise<boolean> {
 }
 ```
 
-Check the actual list-endpoint path/response shape in
-`backend/app/routers/meetings.py` before wiring (the array may be nested,
-e.g. `{ items: [...] }` — adjust the parse, not the gate).
+Response shape verified during plan review: `GET /api/v1/meetings` returns a
+top-level array of `Meeting` objects including `pipeline_status` and
+`created_at`; `X-MN-User` is the only header needed. Confirm the exact
+default-actor sentinel used by `getCurrentUser()` in `auth-session.ts`
+("Unknown user" per the api-proxy convention) when wiring the guard.
 
 - [ ] **Step 2: Typecheck + commit** (compiles as dead code until Task 5)
 
@@ -271,7 +301,10 @@ Behaviour:
 - `restartNowRequested()` (tray/toast) → evaluate gate but IGNORE
   `user_active`/`snoozed` reasons (explicit intent) — recording/auto-start/
   backend reasons still block, with a toast explaining why
-  ("Recording in progress — the update will install later.").
+  ("Recording in progress — the update will install later."). NOTE: blocking
+  on `backend_processing` here is a deliberate, agreed deviation from the
+  spec's "conditions (2)–(3) only" wording — no restart path may interrupt
+  in-flight processing. Do not "fix" this toward the spec.
 - Keep `registerUpdaterIpc` (manual check) as is, but after a manual check
   reports `downloaded`, the same lifecycle applies.
 

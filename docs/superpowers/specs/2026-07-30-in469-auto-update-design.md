@@ -97,9 +97,10 @@ Added:
   relaunches on the new version and returns to the tray. The explicit
   "Restart now" path uses the same silent install for consistency.
 - **Guarded restart path:** "Restart now" from tray/toast uses the same
-  recording checks (2)–(3); if a recording is active it explains via toast
+  recording/processing checks (2)–(4) — only the idle-time and snooze
+  conditions are waived by explicit intent; if blocked it explains via toast
   instead of restarting. There is no code path to `quitAndInstall` that
-  bypasses the recording guard.
+  bypasses the recording or processing guards.
 - All transitions log structured `[updater]` lines (existing logger),
   feeding the IN-473 report bundle.
 
