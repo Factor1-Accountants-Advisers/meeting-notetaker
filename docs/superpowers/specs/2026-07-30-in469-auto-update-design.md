@@ -49,10 +49,12 @@ restarts a long-running tray app — the exact stale-version failure mode.
 One new step after the signature assertion (same job, reuses the OIDC
 session):
 
-- `az storage blob upload-batch` with `--auth-mode login`, uploading
-  `dist/*.exe` and `dist/latest.yml` to the `updates` container;
-  `--overwrite` so `latest.yml` advances while versioned exes accumulate as
-  rollback history.
+- `az storage blob upload` with `--auth-mode login`, uploading `dist/*.exe`
+  and `dist/latest.yml` to the `updates` container with overwrite so
+  `latest.yml` advances while versioned exes accumulate as rollback history.
+  Note: `upload-batch` honors only ONE `--pattern` (the old commented-out
+  step passed two; the last silently won) — use two upload commands or a
+  single glob.
 - Gate: skipped with a loud log line while the container/feed URL is not yet
   provisioned (config placeholder detection), so IN-81's `v2.0.8` signing
   validation tag can ship before the feed exists.
@@ -64,8 +66,10 @@ Existing behaviour retained: packaged-only, launch check, auto-download,
 
 Added:
 
-- **Periodic check:** 4-hour timer (`checkForUpdates`, not `AndNotify` —
-  notification becomes ours).
+- **Periodic check:** 4-hour timer using `checkForUpdates`. The launch check
+  also switches from `checkForUpdatesAndNotify` to `checkForUpdates` —
+  otherwise electron-updater's built-in notification would appear alongside
+  our own toast (notification becomes ours everywhere).
 - **`update-downloaded` handling:** surface a persistent tray menu item
   ("Restart to update to x.y.z") and a Windows toast (existing
   `toast-xml.ts` patterns) with a "Restart now" action. Both routes call the
@@ -77,12 +81,21 @@ Added:
      no active/paused/starting recording;
   3. no pending or imminent auto-start: nothing in `recording-ipc.ts`'s
      pending auto-start slot and no scheduled auto-record within the next
-     15 minutes (exact scheduler seam pinned during planning);
-  4. `powerMonitor.getSystemIdleTime() >= 300` seconds.
+     15 minutes (scheduler seam: the Graph runtime's lookahead machinery in
+     `src/main/graph/`; exact accessor pinned during planning);
+  4. no meeting in active post-processing: the recording state machine
+     returns `idle` the moment a recording stops, while backend
+     transcription/delivery may still be in flight — the gate must also
+     require no meeting in a non-terminal processing state (seam pinned
+     during planning: a lightweight local-backend query, or failing that a
+     fixed 30-minute cooldown after the last recording stop);
+  5. `powerMonitor.getSystemIdleTime() >= 300` seconds.
 - **Countdown:** when the gate passes, show a 60-second countdown toast with
   a defer action; defer snoozes the idle gate for 4 hours. On expiry,
-  `quitAndInstall(isSilent=false, isForceRunAfter=true)` — the app relaunches
-  on the new version and returns to the tray.
+  `quitAndInstall(isSilent=true, isForceRunAfter=true)` — silent install (no
+  NSIS UI on an unattended machine; the toasts are the visible signal), app
+  relaunches on the new version and returns to the tray. The explicit
+  "Restart now" path uses the same silent install for consistency.
 - **Guarded restart path:** "Restart now" from tray/toast uses the same
   recording checks (2)–(3); if a recording is active it explains via toast
   instead of restarting. There is no code path to `quitAndInstall` that
