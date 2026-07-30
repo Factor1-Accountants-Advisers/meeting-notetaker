@@ -190,7 +190,7 @@ export function EnrollmentModal({ person, onClose, onEnrolled, required = false 
 
   return (
     <div className="ui-backdrop fixed inset-0 z-[80] flex items-center justify-center bg-[var(--color-background-modal)] p-6">
-      <div className="ui-enter w-full max-w-[480px] aspect-square overflow-hidden rounded-lg border-[0.5px] border-edge-secondary bg-bg-primary flex flex-col">
+      <div className="ui-enter w-full max-w-[480px] aspect-square max-h-full overflow-hidden rounded-lg border-[0.5px] border-edge-secondary bg-bg-primary flex flex-col">
         <div className="border-b-[0.5px] border-edge-tertiary px-5 py-4">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -310,8 +310,17 @@ export function EnrollmentModal({ person, onClose, onEnrolled, required = false 
                   disabled={nextDisabled}
                   className="flex items-center gap-1.5 rounded-md border-[0.5px] border-edge-info bg-bg-info px-3.5 py-2 text-[13px] text-content-info transition-opacity disabled:cursor-not-allowed disabled:opacity-45"
                 >
-                  {step === 'sample-2' ? 'Create voiceprint' : 'Next'}
-                  <ArrowRight size={14} strokeWidth={1.75} />
+                  {state === 'saving' ? (
+                    <>
+                      <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-edge-tertiary border-t-brand-blue" />
+                      Creating voiceprint…
+                    </>
+                  ) : (
+                    <>
+                      {step === 'sample-2' ? 'Create voiceprint' : 'Next'}
+                      <ArrowRight size={14} strokeWidth={1.75} />
+                    </>
+                  )}
                 </button>
               )}
             </div>
@@ -449,6 +458,12 @@ function SamplePage({
         <p className="mb-0 flex items-center gap-2 text-[12px] text-content-secondary">
           <span className="h-4 w-4 animate-spin rounded-full border-2 border-edge-tertiary border-t-brand-blue" />
           Checking sample quality…
+        </p>
+      )}
+      {state === 'saving' && (
+        <p className="mb-0 flex items-center gap-2 text-[12px] text-content-secondary">
+          <span className="h-4 w-4 animate-spin rounded-full border-2 border-edge-tertiary border-t-brand-blue" />
+          Creating your voiceprint — this can take a minute or two. Keep the app open.
         </p>
       )}
       {state === 'denied' && (
