@@ -13,8 +13,10 @@
 # the verify step below asserts signature presence + timestamp, not chain.
 #
 # Still pending to go fully live:
-#   - Add AZURE_STORAGE_CONNECTION_STRING and uncomment the publish step
-#     so the installer + latest.yml land in the Blob update feed.
+#   - The publish step below self-skips until the updates feed is
+#     provisioned: repo variable UPDATES_STORAGE_ACCOUNT plus a real
+#     publish.url in electron-builder.yml (currently the REPLACE_ME
+#     placeholder).
 
 name: Release
 
@@ -188,6 +190,32 @@ jobs:
           }
           Write-Host "Packaged credentials present: $packagedEnv"
 
+      - name: Publish to Blob update feed (IN-469)
+        # Self-skips until the updates feed is provisioned: the publish URL
+        # in electron-builder.yml still being the REPLACE_ME placeholder
+        # means IT's container/role grant has not landed yet. Two single
+        # uploads, NOT upload-batch (it honors only one --pattern).
+        shell: pwsh
+        run: |
+          $config = Get-Content electron-builder.yml -Raw
+          if ($config -match 'REPLACE_ME') {
+            Write-Warning "Update feed not provisioned (publish.url placeholder) - skipping publish. Installer is only a workflow artifact."
+            exit 0
+          }
+          if (-not $env:UPDATES_STORAGE_ACCOUNT) {
+            Write-Error "publish.url is set but UPDATES_STORAGE_ACCOUNT repo variable is not - refusing a half-configured publish"
+            exit 1
+          }
+          $exe = (Get-ChildItem "dist\*setup.exe" | Select-Object -First 1).FullName
+          az storage blob upload --auth-mode login --overwrite `
+            --account-name $env:UPDATES_STORAGE_ACCOUNT --container-name updates `
+            --file $exe --name (Split-Path $exe -Leaf)
+          az storage blob upload --auth-mode login --overwrite `
+            --account-name $env:UPDATES_STORAGE_ACCOUNT --container-name updates `
+            --file dist\latest.yml --name latest.yml
+        env:
+          UPDATES_STORAGE_ACCOUNT: ${{ vars.UPDATES_STORAGE_ACCOUNT }}
+
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
@@ -196,12 +224,3 @@ jobs:
             dist/*.exe
             dist/latest.yml
           if-no-files-found: error
-
-      # - name: Publish to Azure Blob update feed
-      #   run: |
-      #     az storage blob upload-batch \
-      #       --destination updates \
-      #       --source dist \
-      #       --pattern "*.exe" --pattern "latest.yml" \
-      #       --connection-string "$env:AZURE_STORAGE_CONNECTION_STRING" \
-      #       --overwrite

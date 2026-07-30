@@ -1,8 +1,8 @@
-import { app, BrowserWindow, ipcMain, powerMonitor } from 'electron'
+import { app, BrowserWindow, ipcMain, Notification, powerMonitor } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { join } from 'path'
 import { registerApiProxyIpc } from './api-proxy'
-import { getCurrentUserEmail, getGraphAccessToken, onMsalSignedIn, registerAuthSessionIpc } from './auth-session'
+import { getCurrentUser, getCurrentUserEmail, getGraphAccessToken, onMsalSignedIn, registerAuthSessionIpc } from './auth-session'
 import { startGraphDetectionRuntime } from './graph/runtime'
 import { loadPublicEnv } from './env'
 import { evaluateHostGate, hostGateLogContext } from './graph/host-gate'
@@ -17,14 +17,22 @@ import {
   handleRendererRecordingReady,
   handleRendererRecordingStarted,
   handleRendererRecordingStopped,
+  hasPendingAutoStart,
   registerManualRecording,
   sendAutoStartRequest,
   setRecordingPaused
 } from './recording-ipc'
 import { registerRecordingStorageIpc } from './recording-storage'
 import { ensureDefaultAutoLaunchEnabled, isBackgroundLaunch, registerStartupIpc } from './startup'
-import { createTray, destroyTray, setTraySkipped, updateTrayMenu } from './tray'
-import { checkForUpdatesOnLaunch, registerUpdaterIpc } from './updater'
+import { buildUpdateReadyToastXml } from './toast-xml'
+import { createTray, destroyTray, setTraySkipped, setUpdateReady, setUpdateRestartHandler, updateTrayMenu } from './tray'
+import {
+  deferUpdate,
+  registerUpdaterIpc,
+  restartNowRequested,
+  startUpdaterLifecycle,
+  stopUpdaterTimers
+} from './updater'
 import { startBackendSupervisor, stopBackendSupervisor } from './backend-supervisor'
 import { createWindow, registerWindowSizingIpc } from './window'
 import type { GraphEventDecision } from './graph/types'
@@ -77,6 +85,14 @@ function registerRecordingIpcHandlers(): void {
 
 registerRecordingIpcHandlers()
 
+// IN-469: earliest known auto-record-eligible meeting start (UTC ms) for the
+// update gate. Intentionally never reset to null — the graph runtime only
+// invokes handleAutoRecordEligible when there ARE eligible decisions, and a
+// stale past value is neutralised by the gate's bounded window (see
+// AUTO_RECORD_GRACE_MS in update-gate.ts). The updater lifecycle consumes it
+// via the `() => nextAutoRecordStartUtcMs` closure below.
+let nextAutoRecordStartUtcMs: number | null = null
+
 function showMainWindow(): void {
   const windows = BrowserWindow.getAllWindows()
   if (windows.length > 0) {
@@ -87,12 +103,47 @@ function showMainWindow(): void {
   }
 }
 
+// IN-469: "Update {version} is ready." with Restart now / Later buttons.
+// Same display pattern as the ending-soon toast in recording-ipc.ts.
+function showUpdateReadyToast(version: string): void {
+  if (!Notification?.isSupported?.()) return
+  try {
+    if (process.platform === 'win32') {
+      new Notification({ toastXml: buildUpdateReadyToastXml(version) }).show()
+      logger().info('[app] update-ready Windows toast requested', { version })
+    } else {
+      new Notification({
+        title: 'Meeting Notetaker',
+        body: `Update ${version} is ready.`,
+        silent: true
+      }).show()
+      logger().info('[app] update-ready notification requested', { version })
+    }
+  } catch (err) {
+    logger().warn('[app] could not show update-ready notification', {
+      message: err instanceof Error ? err.message : String(err)
+    })
+  }
+}
+
 app.on('second-instance', (_event, argv) => {
   // Toast "Extend 10 min" button (IN-124): Windows activates the app with this
   // argument. Extend in place without stealing focus to the window.
   if (argv.includes('mn-extend')) {
     logger().info('[app] extend requested from toast notification')
     extendActiveRecordingFromMain()
+    return
+  }
+  // Update toast buttons (IN-469): same convention as mn-extend — act in
+  // place without stealing focus to the window.
+  if (argv.includes('mn-update-restart')) {
+    logger().info('[app] update restart requested from toast notification')
+    restartNowRequested()
+    return
+  }
+  if (argv.includes('mn-update-defer')) {
+    logger().info('[app] update deferred from toast notification')
+    deferUpdate()
     return
   }
   if (argv.includes('--background') || argv.includes('--hidden')) {
@@ -107,11 +158,37 @@ app.whenReady().then(() => {
   logger().info('[app] ready')
   ensureDefaultAutoLaunchEnabled()
 
-  checkForUpdatesOnLaunch()
+  // IN-469: tray "Restart to update" delegates to the updater's gated path.
+  setUpdateRestartHandler(() => restartNowRequested())
+
+  startUpdaterLifecycle({
+    getRecordingState: () => getRecordingStateMachine().getState(),
+    hasPendingAutoStart,
+    getNextAutoRecordStartUtcMs: () => nextAutoRecordStartUtcMs,
+    getActor: getCurrentUser,
+    onUpdateReady: (version) => {
+      setUpdateReady(version)
+      showUpdateReadyToast(version)
+    }
+  })
   registerMediaPermissions()
 
   function handleAutoRecordEligible(decisions: GraphEventDecision[]): void {
     const eligible = decisions.filter((d) => d.autoRecordEligible && d.status === 'candidate')
+
+    // IN-469: track the earliest parseable start among this batch's eligible
+    // candidates; keep the previous value when none parse.
+    let earliestStartMs = Number.POSITIVE_INFINITY
+    for (const decision of eligible) {
+      if (decision.logContext.startUtc === undefined) continue
+      const parsedStartMs = Date.parse(decision.logContext.startUtc)
+      if (Number.isFinite(parsedStartMs)) {
+        earliestStartMs = Math.min(earliestStartMs, parsedStartMs)
+      }
+    }
+    if (Number.isFinite(earliestStartMs)) {
+      nextAutoRecordStartUtcMs = earliestStartMs
+    }
 
     for (const decision of eligible) {
       const gate = evaluateHostGate(decision, getCurrentUserEmail())
@@ -209,5 +286,6 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   cleanupRecordingIpc()
   stopBackendSupervisor()
+  stopUpdaterTimers()
   destroyTray()
 })

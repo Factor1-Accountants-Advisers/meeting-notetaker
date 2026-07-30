@@ -40,3 +40,12 @@ nsis:
 publish:
   provider: generic
   url: https://REPLACE_ME.blob.core.windows.net/updates/
+  # electron-updater verifies a downloaded installer's Authenticode subject CN
+  # against this before installing (IN-469); Private Trust root exists on the
+  # managed fleet. Lives under `publish` (as an array — the installed
+  # electron-builder schema rejects both a bare `win.publisherName` and a
+  # scalar `publish.publisherName`): NsisUpdater reads `publisherName`
+  # straight off the generated app-update.yml's publish config at
+  # update-check time, so this is the field it actually consults.
+  publisherName:
+    - factor1.com.au

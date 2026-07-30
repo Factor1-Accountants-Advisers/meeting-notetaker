@@ -13,6 +13,22 @@ import { logger } from './logger'
 let tray: Tray | null = null
 let showWindowCallback: (() => void) | null = null
 
+// IN-469: downloaded-update surfacing. tray.ts deliberately does not import
+// updater.ts — the restart action is injected from index.ts (same pattern as
+// showWindowCallback) so no tray↔updater dependency can form.
+let updateReadyVersion: string | null = null
+let onRestartRequested: (() => void) | null = null
+
+export function setUpdateRestartHandler(fn: () => void): void {
+  onRestartRequested = fn
+}
+
+/** Show/clear the "Restart to update" tray item. Pass null to clear. */
+export function setUpdateReady(version: string | null): void {
+  updateReadyVersion = version
+  updateTrayMenu()
+}
+
 export function createTray(onShowWindow: () => void): void {
   if (tray) return
 
@@ -57,6 +73,16 @@ export function updateTrayMenu(): void {
         ]
       : []
 
+  const updateControls: MenuItemConstructorOptions[] = updateReadyVersion
+    ? [
+        {
+          label: `Restart to update to ${updateReadyVersion}`,
+          click: () => onRestartRequested?.()
+        },
+        { type: 'separator' }
+      ]
+    : []
+
   const contextMenu = Menu.buildFromTemplate([
     {
       label: `Status: ${statusLabel}`,
@@ -64,6 +90,7 @@ export function updateTrayMenu(): void {
     },
     { type: 'separator' },
     ...recordingControls,
+    ...updateControls,
     {
       label: 'Show Notetaker',
       click: () => showWindowCallback?.()
