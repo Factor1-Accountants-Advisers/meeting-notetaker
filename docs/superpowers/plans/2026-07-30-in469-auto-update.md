@@ -194,8 +194,10 @@ export function hasPendingAutoStart(): boolean {
 - [ ] **Step 2: In `index.ts`, track the next auto-record start**
 
 `handleAutoRecordEligible(decisions)` (~line 113) already receives
-auto-record-eligible decisions with `startUtc` — an ISO **string**: store
-`Date.parse(startUtc)` (ms), never the string. Add a module-level
+auto-record-eligible decisions carrying the start as an ISO **string** at
+`decision.logContext.startUtc` (not top-level, and typed optional — check
+defined before parsing): store `Date.parse(startUtc)` (ms), never the
+string. Add a module-level
 `let nextAutoRecordStartUtcMs: number | null = null`, updated inside that
 handler to the earliest parsed start among eligible candidate decisions.
 IMPORTANT (plan-review finding #1): the runtime only invokes this callback
@@ -301,10 +303,10 @@ Behaviour:
 - `restartNowRequested()` (tray/toast) → evaluate gate but IGNORE
   `user_active`/`snoozed` reasons (explicit intent) — recording/auto-start/
   backend reasons still block, with a toast explaining why
-  ("Recording in progress — the update will install later."). NOTE: blocking
-  on `backend_processing` here is a deliberate, agreed deviation from the
-  spec's "conditions (2)–(3) only" wording — no restart path may interrupt
-  in-flight processing. Do not "fix" this toward the spec.
+  ("Recording in progress — the update will install later."). NOTE: an
+  earlier spec draft waived `backend_processing` on this path; the spec has
+  since been aligned to conditions (2)–(4) — no restart path may interrupt
+  in-flight processing. Both documents now agree; keep it strict.
 - Keep `registerUpdaterIpc` (manual check) as is, but after a manual check
   reports `downloaded`, the same lifecycle applies.
 

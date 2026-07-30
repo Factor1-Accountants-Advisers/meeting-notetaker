@@ -105,8 +105,9 @@ Added:
   feeding the IN-473 report bundle.
 
 The idle-gate predicate lives in a pure, exported function (inputs: download
-state, recording state, pending/next auto-start time, system idle seconds,
-snooze-until) so the verify script can pin its truth table without Electron.
+state, recording state, pending/next auto-start time, backend busy state,
+system idle seconds, snooze-until) so the verify script can pin its truth
+table without Electron.
 
 ### 3. Config (`electron-builder.yml`)
 
@@ -125,7 +126,7 @@ snooze-until) so the verify script can pin its truth table without Electron.
 
 ## Testing
 
-- `verify:updater` (esbuild pattern like `verify:backend-supervisor`):
+- `verify:update-gate` (esbuild pattern like `verify:backend-supervisor`):
   truth-table over the idle-gate predicate (recording active / pending
   auto-start / imminent meeting / idle below threshold / snoozed / all-clear)
   plus countdown-defer arithmetic and placeholder-URL publish gating.
