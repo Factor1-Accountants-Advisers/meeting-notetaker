@@ -690,6 +690,59 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     Storage API Bicep lifecycle policy (`meetings-audio/` Cool-at-30/
     delete-at-365) has not been applied — that remains a separate,
     David-reviewed `what-if` step per `notetaker-storage-api/infra/README.md`.
+  - **Parked hardening review (30 July 2026, `c8948ba`): DROP all hunks.**
+    The parked commit was reviewed hunk-by-hunk against `origin/main` at
+    `bd85b1a`; no production or test code was transplanted:
+    - `blob_delivery.py` per-meeting task map (`_BLOB_DELIVERY_TASKS_BY_MEETING`,
+      `_active_delivery_task`, `_retain_delivery_task`) — **drop**. Current
+      `deliver_meeting_to_blob` already serialises provider work with
+      `_DELIVERY_LOCKS` and rejects stale work using `processing_attempt` plus
+      `BLOB_DELIVERY_STARTED_AT`. The additional meeting-only map is not just
+      redundant: after `kick_pipeline` increments `processing_attempt`, a new
+      ready run can receive the still-active task from the superseded attempt
+      instead of launching its own delivery. The old task then correctly
+      aborts as stale, leaving the newer export undelivered.
+    - `pipeline.py` switch from awaited `deliver_meeting_to_blob` to detached
+      `kick_blob_delivery` — **drop**. `run_pipeline` is already a retained
+      background task, so awaiting delivery blocks no request. Keeping delivery
+      inside that task keeps normal delivery completion within the retained
+      pipeline-task lifecycle and avoids adding a second detached lifecycle.
+      Cancellation, process restart, and unexpected exceptions still rely on
+      the existing reconciliation and safe logging paths.
+    - `blob_delivery.py` `kick_finalized_blob_delivery` plus
+      `meetings.py` finalisation rewiring — **drop**. Current finalisation
+      refreshes the canonical export before scheduling delivery. If it races
+      the pipeline delivery, the existing per-meeting lock serialises the two
+      runs; the later run snapshots the refreshed final export. Avoiding a
+      possible duplicate audio upload is not worth introducing the unsafe task
+      map, and failed-only Blob retry already prevents user-triggered duplicates
+      while a delivery is pending or uploaded.
+    - `schemas.py` WebM-only validators for `UploadAudioRequest` and
+      `SystemAudioSegment` — **drop as written**. The renderer forwards the
+      actual `File.type` for existing recordings, and the manual-upload picker
+      intentionally accepts non-WebM audio. Rejecting every non-WebM MIME at
+      the API boundary would break that contract. This DROP means the parked
+      validator is unsuitable, not that the underlying delivery gap is
+      resolved: `audio_path_for` stores an accepted non-WebM upload as
+      `<meeting_id>.bin`, while Blob delivery currently reads
+      `<meeting_id>.webm`. Normalising/transcoding the upload, or carrying its
+      actual persisted path and type into Blob delivery, needs a separately
+      scoped change with end-to-end non-WebM coverage. IN-480's segmented WebM
+      shape remains unchanged.
+    - `HomeScreen.tsx` `accept="audio/webm,video/webm"` and its
+      `verify-ad-hoc-attendees.tsx` assertion — **drop**. The existing
+      `accept="audio/*,video/webm"` is the intentional audio-first manual-upload
+      contract; narrowing only the file picker would contradict the API/client
+      path above without validating file contents.
+    - Parked test helpers and cases in `test_blob_delivery.py` and
+      `test_meeting_processing_auth.py` — **drop**. The JSON-body ASGI helper,
+      MIME rejection tests, task-map cleanup, detached-pipeline assertions, and
+      finalisation-coalescing tests only support rejected behavior. Current
+      tests already cover per-meeting provider serialisation, stale-generation
+      abort, pipeline re-arm invalidation, final-export refresh ordering,
+      failed-only retry, and IN-391 safe failure taxonomy; retaining duplicate
+      tests tied to the discarded API would make the suite describe the wrong
+      product contract.
 
 - [ ] IN-391 — Pipeline error handling and status reporting
   - **Implemented on `in391-error-reporting`** per the approved design
