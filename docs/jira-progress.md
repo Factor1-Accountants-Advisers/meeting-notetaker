@@ -344,6 +344,32 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
 
 ## Remaining open / not yet Jira-closable
 
+- [ ] `IN-383` — SharePoint company context file integration
+  - **Implemented 31 Jul** (`in383-context-file` merged `0211625`): provider
+    seam `context_file.py` (stand-in `data_root()/context/company-context.md`;
+    Graph mode behind `MN_CONTEXT_DRIVE_ID`+`MN_CONTEXT_FILE_PATH`, both empty
+    by default), 8000-char cap, single fetch per pipeline run, injected into
+    the consolidated reduce system prompt with sanitised delimiters (marker
+    literals stripped from content — structural prompt-injection defense,
+    review-caught). Enrichment never gates: any failure logs one warning
+    (class name only, token-safe) and proceeds identically.
+  - 12 focused tests; export schema untouched (1.0).
+  - **Outstanding:** Graph token does not reach the pipeline today (`kick_pipeline`
+    carries only the storage token) — live Graph fetch needs the token threaded
+    through upload/retry, then acceptance test `IN-400` on the work machine.
+- [ ] MSAL token-cache encryption (security triage 30 Jul — no Jira item)
+  - **Implemented 31 Jul** (`msal-cache-safestorage` merged `1580637`):
+    safeStorage/DPAPI-encrypted `auth/msal-cache.bin` with one-time migration
+    from plaintext `msal-cache.json` (legacy deleted post-migration; rollback
+    cannot resurrect it), corrupt-cache degradation to signed-out, transient
+    DPAPI outage preserves the encrypted file, sign-out clears both forms.
+    Pure store pinned by `verify:token-cache` (9 cases). First packaged run
+    after upgrade performs the migration.
+- [ ] Non-WebM upload blob-delivery gap (surfaced by the 31 Jul hardening drop
+  review, needs its own scoped fix): `audio_path_for` stores non-WebM manual
+  uploads as `<id>.bin` while blob delivery reads `<id>.webm` — such uploads
+  process locally but their audio never reaches the central store.
+
 - [ ] `IN-64` — Parent Slice 1 handoff
   - Keep open until signed/package rollout, production provider ownership, and stakeholder handoff/comms are complete.
 
