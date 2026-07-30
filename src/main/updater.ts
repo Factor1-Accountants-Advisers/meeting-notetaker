@@ -106,12 +106,22 @@ async function tryInstallNow(trigger: 'countdown' | 'restart-request'): Promise<
     installLaunching = false
     return { allow: false, reason: 'no_update_downloaded' }
   }
-  const input = await buildGateInput(deps)
-  const verdict = evaluateUpdateGate({
-    ...input,
-    systemIdleSeconds: Number.MAX_SAFE_INTEGER, // user_active non-blocking here
-    snoozedUntilUtcMs: 0 // snoozed non-blocking here
-  })
+  let verdict: UpdateGateVerdict
+  try {
+    const input = await buildGateInput(deps)
+    verdict = evaluateUpdateGate({
+      ...input,
+      systemIdleSeconds: Number.MAX_SAFE_INTEGER, // user_active non-blocking here
+      snoozedUntilUtcMs: 0 // snoozed non-blocking here
+    })
+  } catch (err) {
+    installLaunching = false
+    logger().warn('[updater] gate evaluation failed', {
+      trigger,
+      message: err instanceof Error ? err.message : String(err)
+    })
+    return { allow: false, reason: 'gate_evaluation_error' }
+  }
   if (!verdict.allow) {
     logger().info('[updater] install aborted by gate', { trigger, reason: verdict.reason })
     installLaunching = false
