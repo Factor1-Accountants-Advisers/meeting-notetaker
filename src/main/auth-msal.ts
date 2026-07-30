@@ -2,10 +2,18 @@ import { randomBytes, createHash } from 'crypto'
 import { createServer } from 'http'
 import type { AddressInfo } from 'net'
 import { execFile } from 'child_process'
-import { app, shell } from 'electron'
-import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
-import { dirname, join } from 'path'
+import { app, safeStorage, shell } from 'electron'
+import { join } from 'path'
 import { logger } from './logger'
+import {
+  CODEC_UNAVAILABLE_WARNING,
+  clearTokenCache,
+  loadTokenCache,
+  persistTokenCache as persistTokenCacheToStore,
+  type CacheCodec,
+  type CacheStoreLog,
+  type CacheStorePaths
+} from './token-cache-store'
 import {
   PublicClientApplication,
   type AccountInfo,
@@ -53,36 +61,61 @@ let cachedConfigKey: string | null = null
 let currentAccount: AccountInfo | null = null
 
 // ---------------------------------------------------------------------------
-// Token cache persistence (Slice 1 stand-in for encrypted OS keychain)
+// Token cache persistence — encrypted at rest via Electron safeStorage
+// (DPAPI on Windows). Pure fs/codec logic lives in token-cache-store.ts;
+// this file only wires the Electron pieces (paths, safeStorage, logger).
 // ---------------------------------------------------------------------------
 
 const CACHE_DIR = 'auth'
-const CACHE_FILE = 'msal-cache.json'
+/** Legacy plaintext cache — read once for migration, then deleted. */
+const LEGACY_CACHE_FILE = 'msal-cache.json'
+/** Encrypted (safeStorage/DPAPI) cache — distinct name so the format is self-evident. */
+const ENCRYPTED_CACHE_FILE = 'msal-cache.bin'
 
-function cachePath(): string {
-  return join(app.getPath('userData'), CACHE_DIR, CACHE_FILE)
+function cacheStorePaths(): CacheStorePaths {
+  const dir = join(app.getPath('userData'), CACHE_DIR)
+  return {
+    encryptedPath: join(dir, ENCRYPTED_CACHE_FILE),
+    legacyPlaintextPath: join(dir, LEGACY_CACHE_FILE)
+  }
+}
+
+const cacheCodec: CacheCodec = {
+  // safeStorage throws if touched before app ready; treat that as
+  // "unavailable" (fail open on auth availability) rather than crashing.
+  isAvailable: () => {
+    try {
+      return safeStorage.isEncryptionAvailable()
+    } catch {
+      return false
+    }
+  },
+  encrypt: (plaintext) => safeStorage.encryptString(plaintext),
+  decrypt: (ciphertext) => safeStorage.decryptString(ciphertext)
+}
+
+// Warn about codec unavailability once per process, not on every cache touch.
+let warnedCodecUnavailable = false
+const cacheStoreLog: CacheStoreLog = {
+  warn: (message, meta) => {
+    if (message === CODEC_UNAVAILABLE_WARNING) {
+      if (warnedCodecUnavailable) return
+      warnedCodecUnavailable = true
+    }
+    logger().warn(message, meta)
+  }
 }
 
 export function getPersistedCache(): string | null {
-  try {
-    return readFileSync(cachePath(), 'utf-8')
-  } catch {
-    return null
-  }
+  return loadTokenCache(cacheStorePaths(), cacheCodec, cacheStoreLog)
 }
 
 export function persistTokenCache(serialized: string): void {
-  const path = cachePath()
-  mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, serialized, 'utf-8')
+  persistTokenCacheToStore(cacheStorePaths(), cacheCodec, cacheStoreLog, serialized)
 }
 
 export function clearPersistedCache(): void {
-  try {
-    unlinkSync(cachePath())
-  } catch {
-    // already absent or never written
-  }
+  clearTokenCache(cacheStorePaths())
 }
 
 function restoreTokenCache(app: PublicClientApplication): void {
