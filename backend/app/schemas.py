@@ -9,7 +9,7 @@ from enum import Enum
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class MeetingStatus(str, Enum):
@@ -213,10 +213,50 @@ class ActionItem(BaseModel):
     meeting_id: UUID
     meeting_title: str = ""  # denormalised for list views; filled by routers
     owner: str | None = None  # None when owned by an unnamed Unknown speaker
+    owner_email: str | None = None
+    owner_confidence: Literal["high", "medium", "low", "unknown"] | None = None
+    owner_source: str | None = None
     description: str
+    action_type: str | None = None
     deadline: date | None = None
+    assigned_to: str | None = None
+    assigned_to_department: str | None = None
     priority: Priority = Priority.medium
     status: ActionItemStatus = ActionItemStatus.open
+
+
+class StructuredActionItem(BaseModel):
+    """One action from the versioned LLM output contract (IN-390)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    description: str
+    owner_name: str | None
+    owner_email: str | None
+    owner_confidence: Literal["high", "medium", "low", "unknown"] | None
+    owner_source: str | None
+    action_type: str | None
+    due_date: date | None
+    assigned_to: str | None
+    assigned_to_department: str | None
+    priority: Priority
+
+
+class StructuredMeetingOutput(BaseModel):
+    """Single schema-validated summarisation/action extraction result."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["1.0"]
+    summary: str
+    key_points: list[str]
+    decisions: list[str]
+    action_items: list[StructuredActionItem]
+    unresolved_questions: list[str]
+    next_meeting: list[str]
+    follow_ups: list[str]
+    quality_flags: list[str]
+    source_chunks: list[int]
 
 
 class ActionItemUpdate(BaseModel):

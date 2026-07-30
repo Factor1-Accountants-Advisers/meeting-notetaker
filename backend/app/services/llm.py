@@ -1,8 +1,8 @@
-"""Provider-agnostic LLM interface (decision #4).
+"""Provider-agnostic, structured meeting-output generation (IN-390).
 
-The backend talks to this protocol only; OpenAI and Azure OpenAI are both
-supported through a provider-agnostic interface. A stub keeps the pipeline
-runnable without either.
+The backend asks the configured provider for one versioned object containing
+both the summary and action items. Plain text, HTML, API action items, and the
+IN-384 Blob export are deterministic projections of that validated object.
 """
 
 from __future__ import annotations
@@ -12,14 +12,25 @@ import html
 import json
 import urllib.request
 from datetime import date
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from uuid import UUID, uuid4
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from app.config import get_settings
-from app.schemas import ActionItem, ActionItemStatus, Priority, TranscriptSegment
+from app.schemas import (
+    ActionItem,
+    ActionItemStatus,
+    StructuredActionItem,
+    StructuredMeetingOutput,
+    TranscriptSegment,
+)
 
 CHUNK_WINDOW_MS = 15 * 60 * 1000
 MAX_CHUNK_CONCURRENCY = 3
+STRUCTURED_OUTPUT_SCHEMA_VERSION = "1.0"
+PROVIDER_UNAVAILABLE_FLAG = "provider_unavailable"
+TRANSCRIPT_TOO_SHORT_FLAG = "transcript_too_short"
 
 # Section headers shared by the plain-text and HTML summary renderers. Keeping
 # them in one place means the minutes parsers in the meetings router can rely on
@@ -27,11 +38,11 @@ MAX_CHUNK_CONCURRENCY = 3
 SUMMARY_SECTIONS: tuple[tuple[str, str], ...] = (
     ("key_points", "Key discussion"),
     ("decisions", "Decisions"),
-    ("open_questions", "Open questions"),
+    ("unresolved_questions", "Open questions"),
     ("next_meeting", "Next meeting"),
 )
 
-# System prompts implementing the IN-106 "AI Summary Instructions" behavioral
+# System prompts implementing the IN-106 "AI Summary Instructions" behavioural
 # rules (no invented content, explicit owners only, Australian spelling,
 # verb-led actions, disagreements recorded as unresolved). Module-level so
 # tests can pin the agreed rules against regressions.
@@ -39,60 +50,87 @@ _CHUNK_SYSTEM_PROMPT = (
     "Extract structured meeting insights from this transcript chunk. "
     "Use only evidence in the chunk. Do not infer or invent decisions, commitments, or action items "
     "that are not present, and do not speculate based on the meeting topic. "
-    "Preserve exact speaker display names for owners; never assign an owner who is not explicitly "
-    "associated with the action. "
+    "Preserve exact speaker display names for owner_name; never assign an owner who is not explicitly "
+    "associated with the action. Leave owner metadata null when the transcript does not establish it. "
     "Record unresolved disagreements between speakers in 'questions' as "
     "'Unresolved: [name] and [name] had differing views on [topic]. To be confirmed.' "
-    "Capture any statements about when the next meeting will happen or items flagged for its agenda "
-    "in 'next_meeting' verbatim. Return valid JSON only."
+    "Capture statements about when the next meeting will happen or items flagged for its agenda "
+    "in 'next_meeting' verbatim. Start action descriptions with a verb. "
+    "Use Australian spelling and return only the requested structured JSON."
 )
 _REDUCE_SYSTEM_PROMPT = (
-    "Consolidate chunk-level meeting insights into final, client-ready meeting notes. "
+    "Consolidate chunk-level meeting insights into one final, client-ready structured meeting output. "
     "Write in formal professional English with Australian spelling. "
-    "Write 'overview' as a concise 2-4 sentence paragraph in a professional tone. "
-    "Populate 'key_points', 'decisions', and 'open_questions' as short, deduplicated bullet strings "
-    "(omit or leave empty when a section has nothing substantive). "
+    "Write 'summary' as a concise 2-4 sentence paragraph in a professional tone. "
+    "Populate 'key_points', 'decisions', and 'unresolved_questions' as short, deduplicated strings "
+    "(leave empty when a section has nothing substantive). "
     "Keep decisions distinct from actions: a decision is something resolved; an action is something "
-    "still to be done. Record unresolved disagreements in 'open_questions' as "
+    "still to be done. Record unresolved disagreements in 'unresolved_questions' as "
     "'Unresolved: [name] and [name] had differing views on [topic]. To be confirmed.' "
-    "Populate 'next_meeting' only from explicit statements: the agreed date/time as a bullet "
-    "formatted 'Date: ...', plus each agenda item flagged for the next meeting as its own bullet "
-    "(leave empty when nothing was stated). "
+    "Populate 'next_meeting' only from explicit statements: the agreed date/time as an item "
+    "formatted 'Date: ...', plus each agenda item flagged for the next meeting as its own item. "
     "Start every action item description with a verb (e.g. 'Submit', 'Review', 'Schedule'). "
-    "Deduplicate action items, preserve explicit owners only, use exact speaker display names when "
-    "owner names appear in the chunks. Return plain text in every field (no markdown or HTML) and valid JSON only."
+    "Deduplicate action items, preserve explicit owners only, and use exact speaker display names. "
+    "Do not infer owner email, department, assignment, source, or action type; leave any unsupported "
+    "nullable field null. Return plain text in every field (no markdown or HTML), set schema_version "
+    f"to '{STRUCTURED_OUTPUT_SCHEMA_VERSION}', and return only the requested structured JSON."
 )
+
+
+class _ChunkTimeRange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(ge=0)
+
+
+class _ChunkInsights(BaseModel):
+    """Strict map-stage contract; the reduce result is the public contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["1.0"]
+    chunk_index: int = Field(ge=1)
+    time_range: _ChunkTimeRange
+    summary_bullets: list[str]
+    decisions: list[str]
+    risks: list[str]
+    questions: list[str]
+    next_meeting: list[str]
+    action_items: list[StructuredActionItem]
+    follow_ups: list[str]
+    quality_flags: list[str]
 
 
 class SummaryProvider(Protocol):
-    async def summarize(self, segments: list[TranscriptSegment]) -> str:
-        """Generate a concise plain-text meeting summary from a transcript."""
+    async def generate(self, segments: list[TranscriptSegment]) -> StructuredMeetingOutput:
+        """Generate one versioned summary-and-actions object."""
         ...
 
-    async def summarize_html(self, segments: list[TranscriptSegment]) -> str | None:
-        """Return a rich-text (HTML) summary fragment, or None if unsupported."""
-        ...
 
-    async def extract_action_items(
-        self, meeting_id: UUID, segments: list[TranscriptSegment]
-    ) -> list[ActionItem]:
-        """Extract structured action items (owner, deadline, priority, status)."""
-        ...
+def _fallback_output(summary: str, flag: str) -> StructuredMeetingOutput:
+    return StructuredMeetingOutput(
+        schema_version=STRUCTURED_OUTPUT_SCHEMA_VERSION,
+        summary=summary,
+        key_points=[],
+        decisions=[],
+        action_items=[],
+        unresolved_questions=[],
+        next_meeting=[],
+        follow_ups=[],
+        quality_flags=[flag],
+        source_chunks=[],
+    )
 
 
 class StubLLMProvider:
     """Explicit unavailable-provider response when OpenAI is not configured."""
 
-    async def summarize(self, segments: list[TranscriptSegment]) -> str:
-        return "Summary unavailable — configure MN_OPENAI_API_KEY."
-
-    async def summarize_html(self, segments: list[TranscriptSegment]) -> str | None:
-        return None
-
-    async def extract_action_items(
-        self, meeting_id: UUID, segments: list[TranscriptSegment]
-    ) -> list[ActionItem]:
-        return []
+    async def generate(self, segments: list[TranscriptSegment]) -> StructuredMeetingOutput:
+        return _fallback_output(
+            "Summary unavailable — configure MN_OPENAI_API_KEY.",
+            PROVIDER_UNAVAILABLE_FLAG,
+        )
 
 
 def _format_ms(ms: int) -> str:
@@ -131,15 +169,6 @@ def _chunk_segments_by_window_ms(
     return chunks
 
 
-def _fingerprint_segments(segments: list[TranscriptSegment]) -> tuple[tuple[str, int, int, str], ...]:
-    return tuple((s.speaker, s.start_ms, s.end_ms, s.text) for s in segments)
-
-
-def _coerce_priority(value: Any) -> Priority:
-    text = str(value or "medium").lower()
-    return Priority(text if text in {"high", "medium", "low"} else "medium")
-
-
 def _string_list(value: Any) -> list[str]:
     """Coerce a model-supplied field into a clean list of non-empty strings."""
     if not isinstance(value, list):
@@ -147,22 +176,12 @@ def _string_list(value: Any) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
-def _overview_text(insights: dict[str, Any]) -> str:
-    # `summary` kept as a fallback key for older cached/reduced payloads.
-    return str(insights.get("overview") or insights.get("summary") or "").strip()
-
-
-def _compose_plain_summary(insights: dict[str, Any]) -> str:
-    """Render structured insights into a plain-text summary.
-
-    Used for the in-app summary, search index, and the transcript attachment.
-    The section headers match SUMMARY_SECTIONS so the minutes parsers can read
-    decisions and open questions back out.
-    """
-    overview = _overview_text(insights)
+def compose_plain_summary(output: StructuredMeetingOutput) -> str:
+    """Render the consolidated object for UI, search, and text delivery."""
+    overview = output.summary.strip()
     lines: list[str] = [overview] if overview else []
     for key, title in SUMMARY_SECTIONS:
-        items = _string_list(insights.get(key))
+        items = _string_list(getattr(output, key))
         if not items:
             continue
         lines.extend(["", title])
@@ -177,21 +196,22 @@ _HTML_MUTED = "#4b5563"
 _HTML_HEADING = "#111827"
 
 
-def _render_summary_html(insights: dict[str, Any]) -> str:
-    """Render structured insights into an escaped HTML fragment for email.
+def render_summary_html(output: StructuredMeetingOutput) -> str | None:
+    """Render an escaped HTML projection, preserving fallback behaviour."""
+    if PROVIDER_UNAVAILABLE_FLAG in output.quality_flags:
+        return None
+    if TRANSCRIPT_TOO_SHORT_FLAG in output.quality_flags:
+        return None
 
-    HTML is generated deterministically here (never taken from the model) so the
-    output is consistent and injection-safe.
-    """
     parts: list[str] = []
-    overview = _overview_text(insights)
+    overview = output.summary.strip()
     if overview:
         parts.append(
             f'<p style="margin:0 0 16px;font-family:{_HTML_FONT};font-size:14px;'
             f'line-height:1.6;color:{_HTML_TEXT};">{html.escape(overview)}</p>'
         )
     for key, title in SUMMARY_SECTIONS:
-        items = _string_list(insights.get(key))
+        items = _string_list(getattr(output, key))
         if not items:
             continue
         rows = "".join(f'<li style="margin:0 0 6px;">{html.escape(item)}</li>' for item in items)
@@ -201,150 +221,113 @@ def _render_summary_html(insights: dict[str, Any]) -> str:
             f'<ul style="margin:0 0 16px;padding-left:20px;font-family:{_HTML_FONT};'
             f'font-size:14px;line-height:1.5;color:{_HTML_MUTED};">{rows}</ul>'
         )
-    return "".join(parts)
+    return "".join(parts) or None
+
+
+def action_items_from_output(
+    meeting_id: UUID, output: StructuredMeetingOutput
+) -> list[ActionItem]:
+    """Project structured actions into the editable application model."""
+    result: list[ActionItem] = []
+    for item in output.action_items[:10]:
+        description = item.description.strip()
+        if not description:
+            continue
+        result.append(
+            ActionItem(
+                id=uuid4(),
+                meeting_id=meeting_id,
+                owner=item.owner_name,
+                owner_email=item.owner_email,
+                owner_confidence=item.owner_confidence,
+                owner_source=item.owner_source,
+                description=description,
+                action_type=item.action_type,
+                deadline=item.due_date,
+                assigned_to=item.assigned_to,
+                assigned_to_department=item.assigned_to_department,
+                priority=item.priority,
+                status=ActionItemStatus.open,
+            )
+        )
+    return result
 
 
 class OpenAIProvider:
-    """Direct OpenAI API provider (api.openai.com).
-
-    Long transcripts are handled with map-reduce: chunk-level structured JSON
-    extraction over 15-minute windows, followed by a compact reduce pass. This
-    avoids sending 1-3 hour transcripts as one huge prompt and gives deterministic
-    action-item parsing.
-    """
+    """Direct OpenAI API provider using strict structured map/reduce output."""
 
     def __init__(self, api_key: str, model: str = "gpt-4o"):
         self._api_key = api_key
         self._model = model
-        self._insights_cache: dict[tuple[tuple[str, int, int, str], ...], dict[str, Any]] = {}
 
-    async def summarize(self, segments: list[TranscriptSegment]) -> str:
+    async def generate(self, segments: list[TranscriptSegment]) -> StructuredMeetingOutput:
         if len(_segments_to_labelled_transcript(segments)) < 80:
-            return (
+            return _fallback_output(
                 "The recording was too short to produce a meaningful summary. "
-                "Ensure system audio is being captured and try a longer recording."
+                "Ensure system audio is being captured and try a longer recording.",
+                TRANSCRIPT_TOO_SHORT_FLAG,
             )
-        insights = await self._meeting_insights(segments)
-        return _compose_plain_summary(insights)
-
-    async def summarize_html(self, segments: list[TranscriptSegment]) -> str | None:
-        if len(_segments_to_labelled_transcript(segments)) < 80:
-            return None
-        insights = await self._meeting_insights(segments)
-        return _render_summary_html(insights) or None
-
-    async def extract_action_items(
-        self, meeting_id: UUID, segments: list[TranscriptSegment]
-    ) -> list[ActionItem]:
-        if len(_segments_to_labelled_transcript(segments)) < 80:
-            return []
-        insights = await self._meeting_insights(segments)
-        items_data = insights.get("action_items")
-        if not isinstance(items_data, list):
-            return []
-
-        result: list[ActionItem] = []
-        for item in items_data[:10]:
-            if not isinstance(item, dict):
-                continue
-            description = str(item.get("description") or "").strip()
-            if not description:
-                continue
-            try:
-                deadline_raw = item.get("deadline")
-                deadline = date.fromisoformat(str(deadline_raw)) if deadline_raw else None
-            except ValueError:
-                deadline = None
-            result.append(
-                ActionItem(
-                    id=uuid4(),
-                    meeting_id=meeting_id,
-                    owner=item.get("owner") if item.get("owner") else None,
-                    description=description,
-                    deadline=deadline,
-                    priority=_coerce_priority(item.get("priority")),
-                    status=ActionItemStatus.open,
-                )
-            )
-        return result
-
-    async def _meeting_insights(self, segments: list[TranscriptSegment]) -> dict[str, Any]:
-        key = _fingerprint_segments(segments)
-        if key in self._insights_cache:
-            return self._insights_cache[key]
 
         chunks = _chunk_segments_by_window_ms(segments)
         semaphore = asyncio.Semaphore(MAX_CHUNK_CONCURRENCY)
 
-        async def run_chunk(index: int, chunk: list[TranscriptSegment]) -> dict[str, Any]:
+        async def run_chunk(index: int, chunk: list[TranscriptSegment]) -> _ChunkInsights:
             async with semaphore:
                 return await self._extract_chunk_insights(index, len(chunks), chunk)
 
         chunk_results = await asyncio.gather(
             *(run_chunk(index, chunk) for index, chunk in enumerate(chunks, start=1))
         )
-        reduced = await self._reduce_chunk_insights(chunk_results)
-        self._insights_cache[key] = reduced
-        return reduced
+        return await self._reduce_chunk_insights(chunk_results)
 
     async def _extract_chunk_insights(
         self, chunk_index: int, total_chunks: int, segments: list[TranscriptSegment]
-    ) -> dict[str, Any]:
+    ) -> _ChunkInsights:
         payload = {
             "task": "chunk_insights",
             "chunk_index": chunk_index,
             "total_chunks": total_chunks,
-            "transcript": _segments_to_labelled_transcript(segments),
-            "schema": {
-                "summary_bullets": ["string"],
-                "decisions": ["string"],
-                "risks": ["string"],
-                "questions": ["string"],
-                "next_meeting": ["string"],
-                "action_items": [
-                    {
-                        "description": "string",
-                        "owner": "string|null",
-                        "deadline": "YYYY-MM-DD|null",
-                        "priority": "high|medium|low",
-                    }
-                ],
+            "time_range": {
+                "start_ms": min(segment.start_ms for segment in segments),
+                "end_ms": max(segment.end_ms for segment in segments),
             },
+            "transcript": _segments_to_labelled_transcript(segments),
         }
-        return await self._complete_json(
+        raw = await self._complete_json(
             _CHUNK_SYSTEM_PROMPT,
             payload,
-            max_tokens=1200,
+            max_tokens=1600,
+            schema_name="meeting_chunk_insights",
+            response_model=_ChunkInsights,
         )
+        return _ChunkInsights.model_validate(raw)
 
-    async def _reduce_chunk_insights(self, chunk_results: list[dict[str, Any]]) -> dict[str, Any]:
+    async def _reduce_chunk_insights(
+        self, chunk_results: list[_ChunkInsights]
+    ) -> StructuredMeetingOutput:
         payload = {
             "task": "reduce_insights",
             "today": date.today().isoformat(),
-            "chunks": chunk_results,
-            "schema": {
-                "overview": "string",
-                "key_points": ["string"],
-                "decisions": ["string"],
-                "open_questions": ["string"],
-                "next_meeting": ["string"],
-                "action_items": [
-                    {
-                        "description": "string",
-                        "owner": "string|null",
-                        "deadline": "YYYY-MM-DD|null",
-                        "priority": "high|medium|low",
-                    }
-                ],
-            },
+            "chunks": [chunk.model_dump(mode="json") for chunk in chunk_results],
         }
-        return await self._complete_json(
+        raw = await self._complete_json(
             _REDUCE_SYSTEM_PROMPT,
             payload,
-            max_tokens=1800,
+            max_tokens=2200,
+            schema_name="structured_meeting_output",
+            response_model=StructuredMeetingOutput,
         )
+        return StructuredMeetingOutput.model_validate(raw)
 
-    async def _complete_json(self, system_prompt: str, user_payload: dict, *, max_tokens: int) -> dict:
+    async def _complete_json(
+        self,
+        system_prompt: str,
+        user_payload: dict,
+        *,
+        max_tokens: int,
+        schema_name: str,
+        response_model: type[BaseModel],
+    ) -> dict:
         def request_json() -> dict:
             payload = {
                 "model": self._model,
@@ -354,7 +337,14 @@ class OpenAIProvider:
                 ],
                 "temperature": 0.2,
                 "max_tokens": max_tokens,
-                "response_format": {"type": "json_object"},
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": schema_name,
+                        "strict": True,
+                        "schema": response_model.model_json_schema(),
+                    },
+                },
             }
             req = urllib.request.Request(
                 "https://api.openai.com/v1/chat/completions",
@@ -375,15 +365,7 @@ class OpenAIProvider:
 class AzureOpenAIProvider:
     """Default provider once the Azure OpenAI deployment exists."""
 
-    async def summarize(self, segments: list[TranscriptSegment]) -> str:
-        raise NotImplementedError("Azure OpenAI wiring requires a provisioned deployment")
-
-    async def summarize_html(self, segments: list[TranscriptSegment]) -> str | None:
-        raise NotImplementedError("Azure OpenAI wiring requires a provisioned deployment")
-
-    async def extract_action_items(
-        self, meeting_id: UUID, segments: list[TranscriptSegment]
-    ) -> list[ActionItem]:
+    async def generate(self, segments: list[TranscriptSegment]) -> StructuredMeetingOutput:
         raise NotImplementedError("Azure OpenAI wiring requires a provisioned deployment")
 
 

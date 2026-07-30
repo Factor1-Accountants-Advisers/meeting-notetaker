@@ -38,7 +38,12 @@ from app.services.failure_reasons import (
     classify,
     log_delivery_failure,
 )
-from app.services.llm import get_llm_provider
+from app.services.llm import (
+    action_items_from_output,
+    compose_plain_summary,
+    get_llm_provider,
+    render_summary_html,
+)
 from app.services.meeting_export import refresh_meeting_export
 from app.services.meeting_voiceprints import resolve_meeting_voiceprints
 from app.services.speech import get_speech_provider
@@ -347,9 +352,10 @@ async def run_pipeline(
             "Extracting summary and action items...",
         )
         llm = get_llm_provider()
-        summary = await llm.summarize(segments)
-        summary_html = await llm.summarize_html(segments)
-        items = await llm.extract_action_items(meeting_id, segments)
+        structured_output = await llm.generate(segments)
+        summary = compose_plain_summary(structured_output)
+        summary_html = render_summary_html(structured_output)
+        items = action_items_from_output(meeting_id, structured_output)
         await asyncio.sleep(STAGE_DELAY_S)
 
         # Items owned by an unidentified speaker stay unassigned until named.
@@ -360,6 +366,11 @@ async def run_pipeline(
                 item.owner.startswith("Speaker ") or item.owner.startswith("Unknown")
             ):
                 item.owner = None
+                item.owner_email = None
+                item.owner_confidence = None
+                item.owner_source = None
+                item.assigned_to = None
+                item.assigned_to_department = None
 
         store.TRANSCRIPTS[meeting_id] = segments
         store.PARTICIPANTS[meeting_id] = participants
@@ -404,7 +415,10 @@ async def run_pipeline(
         )
         # Canonical IN-384 artifact for Blob upload/downstream consumers,
         # built from the just-stored transcript/summary/action items.
-        refresh_meeting_export(meeting_id)
+        refresh_meeting_export(
+            meeting_id,
+            structured_output=structured_output,
+        )
         # Blob delivery is a non-blocking post-processing concern. Its service
         # contains normal failure handling; this boundary also protects ready
         # pipeline outputs if a future delivery bug unexpectedly escapes.
