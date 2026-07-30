@@ -467,6 +467,31 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     merge, push, deployment, production write, or production smoke was
     performed.
 
+- [x] IN-385 — Deliver transcript and summary as separate SharePoint files
+  - Commit `b81fa98` on `codex/in-385-two-file-delivery` splits the existing
+    combined SharePoint artifact into deterministic
+    `Title-YYYY-MM-DD.txt` (transcript only) and
+    `Title-YYYY-MM-DD-summary.txt` (summary/minutes plus action items). The
+    existing `sharepoint_web_url` contract continues to point to the transcript;
+    the audit entry records both uploaded URLs.
+  - Both files receive the IN-387 owner-implicit plus Graph `grant_view`
+    (`read`, `requireSignIn`) treatment in the same delivery attempt. Any
+    first/second upload or grant failure, including an HTTP-200 partial grant
+    on the summary file, is classified with the IN-391 taxonomy and leaves
+    `sharepoint_status=failed`; retry re-runs the deterministic pair.
+  - The unconfigured-drive local locked-folder provider now receives the same
+    two artifacts. Coverage pins content separation, stable paired naming,
+    both grants, second-upload failure, second-file partial-grant failure, and
+    stand-in behavior in `test_delivery_reliability.py` and
+    `test_sharepoint_provider.py`.
+  - Verification (30 Jul 2026): focused SharePoint suite 32 tests, OK; backend
+    `python -m unittest discover` from `backend/` 279 tests, OK (1 skipped);
+    `python -m compileall app`, `npm run verify:graph`,
+    `npm run typecheck`, `npm run build`, and `git diff --check` passed. The
+    known stub-concurrency flake did not reproduce. Live two-person library
+    and read-only access verification remains the work machine's IN-398
+    execution and was not performed here.
+
 - [x] IN-387 — Define SharePoint library structure and provisioning
   - **Implemented (see `docs/superpowers/specs/2026-07-28-in387-sharepoint-library-design.md`):**
     site/library identified as `futurebusinessgroup.sharepoint.com/sites/InnovationsandSystems`,

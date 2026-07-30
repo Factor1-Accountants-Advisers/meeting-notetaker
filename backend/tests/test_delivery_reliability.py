@@ -1,6 +1,10 @@
+import json
 import logging
 import unittest
 from datetime import datetime, timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -15,6 +19,7 @@ from app.schemas import (
     ActionItem,
     ActionItemStatus,
     DeliveryStatus,
+    ManualMeetingAttendee,
     Meeting,
     MeetingAccessEntry,
     MeetingParticipant,
@@ -53,22 +58,44 @@ class UnavailableSharePointProvider:
 
 
 class CaptureSharePointProvider:
-    def __init__(self, uploads, grants, fail_grant=False):
+    def __init__(self, uploads, grants, fail_upload_at=None, fail_grant_at=None):
         self.uploads = uploads
         self.grants = grants
-        self.fail_grant = fail_grant
+        self.fail_upload_at = fail_upload_at
+        self.fail_grant_at = fail_grant_at
+        self.grant_attempts = 0
 
     async def save_transcript(self, *, meeting, filename, content, access_token=None):
         self.uploads.append({"meeting": meeting, "filename": filename, "content": content, "token": access_token})
+        if len(self.uploads) == self.fail_upload_at:
+            raise RuntimeError("simulated second SharePoint upload failure")
         return sharepoint.SharePointUploadResult(
             web_url=f"https://sharepoint.example/{filename}",
-            item_id="item-test-1",
+            item_id=f"item-test-{len(self.uploads)}",
         )
 
     async def grant_view(self, *, item_id, recipients, access_token=None):
-        if self.fail_grant:
-            raise RuntimeError("simulated Graph invite failure")
+        self.grant_attempts += 1
+        if self.grant_attempts == self.fail_grant_at:
+            raise RuntimeError(
+                f"SharePoint granted access to 0 of {len(recipients)} "
+                "recipient(s); expected all"
+            )
         self.grants.append({"item_id": item_id, "recipients": recipients, "token": access_token})
+
+
+class _GraphResponse:
+    def __init__(self, body):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self):
+        return json.dumps(self._body).encode("utf-8")
 
 
 class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
@@ -83,6 +110,7 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
             "audit": list(store.AUDIT_LOG),
         }
         self._old_email_provider = meetings_router.get_email_provider
+        self._old_settings_provider = meetings_router.get_settings
         self._old_sharepoint_provider = meetings_router.get_sharepoint_provider
         self.meeting_id = uuid4()
         meeting = Meeting(
@@ -92,6 +120,12 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
             owner_id="joseph",
             created_at=datetime.now(timezone.utc),
             pipeline_status=PipelineStatus.ready,
+            manual_attendees=[
+                ManualMeetingAttendee(
+                    name="Benjamin Bryant",
+                    email="benjamin@example.com",
+                )
+            ],
         )
         store.MEETINGS[self.meeting_id] = meeting
         store.ACCESS[self.meeting_id] = [MeetingAccessEntry(user="Joseph", role=AccessRole.owner)]
@@ -125,6 +159,7 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
         store.ACTION_ITEMS.clear(); store.ACTION_ITEMS.update(self._old_state["actions"])
         store.AUDIT_LOG[:] = self._old_state["audit"]
         meetings_router.get_email_provider = self._old_email_provider
+        meetings_router.get_settings = self._old_settings_provider
         meetings_router.get_sharepoint_provider = self._old_sharepoint_provider
 
     async def test_email_failure_marks_retryable_delivery_without_losing_outputs(self):
@@ -201,7 +236,7 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
             "have been delivered. Check your inbox before resending.",
         )
 
-    async def test_sharepoint_save_writes_transcript_and_records_location(self):
+    async def test_sharepoint_save_writes_separate_transcript_and_summary_files(self):
         uploads = []
         grants = []
         meetings_router.get_sharepoint_provider = lambda token=None: CaptureSharePointProvider(uploads, grants)
@@ -214,20 +249,36 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.sharepoint_status, SharePointStatus.saved)
         self.assertEqual(result.sharepoint_web_url, store.MEETINGS[self.meeting_id].sharepoint_web_url)
+        self.assertEqual(
+            result.sharepoint_web_url,
+            f"https://sharepoint.example/{uploads[0]['filename']}",
+        )
         self.assertEqual(store.MEETINGS[self.meeting_id].sharepoint_status, SharePointStatus.saved)
         self.assertEqual(store.MEETINGS[self.meeting_id].sharepoint_error_message, None)
-        self.assertEqual(len(uploads), 1)
+        self.assertEqual(len(uploads), 2)
+        self.assertEqual(
+            uploads[1]["filename"],
+            uploads[0]["filename"].removesuffix(".txt") + "-summary.txt",
+        )
         self.assertIn("--- TRANSCRIPT ---", uploads[0]["content"])
-        self.assertIn("Summary survives delivery failure.", uploads[0]["content"])
-        self.assertEqual(len(grants), 1)
+        self.assertIn("Transcript survives delivery failure.", uploads[0]["content"])
+        self.assertNotIn("Summary survives delivery failure.", uploads[0]["content"])
+        self.assertNotIn("Verify delivery reliability", uploads[0]["content"])
+        self.assertIn("Summary survives delivery failure.", uploads[1]["content"])
+        self.assertIn("Verify delivery reliability", uploads[1]["content"])
+        self.assertNotIn("--- TRANSCRIPT ---", uploads[1]["content"])
+        self.assertNotIn("Transcript survives delivery failure.", uploads[1]["content"])
+        self.assertEqual(len(grants), 2)
         self.assertEqual(grants[0]["item_id"], "item-test-1")
-        self.assertEqual(grants[0]["recipients"], [])
+        self.assertEqual(grants[1]["item_id"], "item-test-2")
+        self.assertEqual(grants[0]["recipients"], ["benjamin@example.com"])
+        self.assertEqual(grants[1]["recipients"], ["benjamin@example.com"])
 
     async def test_sharepoint_grant_failure_marks_whole_delivery_failed_and_retry_recovers(self):
         uploads = []
         grants = []
         meetings_router.get_sharepoint_provider = lambda token=None: CaptureSharePointProvider(
-            uploads, grants, fail_grant=True
+            uploads, grants, fail_grant_at=1
         )
 
         with self.assertLogs("app.services.failure_reasons", level=logging.WARNING) as captured:
@@ -240,7 +291,7 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raised.exception.status_code, 502)
         # HTTPException detail still carries the raw exception text for the
         # transient toast (intentionally NOT the stored field).
-        self.assertIn("simulated Graph invite failure", str(raised.exception.detail))
+        self.assertIn("granted access to 0 of 1", str(raised.exception.detail))
         meeting = store.MEETINGS[self.meeting_id]
         self.assertEqual(meeting.sharepoint_status, SharePointStatus.failed)
         self.assertEqual(meeting.sharepoint_error_code, "processing_error")
@@ -262,8 +313,126 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
             graph_token="token",
         )
         self.assertEqual(result.sharepoint_status, SharePointStatus.saved)
+        self.assertEqual(len(uploads), 3)
+        self.assertEqual(len(grants), 2)
+
+    async def test_sharepoint_partial_grant_on_second_file_marks_delivery_failed(self):
+        responses = iter(
+            [
+                {
+                    "webUrl": "https://sharepoint.example/transcript.txt",
+                    "id": "item-transcript",
+                },
+                {"value": [{"id": "permission-transcript"}]},
+                {
+                    "webUrl": "https://sharepoint.example/summary.txt",
+                    "id": "item-summary",
+                },
+                # A successful HTTP response with a missing grantee must still
+                # fail the complete two-file delivery.
+                {"value": []},
+            ]
+        )
+        requests = []
+
+        def fake_urlopen(request, timeout=0):
+            requests.append(request)
+            return _GraphResponse(next(responses))
+
+        meetings_router.get_sharepoint_provider = (
+            lambda token=None: sharepoint.GraphSharePointProvider("drive-test", "")
+        )
+
+        with patch("urllib.request.urlopen", fake_urlopen):
+            with self.assertLogs("app.services.failure_reasons", level=logging.WARNING):
+                with self.assertRaises(HTTPException) as raised:
+                    await meetings_router.save_transcript_to_sharepoint(
+                        self.meeting_id,
+                        actor="Joseph",
+                        graph_token="token",
+                    )
+
+        self.assertEqual(raised.exception.status_code, 502)
+        self.assertIn("granted access to 0 of 1", str(raised.exception.detail))
+        meeting = store.MEETINGS[self.meeting_id]
+        self.assertEqual(meeting.sharepoint_status, SharePointStatus.failed)
+        self.assertEqual(meeting.sharepoint_error_code, "processing_error")
+        self.assertEqual(
+            meeting.sharepoint_error_message,
+            USER_SENTENCES[FailureCategory.processing_error],
+        )
+        self.assertEqual(len(requests), 4)
+        self.assertIn("/items/item-transcript/invite", requests[1].full_url)
+        self.assertIn("/items/item-summary/invite", requests[3].full_url)
+
+    async def test_sharepoint_second_upload_failure_marks_delivery_failed(self):
+        uploads = []
+        grants = []
+        meetings_router.get_sharepoint_provider = lambda token=None: CaptureSharePointProvider(
+            uploads,
+            grants,
+            fail_upload_at=2,
+        )
+
+        with self.assertLogs("app.services.failure_reasons", level=logging.WARNING):
+            with self.assertRaises(HTTPException) as raised:
+                await meetings_router.save_transcript_to_sharepoint(
+                    self.meeting_id,
+                    actor="Joseph",
+                    graph_token="token",
+                )
+
+        self.assertEqual(raised.exception.status_code, 502)
+        meeting = store.MEETINGS[self.meeting_id]
+        self.assertEqual(meeting.sharepoint_status, SharePointStatus.failed)
+        self.assertEqual(meeting.sharepoint_error_code, "processing_error")
+        self.assertEqual(
+            meeting.sharepoint_error_message,
+            USER_SENTENCES[FailureCategory.processing_error],
+        )
         self.assertEqual(len(uploads), 2)
         self.assertEqual(len(grants), 1)
+        self.assertTrue(uploads[1]["filename"].endswith("-summary.txt"))
+
+    async def test_sharepoint_local_stand_in_writes_both_files(self):
+        class UnconfiguredSettings:
+            sharepoint_drive_id = ""
+
+        meetings_router.get_settings = lambda: UnconfiguredSettings()
+        meetings_router.get_sharepoint_provider = (
+            lambda token=None: sharepoint.LocalSharePointProvider()
+        )
+
+        with TemporaryDirectory() as temp_dir:
+            original_dir = sharepoint.LOCAL_SHAREPOINT_DIR
+            sharepoint.LOCAL_SHAREPOINT_DIR = Path(temp_dir)
+            try:
+                result = await meetings_router.save_transcript_to_sharepoint(
+                    self.meeting_id,
+                    actor="Joseph",
+                    graph_token="",
+                )
+            finally:
+                sharepoint.LOCAL_SHAREPOINT_DIR = original_dir
+
+            files = sorted(Path(temp_dir).glob("*.txt"))
+            self.assertEqual(result.sharepoint_status, SharePointStatus.saved)
+            self.assertEqual(len(files), 2)
+            self.assertTrue(any(path.name.endswith("-summary.txt") for path in files))
+            transcript_file = next(
+                path for path in files if not path.name.endswith("-summary.txt")
+            )
+            summary_file = next(
+                path for path in files if path.name.endswith("-summary.txt")
+            )
+            self.assertIn(
+                "Transcript survives delivery failure.",
+                transcript_file.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "Summary survives delivery failure.",
+                summary_file.read_text(encoding="utf-8"),
+            )
 
     async def test_email_acl_rejects_viewer(self):
         """D2: viewer-role actor cannot send email."""
