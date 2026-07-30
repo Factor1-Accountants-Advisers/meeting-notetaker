@@ -189,8 +189,8 @@ export function EnrollmentModal({ person, onClose, onEnrolled, required = false 
     (step.startsWith('sample-') && !currentClip)
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6">
-      <div className="w-full max-w-[480px] aspect-square overflow-hidden rounded-lg border-[0.5px] border-edge-secondary bg-bg-primary flex flex-col">
+    <div className="ui-backdrop fixed inset-0 z-[80] flex items-center justify-center bg-[var(--color-background-modal)] p-6">
+      <div className="ui-enter w-full max-w-[480px] aspect-square overflow-hidden rounded-lg border-[0.5px] border-edge-secondary bg-bg-primary flex flex-col">
         <div className="border-b-[0.5px] border-edge-tertiary px-5 py-4">
           <div className="flex items-start justify-between gap-4">
             <div>
