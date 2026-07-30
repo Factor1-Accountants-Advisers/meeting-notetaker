@@ -163,12 +163,21 @@ carry these sentences; raw exception text is confined to
   deployed to production, GitHub Actions `Deploy` run `30335569135` — see
   `docs/jira-progress.md` IN-386 entry). A duplicate export from a Blob
   retry can never destroy data.
-- **SharePoint retry re-runs upload + grant atomically (IN-387).**
+- **SharePoint retry re-runs both file uploads + grants atomically
+  (IN-385/IN-387).**
   `routers/meetings.py` `save_transcript_to_sharepoint` performs
-  `provider.save_transcript(...)` and `provider.grant_view(...)` inside one
-  `try` block; any failure (upload or grant) marks the whole delivery
-  `failed`, so a retry always redoes both steps from scratch — there is no
-  partial "uploaded but ungranted" state to retry around.
+  transcript upload/grant followed by summary upload/grant inside one `try`
+  block and one `SharePointStatus` transition. The transcript uses the stable
+  `Title-YYYY-MM-DD.txt` name; the summary and action items use
+  `Title-YYYY-MM-DD-summary.txt`. Both files use the IN-387 owner-implicit
+  access plus Graph `grant_view` invite (`read`, `requireSignIn`) semantics.
+  Any upload failure, grant failure, or HTTP-200 partial grant on either file
+  marks the whole delivery `failed` through the IN-391 taxonomy. A retry
+  redoes all four operations from scratch using the same deterministic names;
+  the local locked-folder stand-in mirrors the two-file behavior. This is
+  status-level atomicity: a remote first file may exist after a later step
+  fails, but the meeting never reports `saved`, and retry safely overwrites
+  the deterministic pair.
 
 ## 4. Audio preservation and failed-job durability
 
