@@ -26,7 +26,13 @@ import { registerRecordingStorageIpc } from './recording-storage'
 import { ensureDefaultAutoLaunchEnabled, isBackgroundLaunch, registerStartupIpc } from './startup'
 import { buildUpdateReadyToastXml } from './toast-xml'
 import { createTray, destroyTray, setTraySkipped, setUpdateReady, setUpdateRestartHandler, updateTrayMenu } from './tray'
-import { deferUpdate, registerUpdaterIpc, restartNowRequested, startUpdaterLifecycle } from './updater'
+import {
+  deferUpdate,
+  registerUpdaterIpc,
+  restartNowRequested,
+  startUpdaterLifecycle,
+  stopUpdaterTimers
+} from './updater'
 import { startBackendSupervisor, stopBackendSupervisor } from './backend-supervisor'
 import { createWindow, registerWindowSizingIpc } from './window'
 import type { GraphEventDecision } from './graph/types'
@@ -280,5 +286,6 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   cleanupRecordingIpc()
   stopBackendSupervisor()
+  stopUpdaterTimers()
   destroyTray()
 })

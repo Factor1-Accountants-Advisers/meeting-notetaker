@@ -47,6 +47,11 @@ let idleTickInFlight = false
 // Last logged gate outcome: a reason string while blocked, null once allowed,
 // undefined before the first tick. Used to log only on transitions.
 let lastGateReason: string | null | undefined = undefined
+// IN-469: reentrancy guard for tryInstallNow. Set synchronously before the
+// first await so two concurrent callers (countdown expiry, restart-request)
+// can't both pass the gate and both call quitAndInstall. Cleared only on a
+// blocked verdict — once an install is actually launching, it stays true.
+let installLaunching = false
 
 // IN-469: probe the local backend for in-flight pipeline work before letting
 // an update auto-install. Every failure path returns true (busy) — we only
@@ -91,8 +96,14 @@ async function buildGateInput(deps: UpdaterDeps): Promise<UpdateGateInput> {
  * auto_record_imminent / backend_processing always block.
  */
 async function tryInstallNow(trigger: 'countdown' | 'restart-request'): Promise<UpdateGateVerdict> {
+  if (installLaunching) {
+    logger().info('[updater] install already launching — ignoring duplicate trigger', { trigger })
+    return { allow: false, reason: 'install_already_launching' }
+  }
+  installLaunching = true
   const deps = lifecycleDeps
   if (!deps || downloadedVersion === null) {
+    installLaunching = false
     return { allow: false, reason: 'no_update_downloaded' }
   }
   const input = await buildGateInput(deps)
@@ -103,9 +114,14 @@ async function tryInstallNow(trigger: 'countdown' | 'restart-request'): Promise<
   })
   if (!verdict.allow) {
     logger().info('[updater] install aborted by gate', { trigger, reason: verdict.reason })
+    installLaunching = false
     return verdict
   }
   logger().info('[updater] installing update', { version: downloadedVersion, trigger })
+  if (countdownTimer) {
+    clearTimeout(countdownTimer)
+    countdownTimer = null
+  }
   autoUpdater.quitAndInstall(true, true) // silent install, force relaunch
   return verdict
 }
@@ -252,6 +268,18 @@ export function restartNowRequested(): void {
       message: err instanceof Error ? err.message : String(err)
     })
   })
+}
+
+/** Clear the idle poll interval and any armed countdown timer — called on before-quit. */
+export function stopUpdaterTimers(): void {
+  if (idlePollTimer) {
+    clearInterval(idlePollTimer)
+    idlePollTimer = null
+  }
+  if (countdownTimer) {
+    clearTimeout(countdownTimer)
+    countdownTimer = null
+  }
 }
 
 export function registerUpdaterIpc(): void {
