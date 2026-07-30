@@ -38,3 +38,44 @@ export function buildEndingSoonToastXml(body: string): string {
     '</toast>'
   )
 }
+
+/**
+ * "Update {version} is ready." (IN-469). Buttons activate the app with
+ * `mn-update-restart` / `mn-update-defer`, handled by the single-instance
+ * hook in index.ts (same convention as `mn-extend`).
+ */
+export function buildUpdateReadyToastXml(version: string): string {
+  return (
+    '<toast activationType="foreground" launch="mn-open">' +
+    '<visual><binding template="ToastGeneric">' +
+    '<text>Meeting Notetaker</text>' +
+    `<text>${xmlEscape(`Update ${version} is ready.`)}</text>` +
+    '</binding></visual>' +
+    '<audio silent="true"/>' +
+    '<actions>' +
+    '<action content="Restart now" activationType="foreground" arguments="mn-update-restart"/>' +
+    '<action content="Later" activationType="foreground" arguments="mn-update-defer"/>' +
+    '</actions>' +
+    '</toast>'
+  )
+}
+
+/**
+ * Pre-install countdown (IN-469). `scenario="reminder"` pins it on screen for
+ * the full countdown so "Not now" stays reachable — the transient default
+ * slides into the Action Center after ~5 s (same rationale as ending-soon).
+ */
+export function buildUpdateCountdownToastXml(version: string, seconds: number): string {
+  return (
+    '<toast scenario="reminder" activationType="foreground" launch="mn-open">' +
+    '<visual><binding template="ToastGeneric">' +
+    '<text>Meeting Notetaker</text>' +
+    `<text>${xmlEscape(`Restarting to update to ${version} in ${seconds} seconds…`)}</text>` +
+    '</binding></visual>' +
+    '<audio silent="true"/>' +
+    '<actions>' +
+    '<action content="Not now" activationType="foreground" arguments="mn-update-defer"/>' +
+    '</actions>' +
+    '</toast>'
+  )
+}
