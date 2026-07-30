@@ -100,14 +100,19 @@ carry these sentences; raw exception text is confined to
    `root.response.status_code`. This `.code` probe is what makes a real
    `urllib.error.HTTPError` (pyannoteAI, Graph via `urllib`) classify
    correctly — `HTTPError.code` is where the status lives.
-3. Status in `{401, 403}` at `stage="pipeline"` →
+3. Status in `{401, 403}` with a `StorageApiError` anywhere in the cause
+   chain → `azure_signin`, regardless of stage. Storage API calls (e.g.
+   voiceprint resolution, which runs inside the pipeline try block)
+   authenticate with the user's delegated Microsoft token, so signing in
+   again is the correct remediation.
+4. Otherwise, status in `{401, 403}` at `stage="pipeline"` →
    `provider_credentials`. This covers pyannoteAI and OpenAI application
    credentials; retrying Microsoft sign-in cannot repair these failures.
-4. Status in `{401, 403}` at a delivery stage (`blob`, `sharepoint`, or
+5. Status in `{401, 403}` at a delivery stage (`blob`, `sharepoint`, or
    `email`) → `azure_signin`, preserving the delegated Microsoft-token
    guidance on those surfaces.
-5. Status in `{408, 429}` or `status >= 500` → `service_unavailable`.
-6. **File-error exclusion, then network.** `_FILE_ERROR_TYPES`
+6. Status in `{408, 429}` or `status >= 500` → `service_unavailable`.
+7. **File-error exclusion, then network.** `_FILE_ERROR_TYPES`
    (`FileNotFoundError`, `PermissionError`, `IsADirectoryError`,
    `NotADirectoryError`, `FileExistsError`) are *never* `network`, checked
    before anything else — these are local file-op errors even though they
@@ -118,8 +123,8 @@ carry these sentences; raw exception text is confined to
    root.filename is None` → `network` — this covers `ConnectionError`,
    `TimeoutError`, and `urllib.error.URLError`, all of which subclass
    `OSError` and carry no `filename`.
-7. Anything else → `processing_error`.
-8. **`StorageApiUnavailable` (blob only, explicit, not via `classify()`).**
+8. Anything else → `processing_error`.
+9. **`StorageApiUnavailable` (blob only, explicit, not via `classify()`).**
    `storage_api.py` raises this from three sites with three different cause
    chains: `:544` (5xx status check) has no active exception, so no
    `__cause__`; `:551` (`except http.client.HTTPException:`) raises `from
@@ -285,4 +290,6 @@ list and review screens are not renderer consumers.
   `PyannoteAIError(...) from exc`; `classify()` unwraps it, reads the HTTP
   status, and maps pipeline-stage authentication failures to
   `provider_credentials`. Delivery-stage 401/403 responses still map to
-  `azure_signin`.
+  `azure_signin`, as do Storage-API-sourced 401/403s at any stage (the
+  `StorageApiError` provenance check in rule 3) — those authenticate with
+  the user's delegated Microsoft token, not an application credential.

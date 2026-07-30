@@ -10,6 +10,8 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 
+from app.services.storage_api import StorageApiError
+
 logger = logging.getLogger(__name__)
 
 _DETAIL_LIMIT = 500
@@ -82,6 +84,25 @@ def _status_code(exc: BaseException) -> int | None:
     return value if isinstance(value, int) else None
 
 
+def _is_storage_api_failure(exc: BaseException) -> bool:
+    """True when any link in the cause chain is a Storage API error.
+
+    Storage API requests authenticate with the user's delegated Microsoft
+    token, so a 401/403 from that chain means "sign in again" — even when it
+    surfaces at stage="pipeline" (voiceprint resolution runs inside the
+    pipeline try block), where a bare 401 otherwise means a provider
+    credential like the pyannoteAI key.
+    """
+    link: BaseException | None = exc
+    for _ in range(5):  # bounded like the root-cause unwrap below
+        if link is None:
+            return False
+        if isinstance(link, StorageApiError):
+            return True
+        link = link.__cause__
+    return False
+
+
 def _is_network_error(exc: BaseException) -> bool:
     if isinstance(exc, _FILE_ERROR_TYPES):
         return False
@@ -118,7 +139,9 @@ def classify(exc: BaseException, *, stage: str) -> FailureReason:
         detail += f" (cause: {root})"
     detail = detail.replace("\n", " ")[:_DETAIL_LIMIT]
     status = _status_code(root)
-    if status in _SIGNIN_STATUSES and stage == "pipeline":
+    if status in _SIGNIN_STATUSES and _is_storage_api_failure(exc):
+        category = FailureCategory.azure_signin
+    elif status in _SIGNIN_STATUSES and stage == "pipeline":
         category = FailureCategory.provider_credentials
     elif status in _SIGNIN_STATUSES:
         category = FailureCategory.azure_signin
