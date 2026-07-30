@@ -10,6 +10,8 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 
+from app.services.storage_api import StorageApiError
+
 logger = logging.getLogger(__name__)
 
 _DETAIL_LIMIT = 500
@@ -18,6 +20,7 @@ _DETAIL_LIMIT = 500
 class FailureCategory(str, Enum):
     network = "network"
     azure_signin = "azure_signin"
+    provider_credentials = "provider_credentials"
     service_unavailable = "service_unavailable"
     audio_problem = "audio_problem"
     processing_error = "processing_error"
@@ -29,6 +32,10 @@ class FailureCategory(str, Enum):
 USER_SENTENCES: dict[FailureCategory, str] = {
     FailureCategory.network: "Couldn't reach the network. Check your connection and retry.",
     FailureCategory.azure_signin: "Microsoft sign-in is needed. Sign in again, then retry.",
+    FailureCategory.provider_credentials: (
+        "A processing service credential needs attention. "
+        "Ask an administrator to update it, then retry."
+    ),
     FailureCategory.service_unavailable: "A cloud service is temporarily unavailable. Retry in a few minutes.",
     FailureCategory.audio_problem: "There was a problem with the recorded audio. Retry, and report a problem if it happens again.",
     FailureCategory.processing_error: "Processing failed. The recording is saved — retry to try again.",
@@ -77,6 +84,25 @@ def _status_code(exc: BaseException) -> int | None:
     return value if isinstance(value, int) else None
 
 
+def _is_storage_api_failure(exc: BaseException) -> bool:
+    """True when any link in the cause chain is a Storage API error.
+
+    Storage API requests authenticate with the user's delegated Microsoft
+    token, so a 401/403 from that chain means "sign in again" — even when it
+    surfaces at stage="pipeline" (voiceprint resolution runs inside the
+    pipeline try block), where a bare 401 otherwise means a provider
+    credential like the pyannoteAI key.
+    """
+    link: BaseException | None = exc
+    for _ in range(5):  # bounded like the root-cause unwrap below
+        if link is None:
+            return False
+        if isinstance(link, StorageApiError):
+            return True
+        link = link.__cause__
+    return False
+
+
 def _is_network_error(exc: BaseException) -> bool:
     if isinstance(exc, _FILE_ERROR_TYPES):
         return False
@@ -113,7 +139,11 @@ def classify(exc: BaseException, *, stage: str) -> FailureReason:
         detail += f" (cause: {root})"
     detail = detail.replace("\n", " ")[:_DETAIL_LIMIT]
     status = _status_code(root)
-    if status in _SIGNIN_STATUSES:
+    if status in _SIGNIN_STATUSES and _is_storage_api_failure(exc):
+        category = FailureCategory.azure_signin
+    elif status in _SIGNIN_STATUSES and stage == "pipeline":
+        category = FailureCategory.provider_credentials
+    elif status in _SIGNIN_STATUSES:
         category = FailureCategory.azure_signin
     elif status is not None and (status in _UNAVAILABLE_STATUSES or status >= 500):
         category = FailureCategory.service_unavailable

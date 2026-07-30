@@ -14,6 +14,8 @@ from app.services.failure_reasons import (
     classify,
     log_delivery_failure,
 )
+from app.services.pyannote_client import PyannoteAIError
+from app.services.storage_api import StorageApiRejected
 
 
 class _FakeHttpError(Exception):
@@ -33,10 +35,19 @@ class ClassifyTests(unittest.TestCase):
                 reason = classify(exc, stage="blob")
                 self.assertIs(reason.category, FailureCategory.network)
 
-    def test_http_401_and_403_classify_as_azure_signin(self) -> None:
+    def test_delivery_http_401_and_403_classify_as_azure_signin(self) -> None:
         for code in (401, 403):
             reason = classify(_FakeHttpError(code), stage="sharepoint")
             self.assertIs(reason.category, FailureCategory.azure_signin)
+
+    def test_pipeline_http_401_and_403_classify_as_provider_credentials(self) -> None:
+        for code in (401, 403):
+            reason = classify(_FakeHttpError(code), stage="pipeline")
+            self.assertIs(reason.category, FailureCategory.provider_credentials)
+            self.assertEqual(
+                reason.user_sentence,
+                "A processing service credential needs attention. Ask an administrator to update it, then retry.",
+            )
 
     def test_http_408_429_5xx_classify_as_service_unavailable(self) -> None:
         for code in (408, 429, 500, 503):
@@ -137,6 +148,50 @@ class ClassifyTests(unittest.TestCase):
             "https://graph.microsoft.com/x", 401, "unauthorized", {}, io.BytesIO(b"")
         )
         reason = classify(exc, stage="sharepoint")
+        self.assertIs(reason.category, FailureCategory.azure_signin)
+
+    def test_wrapped_pyannote_http_error_401_classifies_as_provider_credentials(self) -> None:
+        try:
+            try:
+                raise urllib.error.HTTPError(
+                    "https://api.pyannote.ai/v1/diarize",
+                    401,
+                    "unauthorized",
+                    {},
+                    io.BytesIO(b""),
+                )
+            except urllib.error.HTTPError as cause:
+                raise PyannoteAIError("pyannoteAI HTTP 401") from cause
+        except PyannoteAIError as wrapper:
+            reason = classify(wrapper, stage="pipeline")
+        self.assertIs(reason.category, FailureCategory.provider_credentials)
+
+    def test_storage_api_401_at_pipeline_stage_classifies_as_azure_signin(self) -> None:
+        # Voiceprint resolution runs inside the pipeline try block but
+        # authenticates with the user's delegated Microsoft token — a 401
+        # from the Storage API chain must say "sign in again", never
+        # "provider credentials" (regression guard for the IN-391 follow-up).
+        try:
+            try:
+                raise urllib.error.HTTPError(
+                    "https://func-innov-nt-storage-prod.example/api/v1/voiceprints",
+                    401,
+                    "unauthorized",
+                    {},
+                    io.BytesIO(b""),
+                )
+            except urllib.error.HTTPError as cause:
+                raise StorageApiRejected("storage API returned 401", 401) from cause
+        except StorageApiRejected as wrapper:
+            reason = classify(wrapper, stage="pipeline")
+        self.assertIs(reason.category, FailureCategory.azure_signin)
+
+    def test_bare_storage_api_rejection_still_classifies_as_azure_signin(self) -> None:
+        # Same guard when the StorageApiRejected has no HTTPError cause
+        # (stub client raises it bare) — provenance alone decides.
+        reason = classify(
+            StorageApiRejected("storage API returned 403", 403), stage="pipeline"
+        )
         self.assertIs(reason.category, FailureCategory.azure_signin)
 
 
