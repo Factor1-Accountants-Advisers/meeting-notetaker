@@ -18,6 +18,7 @@ _DETAIL_LIMIT = 500
 class FailureCategory(str, Enum):
     network = "network"
     azure_signin = "azure_signin"
+    provider_credentials = "provider_credentials"
     service_unavailable = "service_unavailable"
     audio_problem = "audio_problem"
     processing_error = "processing_error"
@@ -29,6 +30,10 @@ class FailureCategory(str, Enum):
 USER_SENTENCES: dict[FailureCategory, str] = {
     FailureCategory.network: "Couldn't reach the network. Check your connection and retry.",
     FailureCategory.azure_signin: "Microsoft sign-in is needed. Sign in again, then retry.",
+    FailureCategory.provider_credentials: (
+        "A processing service credential needs attention. "
+        "Ask an administrator to update it, then retry."
+    ),
     FailureCategory.service_unavailable: "A cloud service is temporarily unavailable. Retry in a few minutes.",
     FailureCategory.audio_problem: "There was a problem with the recorded audio. Retry, and report a problem if it happens again.",
     FailureCategory.processing_error: "Processing failed. The recording is saved — retry to try again.",
@@ -113,7 +118,9 @@ def classify(exc: BaseException, *, stage: str) -> FailureReason:
         detail += f" (cause: {root})"
     detail = detail.replace("\n", " ")[:_DETAIL_LIMIT]
     status = _status_code(root)
-    if status in _SIGNIN_STATUSES:
+    if status in _SIGNIN_STATUSES and stage == "pipeline":
+        category = FailureCategory.provider_credentials
+    elif status in _SIGNIN_STATUSES:
         category = FailureCategory.azure_signin
     elif status is not None and (status in _UNAVAILABLE_STATUSES or status >= 500):
         category = FailureCategory.service_unavailable

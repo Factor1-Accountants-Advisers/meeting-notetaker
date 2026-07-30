@@ -1,6 +1,7 @@
 export type FailureCategory =
   | 'network'
   | 'azure_signin'
+  | 'provider_credentials'
   | 'service_unavailable'
   | 'audio_problem'
   | 'processing_error'
@@ -10,6 +11,7 @@ export type FailureCategory =
 export const CATEGORY_LABELS: Record<FailureCategory, string> = {
   network: 'Network',
   azure_signin: 'Microsoft sign-in',
+  provider_credentials: 'Provider credentials',
   service_unavailable: 'Service unavailable',
   audio_problem: 'Audio problem',
   processing_error: 'Processing error',

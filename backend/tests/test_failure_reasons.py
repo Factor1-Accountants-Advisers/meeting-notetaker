@@ -14,6 +14,7 @@ from app.services.failure_reasons import (
     classify,
     log_delivery_failure,
 )
+from app.services.pyannote_client import PyannoteAIError
 
 
 class _FakeHttpError(Exception):
@@ -33,10 +34,19 @@ class ClassifyTests(unittest.TestCase):
                 reason = classify(exc, stage="blob")
                 self.assertIs(reason.category, FailureCategory.network)
 
-    def test_http_401_and_403_classify_as_azure_signin(self) -> None:
+    def test_delivery_http_401_and_403_classify_as_azure_signin(self) -> None:
         for code in (401, 403):
             reason = classify(_FakeHttpError(code), stage="sharepoint")
             self.assertIs(reason.category, FailureCategory.azure_signin)
+
+    def test_pipeline_http_401_and_403_classify_as_provider_credentials(self) -> None:
+        for code in (401, 403):
+            reason = classify(_FakeHttpError(code), stage="pipeline")
+            self.assertIs(reason.category, FailureCategory.provider_credentials)
+            self.assertEqual(
+                reason.user_sentence,
+                "A processing service credential needs attention. Ask an administrator to update it, then retry.",
+            )
 
     def test_http_408_429_5xx_classify_as_service_unavailable(self) -> None:
         for code in (408, 429, 500, 503):
@@ -138,6 +148,22 @@ class ClassifyTests(unittest.TestCase):
         )
         reason = classify(exc, stage="sharepoint")
         self.assertIs(reason.category, FailureCategory.azure_signin)
+
+    def test_wrapped_pyannote_http_error_401_classifies_as_provider_credentials(self) -> None:
+        try:
+            try:
+                raise urllib.error.HTTPError(
+                    "https://api.pyannote.ai/v1/diarize",
+                    401,
+                    "unauthorized",
+                    {},
+                    io.BytesIO(b""),
+                )
+            except urllib.error.HTTPError as cause:
+                raise PyannoteAIError("pyannoteAI HTTP 401") from cause
+        except PyannoteAIError as wrapper:
+            reason = classify(wrapper, stage="pipeline")
+        self.assertIs(reason.category, FailureCategory.provider_credentials)
 
 
 class LogDeliveryFailureTests(unittest.TestCase):

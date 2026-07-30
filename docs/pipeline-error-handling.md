@@ -70,7 +70,7 @@ the duplicate-resend bug IN-478 fixed. `delivery_error_code` is explicitly
 
 ## 2. Failure taxonomy
 
-Module: `backend/app/services/failure_reasons.py`. Seven categories, each
+Module: `backend/app/services/failure_reasons.py`. Eight categories, each
 with one fixed, product-voice user sentence. User-facing fields only ever
 carry these sentences; raw exception text is confined to
 `technical_detail` (truncated to 500 chars) and the support log line (§5).
@@ -79,6 +79,7 @@ carry these sentences; raw exception text is confined to
 | --- | --- |
 | `network` | "Couldn't reach the network. Check your connection and retry." |
 | `azure_signin` | "Microsoft sign-in is needed. Sign in again, then retry." |
+| `provider_credentials` | "A processing service credential needs attention. Ask an administrator to update it, then retry." |
 | `service_unavailable` | "A cloud service is temporarily unavailable. Retry in a few minutes." |
 | `audio_problem` | "There was a problem with the recorded audio. Retry, and report a problem if it happens again." |
 | `processing_error` | "Processing failed. The recording is saved — retry to try again." |
@@ -99,9 +100,14 @@ carry these sentences; raw exception text is confined to
    `root.response.status_code`. This `.code` probe is what makes a real
    `urllib.error.HTTPError` (pyannoteAI, Graph via `urllib`) classify
    correctly — `HTTPError.code` is where the status lives.
-3. Status in `{401, 403}` → `azure_signin`.
-4. Status in `{408, 429}` or `status >= 500` → `service_unavailable`.
-5. **File-error exclusion, then network.** `_FILE_ERROR_TYPES`
+3. Status in `{401, 403}` at `stage="pipeline"` →
+   `provider_credentials`. This covers pyannoteAI and OpenAI application
+   credentials; retrying Microsoft sign-in cannot repair these failures.
+4. Status in `{401, 403}` at a delivery stage (`blob`, `sharepoint`, or
+   `email`) → `azure_signin`, preserving the delegated Microsoft-token
+   guidance on those surfaces.
+5. Status in `{408, 429}` or `status >= 500` → `service_unavailable`.
+6. **File-error exclusion, then network.** `_FILE_ERROR_TYPES`
    (`FileNotFoundError`, `PermissionError`, `IsADirectoryError`,
    `NotADirectoryError`, `FileExistsError`) are *never* `network`, checked
    before anything else — these are local file-op errors even though they
@@ -112,8 +118,8 @@ carry these sentences; raw exception text is confined to
    root.filename is None` → `network` — this covers `ConnectionError`,
    `TimeoutError`, and `urllib.error.URLError`, all of which subclass
    `OSError` and carry no `filename`.
-6. Anything else → `processing_error`.
-7. **`StorageApiUnavailable` (blob only, explicit, not via `classify()`).**
+7. Anything else → `processing_error`.
+8. **`StorageApiUnavailable` (blob only, explicit, not via `classify()`).**
    `storage_api.py` raises this from three sites with three different cause
    chains: `:544` (5xx status check) has no active exception, so no
    `__cause__`; `:551` (`except http.client.HTTPException:`) raises `from
@@ -127,12 +133,12 @@ carry these sentences; raw exception text is confined to
    Exception` and maps all three variants explicitly via
    `FailureReason.for_category(service_unavailable, ...)`, logged with
    `code="StorageApiUnavailable"`.
-8. **`interrupted` / `stalled` are never produced by `classify()`.** They
+9. **`interrupted` / `stalled` are never produced by `classify()`.** They
    are assigned directly via `FailureReason.for_category(...)` at the two
    marking sites that have no exception object: startup reconcile
    (`pipeline.py` `reconcile_interrupted_pipelines`) and the stall watchdog
    (`pipeline.py` `sweep_stuck_pipelines`).
-9. **`audio_problem` is reserved and currently unreachable.** The category
+10. **`audio_problem` is reserved and currently unreachable.** The category
    and its sentence exist, but no call site in the codebase produces it —
    `classify()`'s generic rules deliberately don't sniff for
    ffmpeg/audio-shaped errors (brittle), and no pipeline or blob branch
@@ -180,17 +186,22 @@ carry these sentences; raw exception text is confined to
   `backend/tests/test_pipeline_failures.py`
   `test_pipeline_exception_is_classified_and_audio_preserved`
   (`audio_path.exists()` after a classified failure).
-- **Retention is age-based, not status-based.** The only thing that deletes
+- **Retention is status-gated, then age-based.** The only thing that deletes
   audio is `backend/app/services/retention.py` `sweep_once`, which runs
-  hourly and deletes any file in `audio_dir()` older than
-  `settings.audio_retention_days` (default 30) by file mtime — it does not
-  check `pipeline_status`. In practice this means a permanently-`failed`
-  meeting's audio is swept on the same 30-day age basis as a `ready` one's;
-  there is no special protection extending retention for unretried
-  failures. (The design doc's phrasing — "only the retention policy after a
-  successful pipeline may remove it" — is the intended steady-state
-  behaviour for meetings that do get retried to `ready`; the actual sweep
-  condition is purely age-based.)
+  hourly. It deletes a canonical meeting audio file only when the owning
+  meeting is `ready` and the file mtime is older than
+  `settings.audio_retention_days` (default 30). A failed, queued, processing,
+  or pending meeting keeps its source audio regardless of age, as does a file
+  whose meeting cannot be identified. Retrying a failed meeting does not
+  reset the mtime clock: if the original audio is already older than 30 days
+  when the retry reaches `ready`, the next sweep may remove it.
+- **Permanently failed means retained under the current schema.**
+  `PipelineStatus.failed` is retryable and there is no separate terminal
+  failure state or terminal-failure timestamp. Treating it as terminal would
+  risk deleting valid retry audio, so failed audio is retained indefinitely.
+  If a future product flow adds an explicit terminal-failure decision, it
+  should also add a durable timestamp; retention can then start a separate
+  30-day clock from that transition.
 - **Failed-job storage** is the existing durable model, unchanged by
   IN-391: `store.json` (`store.save_snapshot()`, called from every failure
   site), startup interrupted-marking
@@ -219,7 +230,7 @@ condition checks:
 | `prerequisite_check` | Blob "not ready / no export" check (`blob_delivery.py:206`) |
 | `startup_reconcile` | Pipeline startup interrupted-marking (`pipeline.py` `reconcile_interrupted_pipelines`); Blob startup reconcile (`blob_delivery.py` `reconcile_interrupted_blob_deliveries`) |
 | `watchdog` | Pipeline stall watchdog (`pipeline.py` `sweep_stuck_pipelines`) |
-| `StorageApiUnavailable` | Every blob call site's explicit `StorageApiUnavailable` catch (rule 7 in §2) |
+| `StorageApiUnavailable` | Every blob call site's explicit `StorageApiUnavailable` catch (rule 8 in §2) |
 
 Python's default logging writes this to stderr; the Electron backend
 supervisor (`src/main/backend-supervisor.ts`) pipes the child process's
@@ -254,20 +265,9 @@ the identical pattern), and `categoryLabel()` (`lib/failureDisplay.ts`)
 falls back to `'Processing error'` for `null` or any code not in
 `CATEGORY_LABELS`.
 
-**Dead code, kept for potential revival:** `MeetingsScreen.tsx` and
-`MeetingReviewScreen.tsx` carry full implementations —
-`failedChipLabel()`/worst-first chip ordering (processing → blob →
-sharepoint → email) on the meetings list, and per-concern failure rows
-(category label + stored `*_error_message` + that concern's retry action)
-on the review screen. Neither screen is reachable: `App.tsx` renders three
-views — `home`, `settings`, and `recording` (the active-capture screen,
-`view === 'recording'`, `App.tsx:1366`) — and the simplest proof the other
-two aren't among them isn't the render conditions, it's that they can't
-even be named: `lib/nav.ts:3` defines `ScreenId = 'home' | 'settings'`,
-with no id for a meetings list or review screen to route to. A remnant of
-the IN-73/IN-74 UI removals, predating IN-391. This work is
-correct-but-inert; whether to remove it or revive routing to it is an open
-product decision, not addressed here.
+`CATEGORY_LABELS` includes `provider_credentials` as `Provider credentials`;
+the label is data-driven after that shared map entry. The removed meetings
+list and review screens are not renderer consumers.
 
 ## 7. Known notes / open items
 
@@ -280,24 +280,9 @@ product decision, not addressed here.
   different UI surfaces (stage banner vs. failure sentence), not a bug. The
   watchdog's `stalled` marking uses the same string for both fields, so
   this asymmetry is specific to `interrupted`.
-- **pyannoteAI 401 misclassifies as `azure_signin`.**
-  `pyannote_client.py:72-74` wraps a `urllib.error.HTTPError` as
-  `PyannoteAIError(...) from exc`. `classify()` unwraps to the `HTTPError`,
-  reads `.code == 401`, and maps to `azure_signin` — "Microsoft sign-in is
-  needed." A pyannoteAI 401 is actually an invalid/expired **pyannote API
-  key** problem, unrelated to the user's Microsoft sign-in state. This is
-  correct behaviour for Graph/Storage API 401s but misleading for pyannote,
-  and is flagged here for a future taxonomy revision (e.g. a
-  provider-aware signal, since `stage="pipeline"` alone doesn't
-  disambiguate which provider raised).
-- **Remaining Task 9 sweep items** (plan carry-forward, not yet done as of
-  this doc): a table-driven test classifying a real
-  `urllib.error.HTTPError` (not the `_FakeHttpError` test double) to pin
-  the `.code`-attribute probe that real Graph/pyannote errors depend on;
-  the `MeetingReviewScreen.tsx` `handleRetryBlob` poll-generation capture
-  still happens *after* `await retryBlobDelivery(meetingId)` rather than
-  before it (a meeting switch during that POST can seed a wrong-meeting
-  poll); and the pipeline startup-reconcile `emailing → unconfirmed` site
-  (`pipeline.py` `reconcile_interrupted_pipelines`) relies on
-  `set_delivery_state`'s `error_code=None` default instead of passing it
-  explicitly, unlike the equivalent router site.
+- **Processing-provider 401/403 is distinct from Microsoft sign-in.**
+  `pyannote_client.py` wraps `urllib.error.HTTPError` as
+  `PyannoteAIError(...) from exc`; `classify()` unwraps it, reads the HTTP
+  status, and maps pipeline-stage authentication failures to
+  `provider_credentials`. Delivery-stage 401/403 responses still map to
+  `azure_signin`.

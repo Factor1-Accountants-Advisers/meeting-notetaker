@@ -26,6 +26,14 @@ assert.equal(
   'single blob failure surfaces the Network label'
 )
 
+assert.equal(
+  failedChipLabel(
+    base({ pipelineStatus: 'failed', processingErrorCode: 'provider_credentials' })
+  ),
+  'Failed: Provider credentials',
+  'processing-provider auth failure surfaces the Provider credentials label'
+)
+
 // Multi-failure -> worst-first ordering means processing wins.
 assert.equal(
   failedChipLabel(
