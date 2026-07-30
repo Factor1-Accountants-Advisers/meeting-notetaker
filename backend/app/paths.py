@@ -40,6 +40,15 @@ def local_sharepoint_dir() -> Path:
     return data_root() / "sharepoint"
 
 
+def context_dir() -> Path:
+    """Directory for the local company-context stand-in (IN-383).
+
+    Holds ``company-context.md`` when the operator supplies one; the file
+    itself is never created automatically.
+    """
+    return data_root() / "context"
+
+
 def central_voiceprint_path() -> Path:
     """Stub central store (real one is Azure Blob behind the IN-471 API)."""
     return data_root() / "central-voiceprints.json"

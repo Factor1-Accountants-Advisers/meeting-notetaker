@@ -31,6 +31,7 @@ from app.schemas import (
 from app.paths import audio_dir
 from app.services import audio_checks
 from app.services.blob_delivery import deliver_meeting_to_blob
+from app.services.context_file import get_company_context
 from app.services.failure_reasons import (
     FailureCategory,
     FailureReason,
@@ -351,8 +352,17 @@ async def run_pipeline(
             PipelineStage.extracting_notes,
             "Extracting summary and action items...",
         )
+        # IN-383: fetch the company context once per pipeline run and pass the
+        # string down, so map/reduce long meetings never refetch per chunk.
+        # Enrichment only — the provider never raises, and None proceeds
+        # identically to today. No Graph token reaches the pipeline (upload/
+        # retry carry only X-MN-Storage-Token), so Graph mode degrades to
+        # no-context inside the provider.
+        company_context = await asyncio.to_thread(get_company_context)
         llm = get_llm_provider()
-        structured_output = await llm.generate(segments)
+        structured_output = await llm.generate(
+            segments, company_context=company_context
+        )
         summary = compose_plain_summary(structured_output)
         summary_html = render_summary_html(structured_output)
         items = action_items_from_output(meeting_id, structured_output)

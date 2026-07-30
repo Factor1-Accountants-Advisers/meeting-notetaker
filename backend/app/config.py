@@ -55,6 +55,14 @@ class Settings(BaseSettings):
     sharepoint_drive_id: str = "b!its7p8x1KUWVWYJnCLxVhp1w_W9IycxPs8OjtR0Tbd_9RFZUGE0fTJ_8PkmnBf55"
     sharepoint_folder_path: str = ""
 
+    # IN-383 company context file that enriches meeting summaries. Both empty
+    # (default) = local stand-in mode: backend/var/context/company-context.md
+    # is read when present. Both set = fetch the SharePoint drive item content
+    # via Graph with the delegated token. Context is enrichment only — absence
+    # or fetch failure never blocks the pipeline.
+    context_drive_id: str = ""
+    context_file_path: str = ""
+
     # Raw-audio retention (requirements §6.2 engineering default).
     audio_retention_days: int = 30
 
