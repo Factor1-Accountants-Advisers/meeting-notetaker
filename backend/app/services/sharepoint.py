@@ -1,8 +1,9 @@
-"""SharePoint transcript storage provider.
+"""SharePoint meeting-artifact storage provider.
 
-Slice 1 requires transcripts/summaries to be saved to a locked-down SharePoint
-location. Until tenant-specific drive/folder provisioning is complete, the local
-provider writes the exact transcript artifact under backend/var/sharepoint.
+Meeting transcripts and summaries are saved as separate files in a locked-down
+SharePoint location. Until tenant-specific drive/folder provisioning is
+complete, the local provider writes the same two artifacts under
+backend/var/sharepoint.
 When a Graph token and drive configuration are available, the Graph provider can
 upload to the configured drive/folder without exposing secrets to the desktop.
 """
@@ -74,8 +75,19 @@ def safe_transcript_filename(title: str, created_at: datetime) -> str:
     return f"{cleaned[:60]}-{date_part}.txt"
 
 
+def safe_summary_filename(title: str, created_at: datetime) -> str:
+    """Build the summary filename paired with ``safe_transcript_filename``.
+
+    The transcript keeps the established ``Title-YYYY-MM-DD.txt`` name.
+    Appending ``-summary`` before the extension makes the second artifact
+    deterministic, collision-safe, and stable across full delivery retries.
+    """
+    transcript_filename = safe_transcript_filename(title, created_at)
+    return f"{transcript_filename.removesuffix('.txt')}-summary.txt"
+
+
 class LocalSharePointProvider:
-    """Local stand-in for the provisioned SharePoint transcript folder."""
+    """Local stand-in for the provisioned SharePoint meeting-artifact folder."""
 
     async def save_transcript(
         self,
@@ -88,7 +100,7 @@ class LocalSharePointProvider:
         LOCAL_SHAREPOINT_DIR.mkdir(parents=True, exist_ok=True)
         path = LOCAL_SHAREPOINT_DIR / filename
         path.write_text(content, encoding="utf-8")
-        logger.info("local SharePoint transcript saved for %s: %s", meeting.id, path)
+        logger.info("local SharePoint artifact saved for %s: %s", meeting.id, path)
         return SharePointUploadResult(web_url=path.as_uri(), item_id=str(path))
 
     async def grant_view(
@@ -139,7 +151,7 @@ class GraphSharePointProvider:
         item_id = body.get("id")
         if not isinstance(item_id, str) or not item_id:
             raise RuntimeError("Graph upload completed but returned no item id")
-        logger.info("SharePoint transcript saved for %s", meeting.id)
+        logger.info("SharePoint artifact saved for %s: %s", meeting.id, filename)
         return SharePointUploadResult(web_url=web_url, item_id=item_id)
 
     async def grant_view(

@@ -53,7 +53,11 @@ from app.services.failure_reasons import (
 )
 from app.services.meeting_export import refresh_meeting_export
 from app.services.blob_delivery import kick_blob_delivery
-from app.services.sharepoint import get_sharepoint_provider, safe_transcript_filename
+from app.services.sharepoint import (
+    get_sharepoint_provider,
+    safe_summary_filename,
+    safe_transcript_filename,
+)
 from app.services.pipeline import (
     audio_path_for,
     kick_pipeline,
@@ -655,16 +659,19 @@ async def save_transcript_to_sharepoint(
     actor: str = Actor,
     graph_token: str = Header("", alias="X-MN-Graph-Token"),
 ) -> Meeting:
-    """Save the generated transcript artifact to the configured SharePoint folder.
+    """Save separate transcript and summary artifacts to SharePoint.
 
-    The transcript/summary/action outputs are never modified or deleted by
-    delivery failures; failures only update SharePoint status so the user can
-    retry after credentials/folder configuration are corrected.
+    The transcript keeps the established ``Title-YYYY-MM-DD.txt`` filename;
+    the summary and action items use ``Title-YYYY-MM-DD-summary.txt``. Both
+    uploads and both view grants form one delivery attempt. The source outputs
+    are never modified or deleted by delivery failures; failures only update
+    SharePoint status so the user can retry the complete delivery.
     """
     require(meeting_id, actor, AccessRole.owner)
     meeting, participants, segments, summary, action_items = _delivery_artifacts(meeting_id)
-    filename = safe_transcript_filename(meeting.title, meeting.created_at)
-    transcript_text = _format_transcript(
+    transcript_filename = safe_transcript_filename(meeting.title, meeting.created_at)
+    summary_filename = safe_summary_filename(meeting.title, meeting.created_at)
+    combined_text = _format_transcript(
         segments,
         meeting.title,
         participants,
@@ -672,6 +679,13 @@ async def save_transcript_to_sharepoint(
         action_items=action_items,
         meeting=meeting,
     )
+    summary_text, transcript_marker, transcript_body = combined_text.partition(
+        "\n--- TRANSCRIPT ---\n"
+    )
+    if not transcript_marker:
+        raise RuntimeError("Meeting delivery artifact is missing its transcript boundary")
+    transcript_text = f"--- TRANSCRIPT ---\n{transcript_body}"
+    summary_text = f"{summary_text.rstrip()}\n"
 
     settings = get_settings()
     if settings.sharepoint_drive_id and not graph_token:
@@ -701,20 +715,26 @@ async def save_transcript_to_sharepoint(
     )
     try:
         provider = get_sharepoint_provider(graph_token or None)
-        upload = await provider.save_transcript(
-            meeting=meeting,
-            filename=filename,
-            content=transcript_text,
-            access_token=graph_token or None,
-        )
         recipients = _sharepoint_recipients(meeting)
-        await provider.grant_view(
-            item_id=upload.item_id,
-            recipients=recipients,
-            access_token=graph_token or None,
-        )
+        uploads = []
+        for filename, content in (
+            (transcript_filename, transcript_text),
+            (summary_filename, summary_text),
+        ):
+            upload = await provider.save_transcript(
+                meeting=meeting,
+                filename=filename,
+                content=content,
+                access_token=graph_token or None,
+            )
+            await provider.grant_view(
+                item_id=upload.item_id,
+                recipients=recipients,
+                access_token=graph_token or None,
+            )
+            uploads.append(upload)
     except Exception as exc:
-        logger.exception("SharePoint transcript save failed for %s", meeting_id)
+        logger.exception("SharePoint meeting-artifact save failed for %s", meeting_id)
         reason = classify(exc, stage="sharepoint")
         log_delivery_failure(meeting_id, "sharepoint", reason, code=exc.__class__.__name__)
         current = store.MEETINGS[meeting_id]
@@ -737,7 +757,8 @@ async def save_transcript_to_sharepoint(
             "sharepoint_status": SharePointStatus.saved,
             "sharepoint_error_message": None,
             "sharepoint_error_code": None,
-            "sharepoint_web_url": upload.web_url,
+            # Keep the existing single URL contract pointed at the transcript.
+            "sharepoint_web_url": uploads[0].web_url,
         }
     )
     store.MEETINGS[meeting_id] = updated
@@ -745,7 +766,7 @@ async def save_transcript_to_sharepoint(
         actor,
         "meeting.sharepoint_save",
         meeting.title,
-        after=upload.web_url,
+        after=", ".join(upload.web_url for upload in uploads),
         meeting_id=meeting_id,
     )
     store.save_snapshot()

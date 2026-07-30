@@ -126,6 +126,7 @@ class SharePointProviderTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(captured["method"], "POST")
         self.assertEqual(captured["body"]["roles"], ["read"])
+        self.assertEqual(captured["body"]["requireSignIn"], True)
         self.assertEqual(captured["body"]["sendInvitation"], False)
         self.assertEqual(
             captured["body"]["recipients"],
@@ -235,6 +236,22 @@ class SharePointProviderTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIn("2026-07-27", filename)
+
+    def test_safe_summary_filename_is_paired_and_collision_safe(self):
+        created_at = datetime(2026, 7, 30, 3, 4, tzinfo=timezone.utc)
+
+        transcript = sharepoint.safe_transcript_filename(
+            "Quarterly / Review",
+            created_at,
+        )
+        summary = sharepoint.safe_summary_filename(
+            "Quarterly / Review",
+            created_at,
+        )
+
+        self.assertEqual(transcript, "Quarterly - Review-2026-07-30.txt")
+        self.assertEqual(summary, "Quarterly - Review-2026-07-30-summary.txt")
+        self.assertNotEqual(transcript, summary)
 
 
 if __name__ == "__main__":
