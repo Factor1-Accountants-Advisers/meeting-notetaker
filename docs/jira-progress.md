@@ -404,6 +404,11 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
 - [ ] `IN-97` — Get org account for Pyannote
   - Development key exists, but production should use an organisation-owned PyannoteAI account and approved billing/secret management.
 
+- [ ] `IN-469` — Auto-update via HTTPS Blob feed
+  - Implementation landed on `in469-auto-update` (30 Jul): pure idle-gate predicate (`update-gate.ts`) with verify:update-gate truth table (~30 assertions incl. the stale-past-start regression case); updater lifecycle — launch + 4h checkForUpdates, tray "Restart to update" item + toast prompt (mn-update-restart/defer argv), 5-min idle poll gated on recording state, pending/imminent auto-start (15-min lead, 2-min grace), backend pipeline busy probe (fail-safe to busy), 300s system idle, 4h snooze; 60s deferrable countdown then silent quitAndInstall(true,true) via a single reentrancy-guarded, exception-safe choke point; publisherName verification (lives under `publish`, not `win` — the installed electron-builder schema only accepts it there or nested under win.signtoolOptions/azureSignOptions); CI publish step (two az uploads, self-skips while publish.url is REPLACE_ME).
+  - Gates: typecheck, verify:update-gate, verify:toast-xml, verify:recording-controls, build — all green.
+  - Outstanding external: IT provisions public-read `updates` container + Storage Blob Data Contributor for the release identity; then swap publish.url + set UPDATES_STORAGE_ACCOUNT repo variable (one commit). Live E2E (signed 2.0.x manual install → tag 2.0.y → detect/download/verify/prompt/idle-install/relaunch) after provisioning. Jira transition = Joseph.
+
 ## Slice 2 implementation evidence (IN-375)
 
 - [x] IN-384 — Define and implement structured JSON output schema
