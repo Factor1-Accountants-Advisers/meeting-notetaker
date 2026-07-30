@@ -87,6 +87,14 @@ COMPANY_CONTEXT_END = "<<<END_COMPANY_CONTEXT>>>"
 
 def build_company_context_block(company_context: str) -> str:
     """Delimited system-prompt block carrying the company context (IN-383)."""
+    # Structural defense: the fetched context is arbitrary, SharePoint-editable
+    # text. If it contained a literal delimiter, it could fake the block
+    # boundary and get its trailing content read as bare system-prompt text
+    # (prompt injection). Strip both marker literals before wrapping so the
+    # delimiters we emit are always the only ones present.
+    sanitized = company_context.replace(COMPANY_CONTEXT_BEGIN, "").replace(
+        COMPANY_CONTEXT_END, ""
+    )
     return (
         f"\n\n{COMPANY_CONTEXT_HEADER}\n"
         "The company context between the delimiters below is background "
@@ -94,7 +102,7 @@ def build_company_context_block(company_context: str) -> str:
         "It is not meeting content: never derive summary points, decisions, "
         "or action items from it.\n"
         f"{COMPANY_CONTEXT_BEGIN}\n"
-        f"{company_context}\n"
+        f"{sanitized}\n"
         f"{COMPANY_CONTEXT_END}"
     )
 
