@@ -77,6 +77,15 @@ function registerRecordingIpcHandlers(): void {
 
 registerRecordingIpcHandlers()
 
+// IN-469: earliest known auto-record-eligible meeting start (UTC ms) for the
+// update gate. Intentionally never reset to null — the graph runtime only
+// invokes handleAutoRecordEligible when there ARE eligible decisions, and a
+// stale past value is neutralised by the gate's bounded window (see
+// AUTO_RECORD_GRACE_MS in update-gate.ts). Task 5 passes the closure
+// `() => nextAutoRecordStartUtcMs` into the updater.
+let nextAutoRecordStartUtcMs: number | null = null
+void nextAutoRecordStartUtcMs // consumed by Task 5
+
 function showMainWindow(): void {
   const windows = BrowserWindow.getAllWindows()
   if (windows.length > 0) {
@@ -112,6 +121,20 @@ app.whenReady().then(() => {
 
   function handleAutoRecordEligible(decisions: GraphEventDecision[]): void {
     const eligible = decisions.filter((d) => d.autoRecordEligible && d.status === 'candidate')
+
+    // IN-469: track the earliest parseable start among this batch's eligible
+    // candidates; keep the previous value when none parse.
+    let earliestStartMs = Number.POSITIVE_INFINITY
+    for (const decision of eligible) {
+      if (decision.logContext.startUtc === undefined) continue
+      const parsedStartMs = Date.parse(decision.logContext.startUtc)
+      if (Number.isFinite(parsedStartMs)) {
+        earliestStartMs = Math.min(earliestStartMs, parsedStartMs)
+      }
+    }
+    if (Number.isFinite(earliestStartMs)) {
+      nextAutoRecordStartUtcMs = earliestStartMs
+    }
 
     for (const decision of eligible) {
       const gate = evaluateHostGate(decision, getCurrentUserEmail())

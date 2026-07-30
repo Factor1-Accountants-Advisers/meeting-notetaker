@@ -90,6 +90,12 @@ export function isRecordingPaused(): boolean {
   return recordingPaused
 }
 
+// IN-469: read-only view of the auto-start handoff for the update gate — an
+// auto-start handed to the renderer (unacked or active) must block installs.
+export function hasPendingAutoStart(): boolean {
+  return pendingAutoStart !== null
+}
+
 export function setRecordingPaused(paused: boolean): void {
   recordingPaused = paused
 }
