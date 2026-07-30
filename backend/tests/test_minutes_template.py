@@ -13,27 +13,42 @@ from app.routers.meetings import (
     _extract_next_meeting_from_summary,
     _format_transcript,
 )
+from app.schemas import StructuredMeetingOutput
 from app.services.llm import (
     _CHUNK_SYSTEM_PROMPT,
     _REDUCE_SYSTEM_PROMPT,
-    _compose_plain_summary,
+    compose_plain_summary,
 )
+
+
+def _output(*, next_meeting: list[str]) -> StructuredMeetingOutput:
+    return StructuredMeetingOutput(
+        schema_version="1.0",
+        summary="Overview.",
+        key_points=[],
+        decisions=[],
+        action_items=[],
+        unresolved_questions=[],
+        next_meeting=next_meeting,
+        follow_ups=[],
+        quality_flags=[],
+        source_chunks=[],
+    )
 
 
 class SummaryCompositionTests(unittest.TestCase):
     def test_next_meeting_section_rendered_from_insights(self):
-        summary = _compose_plain_summary(
-            {
-                "overview": "Overview.",
-                "next_meeting": ["Date: Friday 18 July 10am", "Review budget figures"],
-            }
+        summary = compose_plain_summary(
+            _output(
+                next_meeting=["Date: Friday 18 July 10am", "Review budget figures"]
+            )
         )
         self.assertIn("Next meeting", summary)
         self.assertIn("- Date: Friday 18 July 10am", summary)
         self.assertIn("- Review budget figures", summary)
 
     def test_next_meeting_section_omitted_when_empty(self):
-        summary = _compose_plain_summary({"overview": "Overview.", "next_meeting": []})
+        summary = compose_plain_summary(_output(next_meeting=[]))
         self.assertNotIn("Next meeting", summary)
 
 

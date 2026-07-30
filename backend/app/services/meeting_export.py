@@ -8,10 +8,8 @@ Assistant consume. Contract rules:
 - All timestamps are ISO 8601 UTC; ``due_date`` is an ISO date.
 - ``transcript`` ``start``/``end`` are seconds (float), converted from the
   stored millisecond fields.
-- ``key_points``/``follow_ups`` stay empty and the action-item fields owned
-  by IN-390 (``owner_email``, ``owner_confidence``, ``owner_source``,
-  ``action_type``, ``assigned_to``, ``assigned_to_department``) stay null
-  until the summarisation consolidation populates them.
+- ``key_points``/``follow_ups`` and the richer action-item fields are populated
+  from the single IN-390 structured meeting output.
 - ``graph_online_meeting_id`` is null until the true Teams online meeting id
   is captured: Slice 1 stored the event iCalUId under ``online_meeting_id``
   (normalise.ts), so that value backfills ``graph_ical_uid`` instead of being
@@ -28,7 +26,13 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.schemas import ActionItem, Meeting, PipelineStatus, TranscriptSegment
+from app.schemas import (
+    ActionItem,
+    Meeting,
+    PipelineStatus,
+    StructuredMeetingOutput,
+    TranscriptSegment,
+)
 
 SCHEMA_VERSION = "1.0"
 INTERNAL_EMAIL_DOMAIN = "factor1.com.au"
@@ -159,7 +163,13 @@ def _export_action_item(item: ActionItem) -> ExportActionItem:
     return ExportActionItem(
         description=item.description,
         owner_name=item.owner,
+        owner_email=item.owner_email,
+        owner_confidence=item.owner_confidence,
+        owner_source=item.owner_source,
+        action_type=item.action_type,
         due_date=item.deadline,
+        assigned_to=item.assigned_to,
+        assigned_to_department=item.assigned_to_department,
     )
 
 
@@ -168,6 +178,10 @@ def build_meeting_export(
     segments: list[TranscriptSegment],
     summary: str | None,
     action_items: list[ActionItem],
+    *,
+    structured_output: StructuredMeetingOutput | None = None,
+    key_points: list[str] | None = None,
+    follow_ups: list[str] | None = None,
 ) -> MeetingExport:
     metadata = meeting.graph_metadata
     invitees = _dedupe_invitees(
@@ -191,7 +205,17 @@ def build_meeting_export(
         meeting_description=metadata.description if metadata else None,
         transcript=[_export_segment(s) for s in segments],
         summary=summary,
+        key_points=(
+            structured_output.key_points
+            if structured_output is not None
+            else list(key_points or [])
+        ),
         action_items=[_export_action_item(a) for a in action_items],
+        follow_ups=(
+            structured_output.follow_ups
+            if structured_output is not None
+            else list(follow_ups or [])
+        ),
         graph_event_id=metadata.meeting_id if metadata else None,
         graph_ical_uid=(
             (metadata.ical_uid or metadata.online_meeting_id) if metadata else None
@@ -200,7 +224,11 @@ def build_meeting_export(
     )
 
 
-def build_meeting_export_for(meeting_id: UUID) -> MeetingExport | None:
+def build_meeting_export_for(
+    meeting_id: UUID,
+    *,
+    structured_output: StructuredMeetingOutput | None = None,
+) -> MeetingExport | None:
     """Adapt the scattered stores into the pure builder's inputs."""
     from app import store
 
@@ -210,15 +238,26 @@ def build_meeting_export_for(meeting_id: UUID) -> MeetingExport | None:
     action_items = [
         item for item in store.ACTION_ITEMS.values() if item.meeting_id == meeting_id
     ]
+    existing = store.MEETING_EXPORTS.get(meeting_id, {})
     return build_meeting_export(
         meeting,
         store.TRANSCRIPTS.get(meeting_id, []),
         store.SUMMARIES.get(meeting_id),
         action_items,
+        structured_output=structured_output,
+        # Post-ready edits rebuild the export from mutable stores. Preserve the
+        # LLM-only lists from the prior validated export when no fresh output
+        # was supplied.
+        key_points=existing.get("key_points", []),
+        follow_ups=existing.get("follow_ups", []),
     )
 
 
-def refresh_meeting_export(meeting_id: UUID) -> None:
+def refresh_meeting_export(
+    meeting_id: UUID,
+    *,
+    structured_output: StructuredMeetingOutput | None = None,
+) -> None:
     """(Re)build and store the artifact for a processed meeting.
 
     Called when the pipeline reaches ready and after every post-ready mutation
@@ -230,6 +269,9 @@ def refresh_meeting_export(meeting_id: UUID) -> None:
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is None or meeting.pipeline_status is not PipelineStatus.ready:
         return
-    export = build_meeting_export_for(meeting_id)
+    export = build_meeting_export_for(
+        meeting_id,
+        structured_output=structured_output,
+    )
     if export is not None:
         store.MEETING_EXPORTS[meeting_id] = export.model_dump(mode="json")

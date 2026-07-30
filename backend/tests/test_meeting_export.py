@@ -10,6 +10,8 @@ import asyncio
 import json
 import unittest
 from datetime import date, datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -30,6 +32,8 @@ from app.schemas import (
     NameSpeakerRequest,
     PipelineStatus,
     Priority,
+    StructuredActionItem,
+    StructuredMeetingOutput,
     TranscriptSegment,
 )
 from app.services import pipeline
@@ -129,9 +133,9 @@ def _segment(**overrides) -> TranscriptSegment:
     return TranscriptSegment(**defaults)
 
 
-def _export_dict(meeting, segments=(), summary=None, action_items=()) -> dict:
+def _export_dict(meeting, segments=(), summary=None, action_items=(), **kwargs) -> dict:
     export = build_meeting_export(
-        meeting, list(segments), summary, list(action_items)
+        meeting, list(segments), summary, list(action_items), **kwargs
     )
     return export.model_dump(mode="json")
 
@@ -163,8 +167,14 @@ class MeetingExportBuilderTests(unittest.TestCase):
             id=uuid4(),
             meeting_id=meeting.id,
             owner="Joseph Guerrero",
+            owner_email="josephguerrero@factor1.com.au",
+            owner_confidence="high",
+            owner_source="explicit_speaker",
             description="Send the revised budget",
+            action_type="client_follow_up",
             deadline=date(2026, 8, 1),
+            assigned_to="Joseph Guerrero",
+            assigned_to_department="Innovations and Systems",
             priority=Priority.high,
         )
         data = _export_dict(meeting, action_items=[item])
@@ -173,16 +183,49 @@ class MeetingExportBuilderTests(unittest.TestCase):
         self.assertEqual(set(entry.keys()), EXPECTED_ACTION_ITEM_KEYS)
         self.assertEqual(entry["description"], "Send the revised budget")
         self.assertEqual(entry["owner_name"], "Joseph Guerrero")
+        self.assertEqual(entry["owner_email"], "josephguerrero@factor1.com.au")
+        self.assertEqual(entry["owner_confidence"], "high")
+        self.assertEqual(entry["owner_source"], "explicit_speaker")
+        self.assertEqual(entry["action_type"], "client_follow_up")
         self.assertEqual(entry["due_date"], "2026-08-01")
-        for null_field in (
-            "owner_email",
-            "owner_confidence",
-            "owner_source",
-            "action_type",
-            "assigned_to",
-            "assigned_to_department",
-        ):
-            self.assertIsNone(entry[null_field], null_field)
+        self.assertEqual(entry["assigned_to"], "Joseph Guerrero")
+        self.assertEqual(entry["assigned_to_department"], "Innovations and Systems")
+
+    def test_structured_output_populates_in384_generated_fields_without_version_bump(self):
+        output = StructuredMeetingOutput(
+            schema_version="1.0",
+            summary="The team agreed to proceed.",
+            key_points=["Reviewed rollout timing"],
+            decisions=["Proceed with the pilot"],
+            action_items=[
+                StructuredActionItem(
+                    description="Confirm pilot timing",
+                    owner_name="Joseph Guerrero",
+                    owner_email=None,
+                    owner_confidence="high",
+                    owner_source="explicit_speaker",
+                    action_type=None,
+                    due_date=None,
+                    assigned_to=None,
+                    assigned_to_department=None,
+                    priority=Priority.medium,
+                )
+            ],
+            unresolved_questions=[],
+            next_meeting=[],
+            follow_ups=["Check client availability"],
+            quality_flags=[],
+            source_chunks=[1],
+        )
+        data = _export_dict(
+            _meeting(),
+            summary="The team agreed to proceed.",
+            structured_output=output,
+        )
+
+        self.assertEqual(data["schema_version"], "1.0")
+        self.assertEqual(data["key_points"], ["Reviewed rollout timing"])
+        self.assertEqual(data["follow_ups"], ["Check client availability"])
 
     def test_meeting_type_client_when_any_external_invitee(self):
         metadata = _graph_metadata(
@@ -440,6 +483,58 @@ class MeetingExportStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(artifact)
         self.assertEqual(artifact["schema_version"], "1.0")
         self.assertEqual(set(artifact.keys()), EXPECTED_TOP_LEVEL_KEYS)
+
+    async def test_pipeline_generates_once_and_projects_one_structured_output(self):
+        meeting = _meeting(
+            source=MeetingSource.upload,
+            graph_metadata=_graph_metadata(),
+            pipeline_status=PipelineStatus.queued,
+        )
+        store.MEETINGS[meeting.id] = meeting
+        output = StructuredMeetingOutput(
+            schema_version="1.0",
+            summary="The team reviewed the pilot.",
+            key_points=["Reviewed rollout timing"],
+            decisions=["Proceed with the pilot"],
+            action_items=[
+                StructuredActionItem(
+                    description="Confirm pilot timing",
+                    owner_name="Joseph Guerrero",
+                    owner_email="josephguerrero@factor1.com.au",
+                    owner_confidence="high",
+                    owner_source="explicit_speaker",
+                    action_type="follow_up",
+                    due_date=date(2026, 8, 1),
+                    assigned_to="Joseph Guerrero",
+                    assigned_to_department="Innovations and Systems",
+                    priority=Priority.high,
+                )
+            ],
+            unresolved_questions=[],
+            next_meeting=[],
+            follow_ups=["Check client availability"],
+            quality_flags=[],
+            source_chunks=[1],
+        )
+        provider = SimpleNamespace(generate=AsyncMock(return_value=output))
+
+        with patch.object(pipeline, "get_llm_provider", return_value=provider):
+            await pipeline.run_pipeline(
+                meeting.id,
+                pipeline.audio_path_for(meeting.id, "audio/webm"),
+            )
+
+        provider.generate.assert_awaited_once()
+        artifact = store.MEETING_EXPORTS[meeting.id]
+        self.assertEqual(artifact["summary"], "The team reviewed the pilot.\n\n"
+                         "Key discussion\n- Reviewed rollout timing\n\n"
+                         "Decisions\n- Proceed with the pilot")
+        self.assertEqual(artifact["key_points"], ["Reviewed rollout timing"])
+        self.assertEqual(artifact["follow_ups"], ["Check client availability"])
+        self.assertEqual(
+            artifact["action_items"][0]["owner_email"],
+            "josephguerrero@factor1.com.au",
+        )
 
     def test_snapshot_roundtrip_preserves_export_artifact(self):
         meeting = self._seed_ready_meeting()

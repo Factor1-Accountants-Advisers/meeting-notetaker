@@ -3,7 +3,14 @@ from datetime import date
 from uuid import uuid4
 
 from app.schemas import Priority, TranscriptSegment
-from app.services.llm import OpenAIProvider, _chunk_segments_by_window_ms, _segments_to_labelled_transcript
+from app.services.llm import (
+    OpenAIProvider,
+    _chunk_segments_by_window_ms,
+    _segments_to_labelled_transcript,
+    action_items_from_output,
+    compose_plain_summary,
+    render_summary_html,
+)
 
 
 def seg(index: int, start_min: int, end_min: int | None = None) -> TranscriptSegment:
@@ -23,35 +30,77 @@ class FakeChunkedOpenAIProvider(OpenAIProvider):
         super().__init__("test-key")
         self.calls: list[dict] = []
 
-    async def _complete_json(self, system_prompt: str, user_payload: dict, *, max_tokens: int) -> dict:
-        self.calls.append({"system": system_prompt, "payload": user_payload, "max_tokens": max_tokens})
+    async def _complete_json(
+        self,
+        system_prompt: str,
+        user_payload: dict,
+        *,
+        max_tokens: int,
+        schema_name: str,
+        response_model,
+    ) -> dict:
+        self.calls.append(
+            {
+                "system": system_prompt,
+                "payload": user_payload,
+                "max_tokens": max_tokens,
+                "schema_name": schema_name,
+                "response_model": response_model,
+            }
+        )
         if user_payload["task"] == "chunk_insights":
+            index = user_payload["chunk_index"]
             return {
-                "summary_bullets": [f"chunk {user_payload['chunk_index']} summary"],
-                "decisions": [f"chunk {user_payload['chunk_index']} decision"],
+                "schema_version": "1.0",
+                "chunk_index": index,
+                "time_range": user_payload["time_range"],
+                "summary_bullets": [f"chunk {index} summary"],
+                "decisions": [f"chunk {index} decision"],
                 "risks": [],
                 "questions": [],
+                "next_meeting": [],
                 "action_items": [
                     {
-                        "description": f"Action from chunk {user_payload['chunk_index']}",
-                        "owner": "Joseph Guerrero",
-                        "deadline": None,
+                        "description": f"Action from chunk {index}",
+                        "owner_name": "Joseph Guerrero",
+                        "owner_email": None,
+                        "owner_confidence": "high",
+                        "owner_source": "explicit_speaker",
+                        "action_type": None,
+                        "due_date": None,
+                        "assigned_to": None,
+                        "assigned_to_department": None,
                         "priority": "high",
                     }
                 ],
+                "follow_ups": [],
+                "quality_flags": [],
             }
         return {
-            "overview": "Consolidated summary across chunks.",
+            "schema_version": "1.0",
+            "summary": "Consolidated summary across chunks.",
             "key_points": ["Reviewed rollout timeline"],
             "decisions": ["Proceed with the pilot"],
-            "open_questions": ["Who owns the follow-up?"],
+            "unresolved_questions": ["Who owns the follow-up?"],
+            "next_meeting": [],
             "action_items": [
                 {
                     "description": "Consolidated action",
-                    "owner": "Joseph Guerrero",
-                    "deadline": date.today().isoformat(),
+                    "owner_name": "Joseph Guerrero",
+                    "owner_email": "josephguerrero@factor1.com.au",
+                    "owner_confidence": "high",
+                    "owner_source": "explicit_speaker",
+                    "action_type": "follow_up",
+                    "due_date": date.today().isoformat(),
+                    "assigned_to": "Joseph Guerrero",
+                    "assigned_to_department": "Innovations and Systems",
                     "priority": "medium",
                 }
+            ],
+            "follow_ups": ["Confirm pilot timing"],
+            "quality_flags": [],
+            "source_chunks": [
+                chunk["chunk_index"] for chunk in user_payload["chunks"]
             ],
         }
 
@@ -73,19 +122,22 @@ class LongMeetingChunkingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[00:12:00-00:14:00] Benjamin Bryant", transcript)
         self.assertIn("Segment 1 decision and action detail.", transcript)
 
-    async def test_long_meeting_uses_chunk_calls_then_reduce_for_summary_and_actions(self):
+    async def test_long_meeting_uses_one_structured_generation_for_summary_and_actions(self):
         provider = FakeChunkedOpenAIProvider()
         meeting_id = uuid4()
         segments = [seg(i, i * 10, i * 10 + 4) for i in range(10)]
 
-        summary = await provider.summarize(segments)
-        summary_html = await provider.summarize_html(segments)
-        actions = await provider.extract_action_items(meeting_id, segments)
+        output = await provider.generate(segments)
+        summary = compose_plain_summary(output)
+        summary_html = render_summary_html(output)
+        actions = action_items_from_output(meeting_id, output)
 
         chunk_calls = [c for c in provider.calls if c["payload"]["task"] == "chunk_insights"]
         reduce_calls = [c for c in provider.calls if c["payload"]["task"] == "reduce_insights"]
         self.assertGreaterEqual(len(chunk_calls), 4)
         self.assertEqual(len(reduce_calls), 1)
+        self.assertEqual(output.schema_version, "1.0")
+        self.assertEqual(output.follow_ups, ["Confirm pilot timing"])
         # Plain-text summary keeps the overview plus section headers/bullets so the
         # minutes parsers can read decisions and open questions back out.
         self.assertIn("Consolidated summary across chunks.", summary)
