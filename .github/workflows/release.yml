@@ -141,6 +141,14 @@ jobs:
             Write-Error "No credential secrets set — refusing to build a stub installer for release"
             exit 1
           }
+          # Central Storage API wiring (IN-379 ops gap, hit live on the first
+          # clean 2.0.8 install: without the URL the packaged backend runs in
+          # local-stub mode and the enrolment gate wrongly demands
+          # re-enrolment). Non-secret identifiers — the same values are
+          # hardcoded as main-process defaults in src/main/env.ts
+          # PUBLIC_APP_CONFIG; the backend subprocess only sees backend.env.
+          $lines += "MN_STORAGE_API_URL=https://func-innov-nt-storage-prod-eqg7dzf8gfbqawea.australiaeast-01.azurewebsites.net"
+          $lines += "MN_STORAGE_API_SCOPE=api://13298042-714a-4d57-a1c5-481c22753087/access_as_user"
           $lines -join "`n" | Out-File -Encoding utf8NoBOM -FilePath backend.env
           Write-Host "Wrote backend.env ($($lines.Count) keys)"
 
