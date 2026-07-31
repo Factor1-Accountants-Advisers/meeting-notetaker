@@ -51,4 +51,7 @@ publish:
   # straight off the generated app-update.yml's publish config at
   # update-check time, so this is the field it actually consults.
   publisherName:
-    - factor1.com.au
+    # Full DN, not bare CN: electron-updater matches either, but the DN pins
+    # O/OU too (its own log warns when only a CN is configured). Applies to
+    # installs made from this version onward.
+    - CN=factor1.com.au, O=factor1.com.au, OU=IT Shared Services
