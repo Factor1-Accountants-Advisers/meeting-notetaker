@@ -1,10 +1,15 @@
 import { app, dialog } from 'electron'
-import { spawn, ChildProcess } from 'child_process'
+import { spawn, execFileSync, ChildProcess } from 'child_process'
 import { existsSync, readFileSync, copyFileSync, mkdirSync, writeFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { getLogInfo, logger } from './logger'
 import { setTrayAlert } from './tray'
-import { probeHttpHealth, shouldRestartAfterBackendExit } from './backend-health'
+import {
+  fetchHealthJson,
+  probeHttpHealth,
+  shouldAdoptExistingBackend,
+  shouldRestartAfterBackendExit
+} from './backend-health'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -46,23 +51,85 @@ export async function startBackendSupervisor(): Promise<void> {
   logger().info('[supervisor] starting', { backendLog: logInfo.backendLog })
 
   // If 8787 is already healthy (e.g. an orphan from a prior crash), adopt it
-  // — and remember its PID (from our own pid file) so quit can still stop it.
+  // ONLY when its /health proves the same app version (IN-484): stale
+  // orphans 404 newer routes, and a failing enrolment-status silently
+  // downgraded the gate to Slice 1 trust on a fleet machine (31 Jul).
   const probeStartedAt = Date.now()
   logger().info('[supervisor] probing existing backend')
-  const alreadyHealthy = await healthProbe()
+  const existingHealth = await fetchHealthJson(HEALTH_URL, 2_000)
   logger().info('[supervisor] existing backend probe complete', {
-    healthy: alreadyHealthy,
+    healthy: existingHealth !== null,
+    reportedVersion: existingHealth?.app_version ?? null,
     elapsedMs: Date.now() - probeStartedAt,
   })
-  if (alreadyHealthy) {
-    adoptedPid = readPidFile()
-    logger().info('[supervisor] port 8787 already healthy — adopting existing backend', {
-      adoptedPid,
+  if (existingHealth !== null) {
+    if (shouldAdoptExistingBackend(existingHealth, app.getVersion())) {
+      adoptedPid = readPidFile()
+      logger().info('[supervisor] same-version backend on 8787 — adopting', { adoptedPid })
+      return
+    }
+    logger().warn('[supervisor] stale or foreign backend on 8787 — replacing', {
+      reportedVersion: existingHealth.app_version ?? null,
+      expectedVersion: app.getVersion(),
     })
-    return
+    killPortListeners()
+    const freed = await waitForPortFree()
+    if (!freed) {
+      showBackendFailure(
+        'Another process is holding the backend port (8787) and could not be stopped.',
+        getLogInfo().backendLog
+      )
+      return
+    }
   }
 
   await spawnAndWait()
+}
+
+/**
+ * Kill every process listening on the backend port (IN-484). Orphans can
+ * stack across install-over-running-app cycles, so this is by-port, not
+ * by-remembered-pid. Fixed-argument execFileSync (no shell, no injectable
+ * input). Best effort — callers re-probe afterwards.
+ */
+function killPortListeners(): void {
+  if (process.platform !== 'win32') return
+  try {
+    const netstat = execFileSync('netstat', ['-ano', '-p', 'tcp'], {
+      encoding: 'utf-8',
+      windowsHide: true,
+    })
+    const pids = new Set<number>()
+    for (const line of netstat.split(/\r?\n/)) {
+      if (!line.includes(':8787 ') || !line.includes('LISTENING')) continue
+      const pid = Number.parseInt(line.trim().split(/\s+/).at(-1) ?? '', 10)
+      if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) pids.add(pid)
+    }
+    for (const pid of pids) {
+      try {
+        process.kill(pid)
+        logger().info('[supervisor] killed backend-port listener', { pid })
+      } catch (err) {
+        logger().warn('[supervisor] could not kill backend-port listener', {
+          pid,
+          message: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+  } catch (err) {
+    logger().warn('[supervisor] port-listener sweep failed', {
+      message: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
+async function waitForPortFree(): Promise<boolean> {
+  const deadline = Date.now() + 5_000
+  while (Date.now() < deadline) {
+    if (!(await healthProbe())) return true
+    await sleep(250)
+  }
+  return false
 }
 
 function readPidFile(): number | null {
@@ -97,8 +164,10 @@ export function stopBackendSupervisor(): void {
   backendHealthy = false
   const proc = child
   if (!proc) {
-    // Adopted (not spawned) backend: we still own it via our pid file —
-    // kill it so quit never leaves notetaker-backend.exe running.
+    // Adopted (not spawned) backend: kill by PORT, not just the remembered
+    // pid — orphans stack across install cycles and the pid file only names
+    // one of them (IN-484: a second orphan survived a pid-file kill on a
+    // fleet machine, 31 Jul).
     if (adoptedPid) {
       logger().info('[supervisor] stopping adopted backend', { pid: adoptedPid })
       try {
@@ -109,6 +178,7 @@ export function stopBackendSupervisor(): void {
       adoptedPid = null
       clearPidFile()
     }
+    killPortListeners()
     return
   }
 
@@ -178,6 +248,9 @@ function spawnChild(): void {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     MN_DATA_DIR: dataDir,
+    // IN-484 adoption handshake: /health echoes this so a future supervisor
+    // can tell our backend from a stale orphan before adopting it.
+    MN_APP_VERSION: app.getVersion(),
   }
 
   // Two-layer credentials: bundled team keys (shipped in installer) then

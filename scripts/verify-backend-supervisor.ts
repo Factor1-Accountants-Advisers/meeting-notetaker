@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { probeHttpHealth, shouldRestartAfterBackendExit } from '../src/main/backend-health'
+import {
+  probeHttpHealth,
+  shouldAdoptExistingBackend,
+  shouldRestartAfterBackendExit
+} from '../src/main/backend-health'
 
 async function listen(server: ReturnType<typeof createServer>): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -94,6 +98,38 @@ async function main(): Promise<void> {
     shouldRestartAfterBackendExit({ stopRequested: false, wasHealthy: false }),
     false,
     'startup failures remain owned by the existing startup retry loop'
+  )
+
+  // IN-484 adoption handshake: only a same-version backend may be adopted.
+  assert.equal(
+    shouldAdoptExistingBackend({ status: 'ok', app_version: '2.0.12' }, '2.0.12'),
+    true,
+    'same-version backend is adopted'
+  )
+  assert.equal(
+    shouldAdoptExistingBackend({ status: 'ok', app_version: '2.0.10' }, '2.0.12'),
+    false,
+    'version drift after an update must replace, not adopt'
+  )
+  assert.equal(
+    shouldAdoptExistingBackend({ status: 'ok' }, '2.0.12'),
+    false,
+    'pre-IN-484 orphans (no app_version field) must be replaced — they 404 newer routes and can bypass the enrolment gate'
+  )
+  assert.equal(
+    shouldAdoptExistingBackend({ status: 'ok', app_version: '' }, '2.0.12'),
+    false,
+    'manually-run dev backends (empty version) are never adopted by a packaged app'
+  )
+  assert.equal(
+    shouldAdoptExistingBackend(null, '2.0.12'),
+    false,
+    'unreadable health means spawn, not adopt'
+  )
+  assert.equal(
+    shouldAdoptExistingBackend({ status: 'ok', app_version: '2.0.12' }, ''),
+    false,
+    'a blank expected version must never wildcard-match'
   )
 
   console.log('backend supervisor verification passed')

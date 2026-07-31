@@ -224,6 +224,16 @@ export function startUpdaterLifecycle(deps: UpdaterDeps): void {
     })
   }
 
+  // IN-484: without an 'error' listener, electron-updater's internal
+  // failures (e.g. signature rejection while the Private Trust root is not
+  // yet deployed) surface as unhandledRejection noise instead of a clean
+  // log line. The next scheduled check retries naturally.
+  autoUpdater.on('error', (err) => {
+    logger().warn('[updater] updater error', {
+      message: err instanceof Error ? err.message : String(err)
+    })
+  })
+
   autoUpdater.on('update-downloaded', (info) => {
     downloadedVersion = info.version
     logger().info('[updater] update downloaded', { version: info.version })

@@ -40,6 +40,8 @@ nsis:
   oneClick: true
   perMachine: false
   artifactName: ${productName}-${version}-setup.${ext}
+  # IN-484: kills orphaned notetaker-backend.exe at install/uninstall init.
+  include: build/installer.nsh
 # IN-483: toast action buttons activate via this protocol (Windows drops
 # foreground-activation arguments for apps without a COM activator). The
 # installer registers the scheme; setAsDefaultProtocolClient covers dev.

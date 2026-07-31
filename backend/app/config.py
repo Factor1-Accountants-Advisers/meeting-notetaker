@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MN_", env_file=".env", extra="ignore")
 
     environment: str = "dev"
+    # Set by the packaged supervisor at spawn (IN-484): /health echoes it so
+    # the supervisor can refuse to adopt a stale orphaned backend. Empty for
+    # manually-run dev backends.
+    app_version: str = ""
     api_v1_prefix: str = "/api/v1"
     data_dir: str = ""  # When set, all data paths derive from here (packaged builds)
 
