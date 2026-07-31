@@ -179,8 +179,10 @@ carry these sentences; raw exception text is confined to
   `routers/meetings.py` `save_transcript_to_sharepoint` performs
   transcript upload/grant followed by summary upload/grant inside one `try`
   block and one `SharePointStatus` transition. The transcript uses the stable
-  `Title-YYYY-MM-DD.txt` name; the summary and action items use
-  `Title-YYYY-MM-DD-summary.txt`. Both files use the IN-387 owner-implicit
+  `YYYY-MM-DD Title - Transcript.md` name; the summary and action items use
+  `YYYY-MM-DD Title - Summary.md` (IN-385 ticket convention, adopted 31 Jul
+  2026 — both names derive from one basis and stay deterministic across
+  retries). Both files use the IN-387 owner-implicit
   access plus Graph `grant_view` invite (`read`, `requireSignIn`) semantics.
   Any upload failure, grant failure, or HTTP-200 partial grant on either file
   marks the whole delivery `failed` through the IN-391 taxonomy. A retry

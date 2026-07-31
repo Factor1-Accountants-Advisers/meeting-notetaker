@@ -67,23 +67,31 @@ def safe_transcript_filename(title: str, created_at: datetime) -> str:
     with no record of it once the failed attempt's item id is discarded
     (IN-387 final review).
     """
-    cleaned = re.sub(r"[^A-Za-z0-9_. -]+", "-", title).strip(" .-")
-    if not cleaned:
-        cleaned = "meeting"
-    basis = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
-    date_part = basis.astimezone(timezone.utc).strftime("%Y-%m-%d")
-    return f"{cleaned[:60]}-{date_part}.txt"
+    return f"{_filename_basis(title, created_at)} - Transcript.md"
 
 
 def safe_summary_filename(title: str, created_at: datetime) -> str:
     """Build the summary filename paired with ``safe_transcript_filename``.
 
-    The transcript keeps the established ``Title-YYYY-MM-DD.txt`` name.
-    Appending ``-summary`` before the extension makes the second artifact
-    deterministic, collision-safe, and stable across full delivery retries.
+    Both names share one basis so the pair can never drift apart across
+    delivery retries.
     """
-    transcript_filename = safe_transcript_filename(title, created_at)
-    return f"{transcript_filename.removesuffix('.txt')}-summary.txt"
+    return f"{_filename_basis(title, created_at)} - Summary.md"
+
+
+def _filename_basis(title: str, created_at: datetime) -> str:
+    """Shared ``YYYY-MM-DD Title`` stem for the IN-385 artifact pair.
+
+    Convention per the IN-385 ticket (date-first, ``.md``, explicit
+    ``- Transcript``/``- Summary`` suffixes) — supersedes the Slice 1
+    ``Title-YYYY-MM-DD.txt`` name on 31 Jul 2026.
+    """
+    cleaned = re.sub(r"[^A-Za-z0-9_. -]+", "-", title).strip(" .-")
+    if not cleaned:
+        cleaned = "meeting"
+    basis = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
+    date_part = basis.astimezone(timezone.utc).strftime("%Y-%m-%d")
+    return f"{date_part} {cleaned[:60]}"
 
 
 class LocalSharePointProvider:
@@ -139,7 +147,7 @@ class GraphSharePointProvider:
             data=content.encode("utf-8"),
             headers={
                 "Authorization": f"Bearer {access_token}",
-                "Content-Type": "text/plain; charset=utf-8",
+                "Content-Type": "text/markdown; charset=utf-8",
             },
             method="PUT",
         )

@@ -255,10 +255,16 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(store.MEETINGS[self.meeting_id].sharepoint_status, SharePointStatus.saved)
         self.assertEqual(store.MEETINGS[self.meeting_id].sharepoint_error_message, None)
+        # IN-385: the summary file's distinct URL is recorded alongside the
+        # transcript URL.
+        self.assertEqual(
+            result.sharepoint_summary_url,
+            f"https://sharepoint.example/{uploads[1]['filename']}",
+        )
         self.assertEqual(len(uploads), 2)
         self.assertEqual(
             uploads[1]["filename"],
-            uploads[0]["filename"].removesuffix(".txt") + "-summary.txt",
+            uploads[0]["filename"].removesuffix(" - Transcript.md") + " - Summary.md",
         )
         self.assertIn("--- TRANSCRIPT ---", uploads[0]["content"])
         self.assertIn("Transcript survives delivery failure.", uploads[0]["content"])
@@ -392,7 +398,7 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(uploads), 2)
         self.assertEqual(len(grants), 1)
-        self.assertTrue(uploads[1]["filename"].endswith("-summary.txt"))
+        self.assertTrue(uploads[1]["filename"].endswith(" - Summary.md"))
 
     async def test_sharepoint_local_stand_in_writes_both_files(self):
         class UnconfiguredSettings:
@@ -415,15 +421,15 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 sharepoint.LOCAL_SHAREPOINT_DIR = original_dir
 
-            files = sorted(Path(temp_dir).glob("*.txt"))
+            files = sorted(Path(temp_dir).glob("*.md"))
             self.assertEqual(result.sharepoint_status, SharePointStatus.saved)
             self.assertEqual(len(files), 2)
-            self.assertTrue(any(path.name.endswith("-summary.txt") for path in files))
+            self.assertTrue(any(path.name.endswith(" - Summary.md") for path in files))
             transcript_file = next(
-                path for path in files if not path.name.endswith("-summary.txt")
+                path for path in files if not path.name.endswith(" - Summary.md")
             )
             summary_file = next(
-                path for path in files if path.name.endswith("-summary.txt")
+                path for path in files if path.name.endswith(" - Summary.md")
             )
             self.assertIn(
                 "Transcript survives delivery failure.",

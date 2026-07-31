@@ -186,6 +186,10 @@ class Meeting(BaseModel):
     sharepoint_error_message: str | None = None
     sharepoint_error_code: str | None = None  # FailureCategory value (IN-391)
     sharepoint_web_url: str | None = None
+    # Distinct URL for the paired summary file (IN-385 two-file delivery).
+    # sharepoint_web_url stays pointed at the transcript for the existing
+    # single-URL consumers.
+    sharepoint_summary_url: str | None = None
     # The uploaded mic track measured as digital silence (recorder's own voice
     # absent). Set at upload; surfaced in the minutes header.
     recorder_audio_missing: bool = False

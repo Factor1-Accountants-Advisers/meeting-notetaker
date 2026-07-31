@@ -249,9 +249,27 @@ class SharePointProviderTests(unittest.IsolatedAsyncioTestCase):
             created_at,
         )
 
-        self.assertEqual(transcript, "Quarterly - Review-2026-07-30.txt")
-        self.assertEqual(summary, "Quarterly - Review-2026-07-30-summary.txt")
+        # IN-385 naming convention (Jira ticket text, confirmed 31 Jul):
+        # "YYYY-MM-DD Title - Transcript.md" / "YYYY-MM-DD Title - Summary.md"
+        self.assertEqual(transcript, "2026-07-30 Quarterly - Review - Transcript.md")
+        self.assertEqual(summary, "2026-07-30 Quarterly - Review - Summary.md")
         self.assertNotEqual(transcript, summary)
+
+    def test_filenames_follow_in385_date_first_md_convention(self):
+        created_at = datetime(2026, 7, 31, 1, 0, tzinfo=timezone.utc)
+
+        transcript = sharepoint.safe_transcript_filename("Weekly Standup", created_at)
+        summary = sharepoint.safe_summary_filename("Weekly Standup", created_at)
+
+        self.assertEqual(transcript, "2026-07-31 Weekly Standup - Transcript.md")
+        self.assertEqual(summary, "2026-07-31 Weekly Standup - Summary.md")
+
+    def test_empty_title_falls_back_to_meeting(self):
+        created_at = datetime(2026, 7, 31, 1, 0, tzinfo=timezone.utc)
+
+        transcript = sharepoint.safe_transcript_filename("...", created_at)
+
+        self.assertEqual(transcript, "2026-07-31 meeting - Transcript.md")
 
 
 if __name__ == "__main__":
