@@ -225,6 +225,13 @@ jobs:
           az storage blob upload --auth-mode login --overwrite `
             --account-name $env:UPDATES_STORAGE_ACCOUNT --container-name updates `
             --file $exe --name (Split-Path $exe -Leaf)
+          # Blockmap enables differential downloads; without it clients fall
+          # back to the full installer (observed live on the 2.0.8->2.0.9
+          # update). Upload it BEFORE latest.yml so a client that sees the
+          # new manifest never 404s on the blockmap.
+          az storage blob upload --auth-mode login --overwrite `
+            --account-name $env:UPDATES_STORAGE_ACCOUNT --container-name updates `
+            --file "$exe.blockmap" --name ((Split-Path $exe -Leaf) + ".blockmap")
           az storage blob upload --auth-mode login --overwrite `
             --account-name $env:UPDATES_STORAGE_ACCOUNT --container-name updates `
             --file dist\latest.yml --name latest.yml
