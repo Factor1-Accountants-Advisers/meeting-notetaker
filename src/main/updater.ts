@@ -293,6 +293,10 @@ export function stopUpdaterTimers(): void {
 }
 
 export function registerUpdaterIpc(): void {
+  // Single source of truth for the Settings "About" row — the renderer must
+  // never hardcode a version string (2.0.8 shipped showing "2.0.7").
+  ipcMain.handle('app:version', (): string => app.getVersion())
+
   ipcMain.handle('updates:check', async (): Promise<UpdateStatus> => {
     logger().info('[updater] manual check requested', { packaged: app.isPackaged })
     if (!app.isPackaged) return { state: 'dev', version: app.getVersion() }

@@ -98,6 +98,9 @@ const api = {
   /** Audit actor for backend calls; cleared on sign-out. */
   setUser: (name: string): void => ipcRenderer.send('auth:set-user', name),
 
+  /** Installed app version (Settings "About" row — never hardcode it). */
+  getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:version'),
+
   /** Manual update check (Settings). */
   checkUpdates: (): Promise<{
     state: 'dev' | 'checking' | 'up-to-date' | 'available' | 'downloaded' | 'error'

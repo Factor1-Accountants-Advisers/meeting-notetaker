@@ -64,6 +64,20 @@ export function SettingsScreen({
   const [reportSending, setReportSending] = useState(false)
   const [reportDone, setReportDone] = useState(false)
   const [reportError, setReportError] = useState<string | null>(null)
+  const [appVersion, setAppVersion] = useState<string | null>(null)
+
+  useEffect(() => {
+    // Real version from the main process — the label was previously a
+    // hardcoded string that shipped stale in 2.0.8 (showed 2.0.7).
+    if (previewMode) {
+      setAppVersion('0.0.0-preview')
+      return
+    }
+    void window.api?.getAppVersion
+      ?.()
+      .then(setAppVersion)
+      .catch(() => setAppVersion(null))
+  }, [previewMode])
 
   useEffect(() => {
     if (previewMode) {
@@ -303,7 +317,10 @@ export function SettingsScreen({
           </SettingsGroup>
 
           <SettingsGroup title="About and support">
-            <SettingRow label="Meeting Notetaker 2.0.7" hint="Your app is up to date">
+            <SettingRow
+              label={appVersion ? `Meeting Notetaker ${appVersion}` : 'Meeting Notetaker'}
+              hint="Updates download and install automatically"
+            >
               <UpdateCheck previewMode={previewMode} />
             </SettingRow>
             <button
