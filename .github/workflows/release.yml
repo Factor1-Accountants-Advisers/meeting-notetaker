@@ -12,11 +12,11 @@
 # The signature uses PRIVATE TRUST: only Intune-managed devices trust it, so
 # the verify step below asserts signature presence + timestamp, not chain.
 #
-# Still pending to go fully live:
-#   - The publish step below self-skips until the updates feed is
-#     provisioned: repo variable UPDATES_STORAGE_ACCOUNT plus a real
-#     publish.url in electron-builder.yml (currently the REPLACE_ME
-#     placeholder).
+# Fully live as of 31 Jul 2026 (IN-469): the updates feed is provisioned
+# (public-read `updates` container on stf1nt, publish.url set,
+# UPDATES_STORAGE_ACCOUNT repo variable set, release identity granted
+# Storage Blob Data Contributor on the container). The publish step's
+# REPLACE_ME guard is kept as regression protection only.
 
 name: Release
 
@@ -51,13 +51,22 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-build.txt
 
-      - name: Download ffmpeg (BtbN essentials, LGPL)
+      - name: Download ffmpeg (gyan.dev 7.1.1 essentials, LGPL, pinned)
+        # Pinned versioned build + SHA256 verification (30 Jul security
+        # triage: the previous rolling git-essentials URL was unpinned and
+        # unverified — a compromised upstream would have shipped straight
+        # into the installer). Bumping ffmpeg = update BOTH url and hash.
         working-directory: backend
         shell: pwsh
         run: |
-          $url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-git-essentials.7z"
-          $hash = ""  # manual: fill in after first successful download
+          $url = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-7.1.1-essentials_build.7z"
+          $expected = "411d0ae70b72d16f0049696b525a1e24774cacc08fbc30caf042c291c9df43b9"
           Invoke-WebRequest -Uri $url -OutFile ffmpeg.7z
+          $actual = (Get-FileHash ffmpeg.7z -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) {
+            Write-Error "ffmpeg.7z SHA256 mismatch: expected $expected got $actual - refusing to package an unverified binary"
+            exit 1
+          }
           7z x ffmpeg.7z -offmpeg-extracted
           New-Item -ItemType Directory -Force third_party\ffmpeg
           Copy-Item ffmpeg-extracted\*\bin\ffmpeg.exe third_party\ffmpeg\ffmpeg.exe
@@ -191,10 +200,11 @@ jobs:
           Write-Host "Packaged credentials present: $packagedEnv"
 
       - name: Publish to Blob update feed (IN-469)
-        # Self-skips until the updates feed is provisioned: the publish URL
-        # in electron-builder.yml still being the REPLACE_ME placeholder
-        # means IT's container/role grant has not landed yet. Two single
-        # uploads, NOT upload-batch (it honors only one --pattern).
+        # Live since 31 Jul 2026. The REPLACE_ME guard below is regression
+        # protection (a reverted publish.url must skip, not upload a feed
+        # pointing nowhere). Two single uploads, NOT upload-batch (it
+        # honors only one --pattern). latest.yml emission with
+        # `--publish never` verified locally 31 Jul.
         shell: pwsh
         run: |
           $config = Get-Content electron-builder.yml -Raw
