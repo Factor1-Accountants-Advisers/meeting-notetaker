@@ -24,7 +24,11 @@ import {
 } from './recording-ipc'
 import { registerRecordingStorageIpc } from './recording-storage'
 import { ensureDefaultAutoLaunchEnabled, isBackgroundLaunch, registerStartupIpc } from './startup'
-import { buildUpdateReadyToastXml } from './toast-xml'
+import {
+  buildUpdateReadyToastXml,
+  toastActionFromArgv,
+  TOAST_PROTOCOL_SCHEME
+} from './toast-xml'
 import { createTray, destroyTray, setTraySkipped, setUpdateReady, setUpdateRestartHandler, updateTrayMenu } from './tray'
 import {
   deferUpdate,
@@ -127,21 +131,23 @@ function showUpdateReadyToast(version: string): void {
 }
 
 app.on('second-instance', (_event, argv) => {
-  // Toast "Extend 10 min" button (IN-124): Windows activates the app with this
-  // argument. Extend in place without stealing focus to the window.
-  if (argv.includes('mn-extend')) {
+  // Toast buttons arrive as notetaker:// protocol launches (IN-483 — the old
+  // activationType="foreground" arguments were silently dropped by Windows
+  // because Electron has no COM activation callback; legacy mn-* args are
+  // still parsed for toasts shown by pre-fix app versions).
+  const toastAction = toastActionFromArgv(argv)
+  if (toastAction === 'extend') {
+    // IN-124: extend in place without stealing focus to the window.
     logger().info('[app] extend requested from toast notification')
     extendActiveRecordingFromMain()
     return
   }
-  // Update toast buttons (IN-469): same convention as mn-extend — act in
-  // place without stealing focus to the window.
-  if (argv.includes('mn-update-restart')) {
+  if (toastAction === 'update-restart') {
     logger().info('[app] update restart requested from toast notification')
     restartNowRequested()
     return
   }
-  if (argv.includes('mn-update-defer')) {
+  if (toastAction === 'update-defer') {
     logger().info('[app] update deferred from toast notification')
     deferUpdate()
     return
@@ -150,11 +156,23 @@ app.on('second-instance', (_event, argv) => {
     logger().info('[app] background second instance ignored')
     return
   }
+  // toastAction === 'open' (toast body click) falls through to the window.
   showMainWindow()
 })
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.factor1.notetaker')
+  // IN-483: toast action buttons activate via the notetaker:// protocol.
+  // The installer registers the scheme (electron-builder `protocols`); this
+  // call self-heals the registration on packaged launches. Deliberately NOT
+  // in dev: a bare registration there would point the system-wide scheme at
+  // electron.exe without the app path — a broken handler that shadows the
+  // installed app's.
+  if (app.isPackaged && !app.setAsDefaultProtocolClient(TOAST_PROTOCOL_SCHEME)) {
+    logger().warn('[app] could not register toast protocol scheme', {
+      scheme: TOAST_PROTOCOL_SCHEME
+    })
+  }
   logger().info('[app] ready')
   ensureDefaultAutoLaunchEnabled()
 
