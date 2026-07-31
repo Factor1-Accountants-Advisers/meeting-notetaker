@@ -15,11 +15,14 @@ files:
   - '!recordings/**'
   - '!dist/**'
   - '!*.tsbuildinfo'
+# seed-data (bundled voiceprint preload) removed 31 Jul 2026: obsolete since
+# the central voiceprint store + enrolment gate (Slice 2), and it shipped a
+# real employee's biometric embedding in every installer (30 Jul security
+# triage). backend-supervisor's seedInitialData degrades to a logged skip
+# when the directory is absent.
 extraResources:
   - from: backend/dist/notetaker-backend
     to: backend
-  - from: seed-data
-    to: seed-data
   - from: resources/tray-icon.png
     to: tray-icon.png
 extraMetadata:
