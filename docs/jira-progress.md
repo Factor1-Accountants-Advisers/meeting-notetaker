@@ -354,9 +354,19 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     review-caught). Enrichment never gates: any failure logs one warning
     (class name only, token-safe) and proceeds identically.
   - 12 focused tests; export schema untouched (1.0).
-  - **Outstanding:** Graph token does not reach the pipeline today (`kick_pipeline`
-    carries only the storage token) — live Graph fetch needs the token threaded
-    through upload/retry, then acceptance test `IN-400` on the work machine.
+  - **Completed 31 Jul (pm):** delegated Graph token now threaded end-to-end —
+    `api-proxy.ts` attaches `X-MN-Graph-Token` (SharePoint scopes) on the
+    pipeline-kicking routes (`isPipelineKickRoute`: POST audio/retry only;
+    finalize/blob-retry never re-generate), `upload_audio`/`retry_pipeline`
+    forward it into `kick_pipeline`→`run_pipeline`→`get_company_context(token)`.
+    Successful Graph reads cached 15 min (`CONTEXT_CACHE_TTL_S`, ticket
+    requirement): back-to-back meetings reuse content, a fresh cache entry even
+    survives an expired token on long meetings; failures are never cached.
+    `backend.env.template` now documents `MN_CONTEXT_DRIVE_ID`/`MN_CONTEXT_FILE_PATH`.
+    16 tests (cache hit/expiry/no-poison/token-survival added).
+  - **Outstanding:** point `MN_CONTEXT_*` at a real context file and run
+    acceptance test `IN-400` live (needs a signed-in app session for the
+    delegated token).
 - [ ] MSAL token-cache encryption (security triage 30 Jul — no Jira item)
   - **Implemented 31 Jul** (`msal-cache-safestorage` merged `1580637`):
     safeStorage/DPAPI-encrypted `auth/msal-cache.bin` with one-time migration
@@ -433,7 +443,8 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
 - [ ] `IN-469` — Auto-update via HTTPS Blob feed
   - Implementation landed on `in469-auto-update` (30 Jul): pure idle-gate predicate (`update-gate.ts`) with verify:update-gate truth table (~30 assertions incl. the stale-past-start regression case); updater lifecycle — launch + 4h checkForUpdates, tray "Restart to update" item + toast prompt (mn-update-restart/defer argv), 5-min idle poll gated on recording state, pending/imminent auto-start (15-min lead, 2-min grace), backend pipeline busy probe (fail-safe to busy), 300s system idle, 4h snooze; 60s deferrable countdown then silent quitAndInstall(true,true) via a single reentrancy-guarded, exception-safe choke point; publisherName verification (lives under `publish`, not `win` — the installed electron-builder schema only accepts it there or nested under win.signtoolOptions/azureSignOptions); CI publish step (two az uploads, self-skips while publish.url is REPLACE_ME).
   - Gates: typecheck, verify:update-gate, verify:toast-xml, verify:recording-controls, build — all green.
-  - Outstanding external: IT provisions public-read `updates` container + Storage Blob Data Contributor for the release identity; then swap publish.url + set UPDATES_STORAGE_ACCOUNT repo variable (one commit). Live E2E (signed 2.0.x manual install → tag 2.0.y → detect/download/verify/prompt/idle-install/relaunch) after provisioning. Jira transition = Joseph.
+  - **Provisioned 31 Jul (JG, per Jira recommendation):** `stf1nt` account flag `allowBlobPublicAccess=true` enabled; public-read `updates` container created (anonymous HTTPS read verified with a probe blob, then removed) — the only public container on the account, private containers untouched. `publish.url` → `https://stf1nt.blob.core.windows.net/updates/`; repo variable `UPDATES_STORAGE_ACCOUNT=stf1nt` set. Bicep source of truth updated in notetaker-storage-api `infra/main.bicep` (updates container + conditional `releasePublisherPrincipalId` role assignment).
+  - Outstanding external: (1) Storage Blob Data Contributor on the `updates` container for `app-github-code-signing` (SP object id `5bff695b-e921-4c1c-8f97-997c4a87c8ba`) — needs UAA/Owner rights (David): `az role assignment create --assignee 5bff695b-e921-4c1c-8f97-997c4a87c8ba --role "Storage Blob Data Contributor" --scope "/subscriptions/57a3f51b-c3f8-44e8-9e5a-f9fe29e679f2/resourceGroups/rg-nt-prod/providers/Microsoft.Storage/storageAccounts/stf1nt/blobServices/default/containers/updates"`; (2) IN-81 signer-role grant (DV) so the tagged build is signed — publisherName verification makes signing a hard prerequisite for the E2E, not a parallel track. Then: tag v2.0.8 → CI signs+publishes → live E2E (manual install of first feed-aware build → tag next patch → detect/verify/idle-install). Jira transition = Joseph.
 
 ## Slice 2 implementation evidence (IN-375)
 
@@ -451,6 +462,13 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   - The canonical IN-384 export remains `schema_version` `"1.0"` because no external field was added, removed, or renamed. IN-390 now populates the existing `key_points`, `follow_ups`, and action metadata fields (`owner_email`, `owner_confidence`, `owner_source`, `action_type`, `assigned_to`, `assigned_to_department`) instead of leaving them empty/null. Post-ready edits preserve the LLM-only lists while refreshing mutable transcript/action data.
   - Plain-text summary, HTML email, SharePoint minutes, editable action items, and Blob JSON are deterministic projections of the same validated output. The unconfigured-provider response remains the explicit `Summary unavailable — configure MN_OPENAI_API_KEY.` stub with no HTML or actions, and recipient-facing section headings/formatting are unchanged.
   - Verification: 45 focused structured-output/minutes/export tests passed; the full backend suite passed `282` tests with one ffmpeg-dependent skip; `python -m compileall app`, `npm run typecheck`, and `git diff --check` passed. Live OpenAI, Graph, Storage API, MSAL, Blob, and SharePoint verification remains out of scope for this branch and belongs on the work machine after review/merge.
+  - **Completed 31 Jul (pm):** `meeting_type` now applied to generation, closing the last ticket clause — the Slice 1 internal/client classification is derived *before* the LLM call (`derive_meeting_type`, shared with the export builder so prompt and artifact can never disagree) and rides the reduce payload as a data field (never prompt-string concat; transcript content cannot impersonate it), with register guidance in `_REDUCE_SYSTEM_PROMPT`. Gating fix: the export's `if metadata else "internal"` shortcut is gone — a manual-attendee meeting with an external picker email now classifies `client` in both prompt and artifact.
+  - **Live smoke 31 Jul (pm): PASSED** — real OpenAI strict-schema consolidated generation (`gpt-4o`, `json_schema` strict) with `meeting_type="client"` + company context block: valid `schema_version 1.0`, zero quality flags, correct decisions/unresolved/next-meeting/action extraction. (Model wrote a wrong due-date year on a synthetic transcript — an LLM quirk to watch, not a contract failure.)
+
+- [x] IN-389 — Define transcript and speaker identity merge approach (31 Jul)
+  - The merge itself has been implemented since Slice 1 (IN-69/79/80/86 markers) but nothing documented it and the repo had zero `IN-389` references; the concrete numbers lived only in code comments.
+  - **Definition ratified:** `docs/decisions/2026-07-31-in389-transcript-speaker-identity-merge.md` — turn-level inputs, three merge gates (raw-cluster match; ≥800 ms overlap; ≥0.62 confidence with `None` passing ungated), largest-overlap winner, 0.85 expansion pass, 0.5-fraction cluster propagation, unknown-reason taxonomy, and the complete `speaker_source` taxonomy. Includes the word-level-vs-turn-level deviation note.
+  - **Implementation gap closed:** manual naming (`POST /meetings/{id}/name-speaker`) now stamps `speaker_source="user_corrected"` (promised by the schema comment and the Slice 1 plan, never set), clears `speaker_confidence` and the stale `unknown_reason`; flows into the export. Test added.
 
 - [x] IN-379 — Central voiceprint enrolment through the Storage API seam
   - Shipped: a Storage API client seam (`backend/app/services/storage_api.py`) with a file-backed stub (`var/central-voiceprints.json`) standing in for the real Azure Blob-backed API (IN-471) until it exists, and a `RestStorageApiClient` that speaks the same `CentralEnrolment` contract over HTTP; consent is now required before any enrolment (`consent_confirmed` on `EnrollRequest`, enforced before any provider call) and server-stamped (`consent_recorded_at` set from `datetime.now(timezone.utc)`, never trusted from the client); central registration on enroll with a 502 "retry enrolment" response and no false success when the central write fails (local voiceprint write is not rolled back — by design, matching the plan's rollback-window semantics — but no central record exists and the HTTP response never claims success); a fail-closed `GET /people/me/enrolment-status` endpoint that is the single gate source of truth (missing/whitespace `X-MN-User-Email` header, or any `StorageApiError` from the seam, resolves to not-enrolled rather than erroring) and counts only `status == "active"` central records (a `disabled`/offboarded record does not satisfy the gate); Electron main-process token/email headers (`X-MN-User-Email`, `X-MN-Storage-Token`) attached to enrolment routes in `api-proxy.ts`, with a cold-start ordering fix so the storage token is acquired before the account email is read; a renderer gate (`App.tsx`) that is strict post-cutover (central record required, local-only no longer satisfies it), falls back to local-only pre-cutover, and hardens the enrolment-status fetch with retry; and the enrolment wizard (`EnrollmentModal.tsx`) now uploads the 3 captured clips and shows central-storage consent copy alongside the existing local consent language; the gate now excludes people flagged for re-enrolment (`reenrollment_required`) from `enrolled_locally` so a flagged person can no longer pass the pre-cutover gate on stale local enrolment.
@@ -531,6 +549,19 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
     `Title-YYYY-MM-DD-summary.txt` (summary/minutes plus action items). The
     existing `sharepoint_web_url` contract continues to point to the transcript;
     the audit entry records both uploaded URLs.
+  - **Naming reconciled to the ticket convention 31 Jul (pm):** the pair is now
+    `YYYY-MM-DD Title - Transcript.md` / `YYYY-MM-DD Title - Summary.md`
+    (date-first, `.md`, per the IN-385 ticket text and the IN-387 design spec —
+    the interim `Title-date.txt` continuity choice was never recorded as a
+    decision, so the documented convention wins). Shared `_filename_basis`
+    keeps the pair drift-proof and retry-deterministic (UTC `created_at` date,
+    IN-387 orphan-file rule preserved); upload Content-Type now
+    `text/markdown`. The distinct summary URL is now first-class:
+    `Meeting.sharepoint_summary_url` recorded on success beside
+    `sharepoint_web_url` (transcript). Tests updated + convention pinned.
+  - **Outstanding:** live two-file delivery smoke (IN-398 scenario needs a
+    signed-in app session for the delegated Graph token; next test meeting
+    covers it).
   - Both files receive the IN-387 owner-implicit plus Graph `grant_view`
     (`read`, `requireSignIn`) treatment in the same delivery attempt. Any
     first/second upload or grant failure, including an HTTP-200 partial grant
