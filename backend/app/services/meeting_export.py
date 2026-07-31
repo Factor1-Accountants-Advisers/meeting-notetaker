@@ -148,6 +148,21 @@ def _derive_meeting_type(invitees: list[ExportInvitee]) -> str:
     return "internal"
 
 
+def derive_meeting_type(meeting: Meeting) -> str:
+    """Slice 1 internal/client classification from whatever invitees exist.
+
+    Shared by the export builder and the generation pipeline (IN-390) so the
+    prompt and the canonical artifact can never disagree. Manual-attendee
+    meetings classify from their picker emails — an external attendee added
+    by hand makes the meeting "client" even without Graph metadata.
+    """
+    metadata = meeting.graph_metadata
+    invitees = _dedupe_invitees(
+        metadata.attendees if metadata else meeting.manual_attendees
+    )
+    return _derive_meeting_type(invitees)
+
+
 def _export_segment(segment: TranscriptSegment) -> ExportTranscriptSegment:
     return ExportTranscriptSegment(
         speaker=segment.speaker,
@@ -195,7 +210,9 @@ def build_meeting_export(
         scheduled_start = _format_utc_timestamp(parsed) if parsed else None
     return MeetingExport(
         meeting_id=str(meeting.id),
-        meeting_type=_derive_meeting_type(invitees) if metadata else "internal",
+        # IN-390: no metadata gate — manual-attendee externals count too, and
+        # this must match what generation was told (derive_meeting_type).
+        meeting_type=_derive_meeting_type(invitees),
         meeting_name=meeting.title,
         organiser_name=metadata.organizer_name if metadata else None,
         organiser_email=metadata.organizer_email if metadata else None,

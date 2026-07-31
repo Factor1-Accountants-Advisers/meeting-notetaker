@@ -254,6 +254,18 @@ class MeetingExportBuilderTests(unittest.TestCase):
         self.assertEqual(_export_dict(_meeting(graph_metadata=no_email))["meeting_type"], "internal")
         self.assertEqual(_export_dict(_meeting(graph_metadata=None))["meeting_type"], "internal")
 
+    def test_meeting_type_client_from_manual_external_attendee(self):
+        # IN-390: the metadata gate is gone — an external attendee added via
+        # the ad-hoc picker classifies the meeting as client even though no
+        # Graph metadata exists.
+        meeting = _meeting(
+            graph_metadata=None,
+            manual_attendees=[
+                ManualMeetingAttendee(name="Client", email="contact@acmecorp.com"),
+            ],
+        )
+        self.assertEqual(_export_dict(meeting)["meeting_type"], "client")
+
     def test_invitees_retained_regardless_of_rsvp_and_deduped_case_insensitively(self):
         metadata = _graph_metadata(
             attendees=[
@@ -611,6 +623,30 @@ class MeetingExportStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             store.MEETING_EXPORTS[meeting.id]["transcript"][0]["speaker"], "Ayda Thom"
         )
+
+    async def test_manual_naming_sets_user_corrected_provenance(self):
+        # IN-389: a manually named speaker must carry its own provenance in
+        # the export instead of the stale pipeline verdict ("unknown" source
+        # plus a dead unknown_reason).
+        meeting = self._seed_ready_meeting()
+        refresh_meeting_export(meeting.id)
+        self.assertEqual(
+            store.MEETING_EXPORTS[meeting.id]["transcript"][0]["speaker_source"],
+            "unknown",
+        )
+
+        await meetings_router.name_speaker(
+            meeting.id,
+            NameSpeakerRequest(label="Speaker 1", name="Ayda Thom"),
+            actor="Joseph",
+        )
+
+        exported = store.MEETING_EXPORTS[meeting.id]["transcript"][0]
+        self.assertEqual(exported["speaker_source"], "user_corrected")
+        self.assertIsNone(exported["confidence"])
+        segment = store.TRANSCRIPTS[meeting.id][0]
+        self.assertEqual(segment.speaker_source, "user_corrected")
+        self.assertIsNone(segment.unknown_reason)
 
 
 if __name__ == "__main__":

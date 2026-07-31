@@ -1109,6 +1109,7 @@ class BlobDeliveryTriggerTests(unittest.IsolatedAsyncioTestCase):
             storage_token="token",
             storage_actor="Joseph",
             recorder_email="recorder@example.com",
+            graph_token=None,
         )
 
     async def test_finalise_refreshes_then_schedules_json_only_after_uploaded_delivery(self):

@@ -10,6 +10,7 @@ import {
 } from './auth-session'
 import { GRAPH_EMAIL_SCOPES, GRAPH_SHAREPOINT_SCOPES } from './auth-msal'
 import {
+  isPipelineKickRoute,
   isStorageRoute,
   loggablePath,
   timeoutMsFor,
@@ -50,6 +51,14 @@ export function registerApiProxyIpc(): void {
         if (token) headers['X-MN-Graph-Token'] = token
       }
       if (req.path.includes('/sharepoint') && req.method === 'POST') {
+        const token = await getGraphAccessToken(GRAPH_SHAREPOINT_SCOPES)
+        if (token) headers['X-MN-Graph-Token'] = token
+      }
+
+      // IN-383: audio upload / pipeline retry carry a Graph token so the
+      // backend can fetch the SharePoint company context file during
+      // generation. Missing token is fine — context degrades to absent.
+      if (isPipelineKickRoute(req)) {
         const token = await getGraphAccessToken(GRAPH_SHAREPOINT_SCOPES)
         if (token) headers['X-MN-Graph-Token'] = token
       }

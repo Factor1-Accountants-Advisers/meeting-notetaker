@@ -72,7 +72,11 @@ _REDUCE_SYSTEM_PROMPT = (
     "Start every action item description with a verb (e.g. 'Submit', 'Review', 'Schedule'). "
     "Deduplicate action items, preserve explicit owners only, and use exact speaker display names. "
     "Do not infer owner email, department, assignment, source, or action type; leave any unsupported "
-    "nullable field null. Return plain text in every field (no markdown or HTML), set schema_version "
+    "nullable field null. The payload's 'meeting_type' is 'internal' (Factor1 colleagues only) or "
+    "'client' (external attendees present): for client meetings keep the summary suitable to share "
+    "externally — no internal shorthand — and favour explicit commitments and follow-ups; for "
+    "internal meetings internal project names may be used as spoken. "
+    "Return plain text in every field (no markdown or HTML), set schema_version "
     f"to '{STRUCTURED_OUTPUT_SCHEMA_VERSION}', and return only the requested structured JSON."
 )
 
@@ -138,11 +142,14 @@ class SummaryProvider(Protocol):
         segments: list[TranscriptSegment],
         *,
         company_context: str | None = None,
+        meeting_type: str | None = None,
     ) -> StructuredMeetingOutput:
         """Generate one versioned summary-and-actions object.
 
         ``company_context`` is the pre-fetched IN-383 enrichment text (one
         fetch per pipeline run, done by the caller) or ``None``.
+        ``meeting_type`` is the Slice 1 classification (``"internal"`` /
+        ``"client"``, IN-390) steering register and shareability.
         """
         ...
 
@@ -170,6 +177,7 @@ class StubLLMProvider:
         segments: list[TranscriptSegment],
         *,
         company_context: str | None = None,
+        meeting_type: str | None = None,
     ) -> StructuredMeetingOutput:
         return _fallback_output(
             "Summary unavailable — configure MN_OPENAI_API_KEY.",
@@ -309,6 +317,7 @@ class OpenAIProvider:
         segments: list[TranscriptSegment],
         *,
         company_context: str | None = None,
+        meeting_type: str | None = None,
     ) -> StructuredMeetingOutput:
         if len(_segments_to_labelled_transcript(segments)) < 80:
             return _fallback_output(
@@ -332,7 +341,9 @@ class OpenAIProvider:
         # injection point covers both the single-shot and map/reduce shapes
         # without repeating the block per chunk.
         return await self._reduce_chunk_insights(
-            chunk_results, company_context=company_context
+            chunk_results,
+            company_context=company_context,
+            meeting_type=meeting_type,
         )
 
     async def _extract_chunk_insights(
@@ -362,10 +373,14 @@ class OpenAIProvider:
         chunk_results: list[_ChunkInsights],
         *,
         company_context: str | None = None,
+        meeting_type: str | None = None,
     ) -> StructuredMeetingOutput:
         payload = {
             "task": "reduce_insights",
             "today": date.today().isoformat(),
+            # IN-390: classification rides in the payload (not the prompt
+            # string) so transcript content can never impersonate it.
+            "meeting_type": meeting_type or "internal",
             "chunks": [chunk.model_dump(mode="json") for chunk in chunk_results],
         }
         system_prompt = _REDUCE_SYSTEM_PROMPT
@@ -431,6 +446,7 @@ class AzureOpenAIProvider:
         segments: list[TranscriptSegment],
         *,
         company_context: str | None = None,
+        meeting_type: str | None = None,
     ) -> StructuredMeetingOutput:
         raise NotImplementedError("Azure OpenAI wiring requires a provisioned deployment")
 

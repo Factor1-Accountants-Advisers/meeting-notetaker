@@ -385,6 +385,7 @@ async def upload_audio(
     actor: str = Actor,
     storage_token: str | None = Header(None, alias="X-MN-Storage-Token"),
     user_email: str | None = Header(None, alias="X-MN-User-Email"),
+    graph_token: str | None = Header(None, alias="X-MN-Graph-Token"),
 ) -> Meeting:
     """Store meeting audio (Blob stand-in) and queue the processing pipeline."""
     meeting = store.MEETINGS.get(meeting_id)
@@ -430,6 +431,7 @@ async def upload_audio(
         storage_token=_clean_optional_header(storage_token),
         storage_actor=actor,
         recorder_email=_clean_optional_header(user_email, casefold=True),
+        graph_token=_clean_optional_header(graph_token),
     )
     return store.MEETINGS[meeting_id]
 
@@ -440,6 +442,7 @@ async def retry_pipeline(
     actor: str = Actor,
     storage_token: str | None = Header(None, alias="X-MN-Storage-Token"),
     user_email: str | None = Header(None, alias="X-MN-User-Email"),
+    graph_token: str | None = Header(None, alias="X-MN-Graph-Token"),
 ) -> Meeting:
     """Re-queue a failed meeting (requirements §4.4: flag and retry)."""
     meeting = store.MEETINGS.get(meeting_id)
@@ -457,6 +460,7 @@ async def retry_pipeline(
         storage_token=_clean_optional_header(storage_token),
         storage_actor=actor,
         recorder_email=_clean_optional_header(user_email, casefold=True),
+        graph_token=_clean_optional_header(graph_token),
     )
     return store.MEETINGS[meeting_id]
 
@@ -757,8 +761,10 @@ async def save_transcript_to_sharepoint(
             "sharepoint_status": SharePointStatus.saved,
             "sharepoint_error_message": None,
             "sharepoint_error_code": None,
-            # Keep the existing single URL contract pointed at the transcript.
+            # Keep the existing single URL contract pointed at the transcript;
+            # the summary's distinct URL rides alongside (IN-385).
             "sharepoint_web_url": uploads[0].web_url,
+            "sharepoint_summary_url": uploads[1].web_url,
         }
     )
     store.MEETINGS[meeting_id] = updated
@@ -957,6 +963,12 @@ async def name_speaker(
         if seg.speaker == body.label:
             seg.speaker = body.name
             seg.speaker_known = True
+            # IN-389: a manual rename is its own provenance — clear the stale
+            # pipeline verdict so exports don't carry "unknown" source and a
+            # dead unknown_reason on a segment the user has identified.
+            seg.speaker_source = "user_corrected"
+            seg.speaker_confidence = None
+            seg.unknown_reason = None
 
     updated = meeting.model_copy(
         update={"unknown_speaker_count": max(0, meeting.unknown_speaker_count - 1)}

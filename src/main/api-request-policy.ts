@@ -17,6 +17,17 @@ export function timeoutMsFor(req: ApiRequest): number {
   return 15_000
 }
 
+// IN-383: pipeline-kicking routes also carry a delegated Graph token so the
+// backend can read the company context file from SharePoint at summarisation
+// time. Deliberately narrower than isStorageRoute — finalize/blob-retry never
+// re-run generation, so they have no use for a Graph token.
+export function isPipelineKickRoute(req: Pick<ApiRequest, 'method' | 'path'>): boolean {
+  return (
+    req.method === 'POST' &&
+    /^\/api\/v1\/meetings\/[^/]+\/(?:audio|retry)$/.test(loggablePath(req.path))
+  )
+}
+
 export function isStorageRoute(req: Pick<ApiRequest, 'method' | 'path'>): boolean {
   const path = loggablePath(req.path)
   const storageBackedMeetingRoute =

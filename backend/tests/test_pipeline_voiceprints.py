@@ -159,6 +159,7 @@ class PipelineVoiceprintTests(unittest.IsolatedAsyncioTestCase):
             storage_token="token-123",
             storage_actor="Joseph",
             recorder_email="recorder@example.com",
+            graph_token=None,
         )
         serialized = store.MEETINGS[self.meeting.id].model_dump_json()
         self.assertNotIn("token-123", serialized)

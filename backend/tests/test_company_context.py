@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 import tests.conftest_env  # noqa: F401 — isolate MN_DATA_DIR before app imports
 
 from app.config import get_settings
+from app.services import context_file
 from app.services.context_file import (
     CONTEXT_CHAR_CAP,
     CONTEXT_FILENAME,
@@ -104,11 +105,13 @@ class GraphContextTests(unittest.TestCase):
         os.environ["MN_CONTEXT_DRIVE_ID"] = "test-drive-id"
         os.environ["MN_CONTEXT_FILE_PATH"] = "General/company-context.md"
         get_settings.cache_clear()
+        context_file.clear_context_cache()
 
     def tearDown(self):
         os.environ.pop("MN_CONTEXT_DRIVE_ID", None)
         os.environ.pop("MN_CONTEXT_FILE_PATH", None)
         get_settings.cache_clear()
+        context_file.clear_context_cache()
 
     def test_no_token_returns_none_with_warning_and_no_request(self):
         with patch("urllib.request.urlopen") as urlopen:
@@ -145,6 +148,67 @@ class GraphContextTests(unittest.TestCase):
         self.assertIn("test-drive-id", request.full_url)
         self.assertIn("General/company-context.md", request.full_url)
         self.assertTrue(request.full_url.endswith(":/content"))
+
+    def test_second_fetch_within_ttl_is_served_from_cache(self):
+        response = MagicMock()
+        response.read.return_value = b"Cached context."
+        response.__enter__.return_value = response
+
+        with patch("urllib.request.urlopen", return_value=response) as urlopen:
+            first = get_company_context(access_token="delegated-token")
+            second = get_company_context(access_token="delegated-token")
+
+        self.assertEqual(first, "Cached context.")
+        self.assertEqual(second, "Cached context.")
+        self.assertEqual(urlopen.call_count, 1)
+
+    def test_cached_content_survives_a_missing_token(self):
+        # A long meeting can outlive its delegated token; a fresh cache entry
+        # must still serve rather than warn no_graph_token.
+        response = MagicMock()
+        response.read.return_value = b"Cached context."
+        response.__enter__.return_value = response
+
+        with patch("urllib.request.urlopen", return_value=response):
+            get_company_context(access_token="delegated-token")
+        result = get_company_context(access_token=None)
+
+        self.assertEqual(result, "Cached context.")
+
+    def test_expired_cache_refetches(self):
+        response = MagicMock()
+        response.read.return_value = b"Fresh context."
+        response.__enter__.return_value = response
+
+        with patch("urllib.request.urlopen", return_value=response) as urlopen:
+            get_company_context(access_token="delegated-token")
+            expired = (
+                context_file._graph_cache[0]
+                - context_file.CONTEXT_CACHE_TTL_S
+                - 1
+            )
+            context_file._graph_cache = (
+                expired,
+                context_file._graph_cache[1],
+                context_file._graph_cache[2],
+            )
+            get_company_context(access_token="delegated-token")
+
+        self.assertEqual(urlopen.call_count, 2)
+
+    def test_failed_fetch_is_not_cached(self):
+        ok = MagicMock()
+        ok.read.return_value = b"Recovered context."
+        ok.__enter__.return_value = ok
+
+        with patch("urllib.request.urlopen", side_effect=OSError("boom")):
+            with self.assertLogs(LOGGER, level="WARNING"):
+                self.assertIsNone(get_company_context(access_token="delegated-token"))
+        with patch("urllib.request.urlopen", return_value=ok) as urlopen:
+            result = get_company_context(access_token="delegated-token")
+
+        self.assertEqual(result, "Recovered context.")
+        self.assertEqual(urlopen.call_count, 1)
 
 
 class CompanyContextPromptShapeTests(unittest.IsolatedAsyncioTestCase):

@@ -54,6 +54,7 @@ class MeetingProcessingAuthTests(unittest.IsolatedAsyncioTestCase):
                 actor="Joseph",
                 storage_token=" token-123 ",
                 user_email=" Recorder@Example.com ",
+                graph_token=" graph-token-456 ",
             )
 
         kick.assert_called_once_with(
@@ -62,6 +63,7 @@ class MeetingProcessingAuthTests(unittest.IsolatedAsyncioTestCase):
             storage_token="token-123",
             storage_actor="Joseph",
             recorder_email="recorder@example.com",
+            graph_token="graph-token-456",
         )
 
     async def test_retry_passes_fresh_request_identity_to_pipeline(self):
@@ -80,6 +82,7 @@ class MeetingProcessingAuthTests(unittest.IsolatedAsyncioTestCase):
                     actor="Joseph",
                     storage_token="retry-token",
                     user_email="recorder@example.com",
+                    graph_token="retry-graph-token",
                 )
 
         kick.assert_called_once_with(
@@ -88,6 +91,7 @@ class MeetingProcessingAuthTests(unittest.IsolatedAsyncioTestCase):
             storage_token="retry-token",
             storage_actor="Joseph",
             recorder_email="recorder@example.com",
+            graph_token="retry-graph-token",
         )
 
 

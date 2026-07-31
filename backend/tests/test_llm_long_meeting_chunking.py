@@ -154,6 +154,32 @@ class LongMeetingChunkingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(actions[0].priority, Priority.medium)
         self.assertEqual(actions[0].owner, "Joseph Guerrero")
 
+    async def test_meeting_type_rides_reduce_payload_only(self):
+        # IN-390: the Slice 1 classification is applied to generation as a
+        # payload field (never prompt-string concatenation), defaulting to
+        # internal when the caller passes nothing.
+        provider = FakeChunkedOpenAIProvider()
+        segments = [seg(i, i * 10, i * 10 + 4) for i in range(10)]
+
+        await provider.generate(segments, meeting_type="client")
+        reduce_calls = [
+            c for c in provider.calls if c["payload"]["task"] == "reduce_insights"
+        ]
+        chunk_calls = [
+            c for c in provider.calls if c["payload"]["task"] == "chunk_insights"
+        ]
+        self.assertEqual(reduce_calls[0]["payload"]["meeting_type"], "client")
+        self.assertTrue(
+            all("meeting_type" not in c["payload"] for c in chunk_calls)
+        )
+
+        provider.calls.clear()
+        await provider.generate(segments)
+        reduce_calls = [
+            c for c in provider.calls if c["payload"]["task"] == "reduce_insights"
+        ]
+        self.assertEqual(reduce_calls[0]["payload"]["meeting_type"], "internal")
+
 
 if __name__ == "__main__":
     unittest.main()

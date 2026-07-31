@@ -45,7 +45,7 @@ from app.services.llm import (
     get_llm_provider,
     render_summary_html,
 )
-from app.services.meeting_export import refresh_meeting_export
+from app.services.meeting_export import derive_meeting_type, refresh_meeting_export
 from app.services.meeting_voiceprints import resolve_meeting_voiceprints
 from app.services.speech import get_speech_provider
 from app.services.speaker_matching import get_speaker_matcher
@@ -304,6 +304,7 @@ async def run_pipeline(
     storage_token: str | None = None,
     storage_actor: str = "Unknown user",
     recorder_email: str | None = None,
+    graph_token: str | None = None,
 ) -> None:
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is None:
@@ -355,13 +356,18 @@ async def run_pipeline(
         # IN-383: fetch the company context once per pipeline run and pass the
         # string down, so map/reduce long meetings never refetch per chunk.
         # Enrichment only — the provider never raises, and None proceeds
-        # identically to today. No Graph token reaches the pipeline (upload/
-        # retry carry only X-MN-Storage-Token), so Graph mode degrades to
-        # no-context inside the provider.
-        company_context = await asyncio.to_thread(get_company_context)
+        # identically to today. The delegated Graph token arrives via
+        # X-MN-Graph-Token on upload/retry; on long meetings it may have
+        # expired by this stage, which degrades to no-context inside the
+        # provider (the 15-min TTL cache usually still serves content).
+        company_context = await asyncio.to_thread(get_company_context, graph_token)
         llm = get_llm_provider()
         structured_output = await llm.generate(
-            segments, company_context=company_context
+            segments,
+            company_context=company_context,
+            # IN-390: same classification the export will stamp, so the prompt
+            # and the canonical artifact agree.
+            meeting_type=derive_meeting_type(store.MEETINGS.get(meeting_id, meeting)),
         )
         summary = compose_plain_summary(structured_output)
         summary_html = render_summary_html(structured_output)
@@ -468,6 +474,7 @@ def kick_pipeline(
     storage_token: str | None = None,
     storage_actor: str = "Unknown user",
     recorder_email: str | None = None,
+    graph_token: str | None = None,
 ) -> None:
     _increment_attempt(meeting_id)
     # The canonical export describes outputs this run is about to replace;
@@ -493,6 +500,7 @@ def kick_pipeline(
             storage_token=storage_token,
             storage_actor=storage_actor,
             recorder_email=recorder_email,
+            graph_token=graph_token,
         )
     )
     _PIPELINE_TASKS.add(task)

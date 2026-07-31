@@ -12,14 +12,19 @@ Provider seam mirrors ``app.services.sharepoint``:
   read ``context_dir()/company-context.md`` when present. The directory is
   the convention; the file is never created automatically.
 - Graph mode (both set): fetch the drive item content with the delegated
-  Graph token. No Graph token reaches the pipeline today (upload/retry only
-  carry ``X-MN-Storage-Token``), so Graph mode degrades gracefully to
-  no-context until a delegated token is threaded through to processing.
+  Graph token, which reaches the pipeline via ``X-MN-Graph-Token`` on the
+  upload/retry routes (IN-383 threading, 31 Jul 2026). A missing/expired
+  token degrades gracefully to no-context.
+
+Graph reads are cached for ``CONTEXT_CACHE_TTL_S`` (15 minutes, per the
+ticket) so back-to-back meetings don't refetch an unchanged file; edits to
+the SharePoint file are picked up within the TTL window.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 import urllib.parse
 import urllib.request
 
@@ -37,6 +42,23 @@ CONTEXT_FILENAME = "company-context.md"
 
 GRAPH_DRIVE_BASE = "https://graph.microsoft.com/v1.0/drives"
 _GRAPH_TIMEOUT_S = 30
+
+# 15-minute TTL on successful Graph reads (IN-383): back-to-back meetings
+# reuse the fetched content instead of one Graph GET each. Stand-in reads
+# are local and never cached. Failures are not cached either — the next run
+# retries rather than pinning a transient error for 15 minutes.
+CONTEXT_CACHE_TTL_S = 900
+_graph_cache: tuple[float, str, str | None] | None = None
+
+
+def _cache_key(drive_id: str, file_path: str) -> str:
+    return f"{drive_id}|{file_path}"
+
+
+def clear_context_cache() -> None:
+    """Test seam: drop the cached Graph read."""
+    global _graph_cache
+    _graph_cache = None
 
 
 def _capped(text: str, *, source: str) -> str | None:
@@ -68,6 +90,13 @@ def _read_standin_context() -> str | None:
 def _fetch_graph_context(
     drive_id: str, file_path: str, access_token: str | None
 ) -> str | None:
+    global _graph_cache
+    if _graph_cache is not None:
+        fetched_at, key, content = _graph_cache
+        if key == _cache_key(drive_id, file_path) and (
+            time.monotonic() - fetched_at < CONTEXT_CACHE_TTL_S
+        ):
+            return content
     if not access_token:
         logger.warning(
             "company context unavailable: source=graph reason=no_graph_token"
@@ -80,7 +109,9 @@ def _fetch_graph_context(
     )
     with urllib.request.urlopen(req, timeout=_GRAPH_TIMEOUT_S) as resp:
         body = resp.read().decode("utf-8", errors="replace")
-    return _capped(body, source="graph")
+    content = _capped(body, source="graph")
+    _graph_cache = (time.monotonic(), _cache_key(drive_id, file_path), content)
+    return content
 
 
 def get_company_context(access_token: str | None = None) -> str | None:
