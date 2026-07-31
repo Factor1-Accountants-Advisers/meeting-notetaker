@@ -39,7 +39,7 @@ nsis:
   artifactName: ${productName}-${version}-setup.${ext}
 publish:
   provider: generic
-  url: https://REPLACE_ME.blob.core.windows.net/updates/
+  url: https://stf1nt.blob.core.windows.net/updates/
   # electron-updater verifies a downloaded installer's Authenticode subject CN
   # against this before installing (IN-469); Private Trust root exists on the
   # managed fleet. Lives under `publish` (as an array — the installed
