@@ -55,12 +55,17 @@ jobs:
         # Pinned versioned build + SHA256 verification (30 Jul security
         # triage: the previous rolling git-essentials URL was unpinned and
         # unverified — a compromised upstream would have shipped straight
-        # into the installer). Bumping ffmpeg = update BOTH url and hash.
+        # into the installer). Source is gyan.dev's own GitHub mirror
+        # (GyanD/codexffmpeg) because it has immutable per-version release
+        # URLs; gyan.dev's /packages/ path 404s for this artifact (first
+        # v2.0.8 run failed on that). Bumping ffmpeg = update BOTH url and
+        # hash, and verify the download is a real archive, not an error
+        # page (curl needs -f; hash whatever you actually downloaded).
         working-directory: backend
         shell: pwsh
         run: |
-          $url = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-7.1.1-essentials_build.7z"
-          $expected = "411d0ae70b72d16f0049696b525a1e24774cacc08fbc30caf042c291c9df43b9"
+          $url = "https://github.com/GyanD/codexffmpeg/releases/download/7.1.1/ffmpeg-7.1.1-essentials_build.7z"
+          $expected = "92216e5b6b9e4e4163875a9d474ba32f1f2af625151c0e02011bf4a7daf5a959"
           Invoke-WebRequest -Uri $url -OutFile ffmpeg.7z
           $actual = (Get-FileHash ffmpeg.7z -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne $expected) {
