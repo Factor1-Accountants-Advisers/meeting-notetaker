@@ -127,7 +127,14 @@ async def enrolment_status(
     required = central_enrolment_required()
     email = (user_email or "").strip().lower()
     if not email:
-        return EnrolmentStatus(enrolled_locally=False, centrally_enrolled=False, central_required=required)
+        # No identity header (signed-out main process). When central enrolment
+        # is required this is "could not check", never "not enrolled".
+        return EnrolmentStatus(
+            enrolled_locally=False,
+            centrally_enrolled=False,
+            central_required=required,
+            centrally_unknown=required,
+        )
     _sync_people_with_voiceprint_registry()
     person = next((p for p in store.PEOPLE if p.employee_id == email), None)
     # A person flagged for re-enrolment must not pass the gate on stale local
@@ -136,15 +143,28 @@ async def enrolment_status(
     # offboarding scope.
     enrolled_locally = bool(person and person.enrolled and not person.reenrollment_required)
     centrally = False
+    # "Unknown" = the central store was never successfully consulted. Fails
+    # closed for the gate (centrally_enrolled stays False) but lets the client
+    # tell "confirmed not enrolled → open the wizard" apart from "could not
+    # check → retry / fix sign-in first" (3 Aug field incident).
+    centrally_unknown = False
     oid = (user_oid or "").strip()
     token = (storage_token or "").strip()
-    if required and oid and token:
-        try:
-            record = get_storage_api_client().get_enrolment(oid, access_token=token)
-            centrally = record is not None and record.status == "active"
-        except StorageApiError:
-            centrally = False  # unreachable store fails closed; wizard offers retry
-    return EnrolmentStatus(enrolled_locally=enrolled_locally, centrally_enrolled=centrally, central_required=required)
+    if required:
+        if oid and token:
+            try:
+                record = get_storage_api_client().get_enrolment(oid, access_token=token)
+                centrally = record is not None and record.status == "active"
+            except StorageApiError:
+                centrally_unknown = True  # unreachable store fails closed; client offers retry
+        else:
+            centrally_unknown = True  # no Storage API identity — cannot consult the store
+    return EnrolmentStatus(
+        enrolled_locally=enrolled_locally,
+        centrally_enrolled=centrally,
+        central_required=required,
+        centrally_unknown=centrally_unknown,
+    )
 
 
 @router.post("/{employee_id}/enroll", response_model=PersonEnrollment)

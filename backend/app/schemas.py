@@ -387,6 +387,13 @@ class EnrolmentStatus(BaseModel):
     enrolled_locally: bool
     centrally_enrolled: bool
     central_required: bool
+    # True when the central store could not be consulted at all (signed-out
+    # session, offline, or a StorageApiError) — distinct from a confirmed
+    # "no record". The gate must offer retry/sign-in for unknown, and the
+    # enrolment wizard only for a confirmed absence (3 Aug field incident:
+    # an offline client was funnelled into re-enrolment despite an existing
+    # central voiceprint, then 403'd after recording all three samples).
+    centrally_unknown: bool = False
 
 
 class EnrollRequest(BaseModel):

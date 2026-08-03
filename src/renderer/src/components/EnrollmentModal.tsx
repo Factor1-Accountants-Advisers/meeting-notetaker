@@ -49,7 +49,43 @@ export function EnrollmentModal({ person, onClose, onEnrolled, required = false 
   const [consented, setConsented] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [enrolledResult, setEnrolledResult] = useState<StaffMember | null>(null)
+  // Identity preflight (3 Aug incident): the backend rejects enrolment when
+  // the signed-in Microsoft account does not match the target person — but it
+  // can only say so at submit time, AFTER all three samples are recorded.
+  // Check up front so a mismatched or signed-out session is blocked before
+  // the user does any work. Null = no problem found (or no IPC bridge, e.g.
+  // browser preview, where blocking would be pure friction).
+  const [identityBlock, setIdentityBlock] = useState<string | null>(null)
   const recorderRef = useRef<ClipRecorder | null>(null)
+
+  useEffect(() => {
+    if (typeof window.api?.getAuthStatus !== 'function') return
+    let cancelled = false
+    window.api
+      .getAuthStatus()
+      .then((status) => {
+        if (cancelled) return
+        const signedInEmail = (status.email ?? '').trim().toLowerCase()
+        const target = person.id.trim().toLowerCase()
+        if (!status.signedIn || !signedInEmail) {
+          setIdentityBlock(
+            'Your Microsoft sign-in is not available, so a voiceprint cannot be linked to your account. Sign in to Microsoft first, then start enrolment again.'
+          )
+        } else if (signedInEmail !== target) {
+          setIdentityBlock(
+            `The signed-in Microsoft account (${signedInEmail}) does not match this enrolment (${target}). Sign out and back in with the matching account before recording samples.`
+          )
+        } else {
+          setIdentityBlock(null)
+        }
+      })
+      .catch(() => {
+        // Preflight is best-effort; the backend guard remains authoritative.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [person.id])
 
   useEffect(() => {
     if (state !== 'recording') return
@@ -69,6 +105,7 @@ export function EnrollmentModal({ person, onClose, onEnrolled, required = false 
   const allClipsReady = acceptedCount === CLIPS_NEEDED
 
   const startClip = async (): Promise<void> => {
+    if (identityBlock) return
     setError(null)
     try {
       recorderRef.current = await startClipRecorder()
@@ -99,7 +136,7 @@ export function EnrollmentModal({ person, onClose, onEnrolled, required = false 
   }
 
   const handleUpload = async (file: File): Promise<void> => {
-    if (sampleIndex < 0 || state === 'saving') return
+    if (identityBlock || sampleIndex < 0 || state === 'saving') return
     setError(null)
     setState('checking')
     const quality = await analyzeVoiceSample(file, MIN_CLIP_SECONDS, MAX_CLIP_SECONDS)
@@ -151,7 +188,7 @@ export function EnrollmentModal({ person, onClose, onEnrolled, required = false 
   }
 
   const save = async (): Promise<void> => {
-    if (!consented || !allClipsReady) return
+    if (identityBlock || !consented || !allClipsReady) return
     setState('saving')
     setError(null)
     const readyClips = clips.filter((clip): clip is AcceptedClip => clip !== null)
@@ -182,6 +219,7 @@ export function EnrollmentModal({ person, onClose, onEnrolled, required = false 
 
   const currentClip = sampleIndex >= 0 ? clips[sampleIndex] : null
   const nextDisabled =
+    Boolean(identityBlock && step !== 'complete') ||
     state === 'recording' ||
     state === 'checking' ||
     state === 'saving' ||
@@ -215,6 +253,11 @@ export function EnrollmentModal({ person, onClose, onEnrolled, required = false 
         </div>
 
         <div className="flex-1 min-h-0 px-5 py-5 overflow-auto transition-opacity duration-200">
+          {identityBlock && step !== 'complete' && (
+            <p className="mb-4 mt-0 rounded-md border-[0.5px] border-edge-danger bg-bg-danger px-3 py-2 text-[12px] leading-relaxed text-content-danger">
+              {identityBlock}
+            </p>
+          )}
           {step === 'welcome' && <WelcomePage person={person} />}
           {step === 'consent' && (
             <ConsentPage

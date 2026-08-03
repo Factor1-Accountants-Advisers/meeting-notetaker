@@ -608,6 +608,7 @@ class EnrolmentStatusTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result.enrolled_locally)
         self.assertTrue(result.centrally_enrolled)
+        self.assertFalse(result.centrally_unknown)
         self.assertEqual(client.calls, [("oid-123", "token-123")])
 
     async def test_required_status_without_oid_does_not_call_central_api(self):
@@ -628,6 +629,10 @@ class EnrolmentStatusTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result.enrolled_locally)
         self.assertFalse(result.centrally_enrolled)
+        # 3 Aug field incident: "not centrally enrolled" and "could not check"
+        # must be distinguishable — a signed-out/offline client was funnelled
+        # into the enrolment wizard despite an existing central voiceprint.
+        self.assertTrue(result.centrally_unknown)
 
     async def test_required_status_without_token_does_not_call_central_api(self):
         self._seed_person(enrolled=True)
@@ -647,6 +652,61 @@ class EnrolmentStatusTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result.enrolled_locally)
         self.assertFalse(result.centrally_enrolled)
+        self.assertTrue(result.centrally_unknown)
+
+    async def test_required_status_missing_email_reports_unknown(self):
+        """No identity header at all (signed-out main process) is the original
+        3 Aug failure — it must read as 'could not check', not 'not enrolled'."""
+        with patch("app.routers.people.central_enrolment_required", return_value=True):
+            result = await enrolment_status(user_email=None, user_oid=None, storage_token=None)
+
+        self.assertFalse(result.centrally_enrolled)
+        self.assertTrue(result.centrally_unknown)
+
+    async def test_not_required_missing_email_is_not_unknown(self):
+        with patch("app.routers.people.central_enrolment_required", return_value=False):
+            result = await enrolment_status(user_email=None, user_oid=None, storage_token=None)
+
+        self.assertFalse(result.centrally_unknown)
+
+    async def test_required_status_storage_error_reports_unknown(self):
+        self._seed_person(enrolled=True)
+
+        class _FailingStorageApiClient:
+            def get_enrolment(self, person_id, access_token=None):
+                raise StorageApiError("central store unreachable")
+
+        with patch("app.routers.people.central_enrolment_required", return_value=True), \
+                patch("app.routers.people.get_storage_api_client", return_value=_FailingStorageApiClient()):
+            result = await enrolment_status(
+                user_email="joseph@factor1.com.au",
+                user_oid="oid-123",
+                storage_token="token-123",
+            )
+
+        self.assertFalse(result.centrally_enrolled)
+        self.assertTrue(result.centrally_unknown)
+
+    async def test_required_status_confirmed_absent_record_is_not_unknown(self):
+        """A reachable central store that answers 'no record' is a REAL
+        not-enrolled — the wizard should open. Only failure to consult the
+        store may report unknown."""
+        self._seed_person(enrolled=True)
+
+        class _EmptyStorageApiClient:
+            def get_enrolment(self, person_id, access_token=None):
+                return None
+
+        with patch("app.routers.people.central_enrolment_required", return_value=True), \
+                patch("app.routers.people.get_storage_api_client", return_value=_EmptyStorageApiClient()):
+            result = await enrolment_status(
+                user_email="joseph@factor1.com.au",
+                user_oid="oid-123",
+                storage_token="token-123",
+            )
+
+        self.assertFalse(result.centrally_enrolled)
+        self.assertFalse(result.centrally_unknown)
 
     async def test_not_required_and_locally_enrolled(self):
         self._seed_person(enrolled=True)

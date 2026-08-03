@@ -475,6 +475,12 @@ export interface EnrolmentStatus {
   enrolled_locally: boolean
   centrally_enrolled: boolean
   central_required: boolean
+  /**
+   * True when the central store could not be consulted (signed-out, offline,
+   * storage error) — distinct from a confirmed "no record". Optional so a
+   * pre-field backend that omits it reads as false (confirmed semantics).
+   */
+  centrally_unknown?: boolean
 }
 
 export type VoiceprintAdminStatus = 'active' | 'disabled' | 'deleted'
