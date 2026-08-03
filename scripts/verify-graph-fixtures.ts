@@ -8,6 +8,11 @@ import { decideGraphEvent } from '../src/main/graph/filter.ts'
 import { normaliseGraphEvent } from '../src/main/graph/normalise.ts'
 import { detectGraphMeetings } from '../src/main/graph/poller.ts'
 import { syncGraphDetectionOnce, startGraphDetectionRuntime } from '../src/main/graph/runtime.ts'
+import {
+  EMPTY_GRAPH_SCHEDULER_STATE,
+  readGraphSchedulerState,
+  writeGraphSchedulerState
+} from '../src/main/graph/store.ts'
 import { evaluateHostGate } from '../src/main/graph/host-gate.ts'
 import { createRecordingStateMachine } from '../src/main/recording-state.ts'
 import {
@@ -480,6 +485,40 @@ async function main(): Promise<void> {
     assert.equal(resumeSynced, true)
   } finally {
     await rm(runtimeDir, { recursive: true, force: true })
+  }
+
+  // Scheduler-state store: a corrupt or malformed file is a rebuildable cache
+  // and must reset to empty, never throw (a whitespace-only file in the field
+  // crashed every sync via an unhandled SyntaxError).
+  const storeDir = await mkdtemp(join(tmpdir(), 'graph-store-'))
+  try {
+    const { writeFile } = await import('node:fs/promises')
+    const statePath = join(storeDir, 'scheduler-state.json')
+
+    assert.deepEqual(await readGraphSchedulerState(statePath), EMPTY_GRAPH_SCHEDULER_STATE)
+
+    for (const corrupt of ['          ', '', '{"decisions": {', 'null', '[]', '"text"', '{"decisions": []}']) {
+      await writeFile(statePath, corrupt, 'utf8')
+      const recovered = await readGraphSchedulerState(statePath)
+      assert.deepEqual(
+        recovered.decisions,
+        {},
+        `corrupt state ${JSON.stringify(corrupt)} should reset decisions`
+      )
+    }
+
+    // Round-trip through the atomic write path.
+    const state = {
+      ...EMPTY_GRAPH_SCHEDULER_STATE,
+      lastSuccessfulSyncUtc: '2026-06-26T00:00:00.000Z',
+      decisions: {
+        evt: { reason: 'eligible', autoRecordEligible: true, updatedAtUtc: '2026-06-26T00:00:00.000Z' }
+      }
+    }
+    await writeGraphSchedulerState(statePath, state)
+    assert.deepEqual(await readGraphSchedulerState(statePath), state)
+  } finally {
+    await rm(storeDir, { recursive: true, force: true })
   }
 
   console.log('Graph fixture verification passed')
