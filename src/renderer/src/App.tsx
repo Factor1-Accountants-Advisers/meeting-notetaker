@@ -27,6 +27,7 @@ import { capture, type CaptureStatus, type SystemSegment } from './lib/capture'
 import { emailFailureMessage } from './lib/deliveryNotice'
 import notificationChimeUrl from './assets/notification.wav'
 import { loadPrefs } from './lib/prefs'
+import { createSingleFlight } from './lib/singleFlight'
 import { audioDurationSeconds, blobToBase64 } from './lib/recorder'
 import { elapsedMs } from './screens/RecordingScreen'
 import { useTheme } from './lib/theme'
@@ -345,6 +346,7 @@ function App(): JSX.Element {
       // null status (existing Slice 1 fallback) instead of surfacing a hard
       // error the backend never actually reported.
       let lastPersonWithNullStatus: StaffMember | null = null
+      let lastStatusWasUnknown = false
       for (let attempt = 0; ; attempt++) {
         try {
           // Fetched alongside the person so the gate has fresh status the
@@ -354,18 +356,27 @@ function App(): JSX.Element {
             fetchEnrolmentStatus()
           ])
           if (cancelled) return
-          if (person && status) {
+          // "Could not check the central store" (signed-out, offline, storage
+          // error) must never funnel an already-enrolled person into the
+          // wizard — retry, and if it persists surface the error screen with
+          // Try again instead of demanding re-enrolment (3 Aug incident).
+          const statusUnknown = Boolean(
+            status && status.central_required && !status.centrally_enrolled && status.centrally_unknown
+          )
+          if (person && status && !statusUnknown) {
             setCurrentPerson(person)
             setEnrolmentStatus(status)
             setEnrollmentLoading(false)
             return
           }
+          lastStatusWasUnknown = statusUnknown
           lastPersonWithNullStatus = person && !status ? person : null
           lastErrorMessage = null
         } catch (err) {
           if (cancelled) return
           lastErrorMessage = err instanceof Error ? err.message : null
           lastPersonWithNullStatus = null
+          lastStatusWasUnknown = false
         }
         const delay = retryDelaysMs[attempt]
         if (delay === undefined) break
@@ -381,8 +392,10 @@ function App(): JSX.Element {
       setCurrentPerson(null)
       setEnrolmentStatus(null)
       setEnrollmentError(
-        lastErrorMessage ??
-          'Could not load your staff enrollment record. Check that the backend is running, then try again.'
+        lastStatusWasUnknown
+          ? 'Could not verify your voiceprint enrolment with the central store. You may be offline or signed out — check your connection and Microsoft sign-in, then try again. (If you already recorded a voiceprint, it is safe; do not re-enrol.)'
+          : lastErrorMessage ??
+              'Could not load your staff enrollment record. Check that the backend is running, then try again.'
       )
       setEnrollmentLoading(false)
     }
@@ -441,10 +454,11 @@ function App(): JSX.Element {
       }
     })
 
-    let stopping = false
+    // Single-flight, self-re-arming stop (field incident 3 Aug: a manual
+    // `stopping` flag was never reset on the success path, so after one
+    // successful stop the auto-stop timer, tray Stop, and on-screen Stop were
+    // all silently swallowed for the rest of the session).
     const finishActiveRecording = async (): Promise<void> => {
-      if (stopping) return
-      stopping = true
       try {
         setAutoRecordingState('processing')
         // Leave the active controls immediately. Capture finalization and upload
@@ -542,15 +556,19 @@ function App(): JSX.Element {
         setAutoRecordingState('idle')
         window.api.notifyRecordingStopped()
       } catch (err) {
-        stopping = false
         setAutoRecordingState(recordingRef.current ? 'recording' : 'idle')
         window.api.notifyRecordingError(err instanceof Error ? err.message : String(err))
       }
     }
+    const stopFlight = createSingleFlight(finishActiveRecording, () => {
+      // Never swallow a stop request invisibly — this log is the tell if a
+      // stop ever hangs and later requests coalesce onto it.
+      window.api.debugLog('recording stop ignored — a stop is already in progress')
+    })
 
     const pauseActiveRecording = (): void => {
       const session = recordingRef.current
-      if (stopping || !session || session.pausedAt !== null) return
+      if (stopFlight.isRunning() || !session || session.pausedAt !== null) return
       const pausedAt = Date.now()
       capture.pause()
       const next = { ...session, pausedAt }
@@ -561,7 +579,7 @@ function App(): JSX.Element {
 
     const resumeActiveRecording = (): void => {
       const session = recordingRef.current
-      if (stopping || !session || session.pausedAt === null) return
+      if (stopFlight.isRunning() || !session || session.pausedAt === null) return
       capture.resume()
       const next = {
         ...session,
@@ -576,7 +594,7 @@ function App(): JSX.Element {
     const controls = {
       pause: pauseActiveRecording,
       resume: resumeActiveRecording,
-      stop: () => void finishActiveRecording()
+      stop: () => void stopFlight.invoke()
     }
     controlHandlersRef.current = controls
 

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { CaptureController } from '../src/renderer/src/lib/capture'
+import { createSingleFlight } from '../src/renderer/src/lib/singleFlight'
 import { RecordingScreen, type RecordingSession } from '../src/renderer/src/screens/RecordingScreen'
 
 const startedAt = Date.now() - 75 * 60 * 1000
@@ -234,7 +235,187 @@ async function verifyDeviceChangeStop(): Promise<void> {
   assert.ok(result?.blob.size, 'Stop salvages the mic audio captured before the device change')
 }
 
+async function verifyMicFollowsDeviceChange(): Promise<void> {
+  // 3 Aug field incident: after switching to a Bluetooth headset the mic kept
+  // recording the old (now silent) device. The mic recorder must consume the
+  // Web Audio bridge stream and swap its upstream source on devicechange
+  // WITHOUT restarting the recorder.
+  let micRecorders = 0
+  let micSettings = { deviceId: 'device-a', groupId: 'group-a' }
+  const logs: string[] = []
+
+  class SettingsTrack extends FakeTrack {
+    constructor(private readonly settings: { deviceId: string; groupId: string }) {
+      super()
+    }
+
+    getSettings(): { deviceId: string; groupId: string } {
+      return this.settings
+    }
+  }
+
+  class MicFakeMediaDevices {
+    private deviceChangeListeners = new Set<() => void>()
+    micStreams: FakeMediaStream[] = []
+
+    getUserMedia(): Promise<FakeMediaStream> {
+      const stream = new FakeMediaStream([new SettingsTrack({ ...micSettings })])
+      this.micStreams.push(stream)
+      return Promise.resolve(stream)
+    }
+
+    getDisplayMedia(): Promise<FakeMediaStream> {
+      return Promise.reject(new Error('mic-only fixture'))
+    }
+
+    enumerateDevices(): Promise<Array<{ kind: string; deviceId: string }>> {
+      return Promise.resolve([])
+    }
+
+    addEventListener(type: string, listener: () => void): void {
+      if (type === 'devicechange') this.deviceChangeListeners.add(listener)
+    }
+
+    removeEventListener(type: string, listener: () => void): void {
+      if (type === 'devicechange') this.deviceChangeListeners.delete(listener)
+    }
+
+    dispatchDeviceChange(): void {
+      for (const listener of this.deviceChangeListeners) listener()
+    }
+  }
+
+  class BridgeAudioContext {
+    createMediaStreamDestination(): { stream: FakeMediaStream } {
+      return { stream: new FakeMediaStream([new FakeTrack()]) }
+    }
+
+    createMediaStreamSource(): { connect: () => void; disconnect: () => void } {
+      return { connect: () => undefined, disconnect: () => undefined }
+    }
+
+    close(): Promise<void> {
+      return Promise.resolve()
+    }
+    // No createAnalyser: the silence monitor fails closed (returns null),
+    // which is out of scope for this fixture.
+  }
+
+  class CountingMediaRecorder extends FakeMediaRecorder {
+    constructor(stream: FakeMediaStream) {
+      super(stream)
+      micRecorders += 1
+    }
+  }
+
+  const mediaDevices = new MicFakeMediaDevices()
+  Object.defineProperties(globalThis, {
+    window: {
+      configurable: true,
+      value: {
+        api: {
+          debugLog: (message: string) => {
+            logs.push(message)
+          }
+        }
+      }
+    },
+    navigator: { configurable: true, value: { mediaDevices } },
+    MediaStream: { configurable: true, value: FakeMediaStream },
+    MediaRecorder: { configurable: true, value: CountingMediaRecorder },
+    AudioContext: { configurable: true, value: BridgeAudioContext }
+  })
+
+  const controller = new CaptureController()
+  const status = await controller.start('in_person')
+  assert.equal(status.mic, 'active', 'mic-only capture starts')
+  assert.equal(micRecorders, 1, 'one mic recorder for the session')
+  const originalStream = mediaDevices.micStreams[0]
+
+  // Default input changes to a different physical device → swap expected.
+  micSettings = { deviceId: 'device-b', groupId: 'group-b' }
+  mediaDevices.dispatchDeviceChange()
+  await new Promise((resolve) => setTimeout(resolve, 1_700))
+
+  assert.equal(micRecorders, 1, 'device swap must NOT restart the mic recorder')
+  assert.equal(mediaDevices.micStreams.length, 2, 'a new default mic stream was acquired')
+  assert.ok(
+    logs.includes('mic re-acquired after device change'),
+    'swap is observable in the log'
+  )
+  assert.equal(
+    originalStream.getAudioTracks()[0].readyState,
+    'ended',
+    'the old mic stream is released after the swap'
+  )
+
+  // Same device again → no churn: candidate acquired for comparison but no swap.
+  const swapsBefore = logs.filter((m) => m === 'mic re-acquired after device change').length
+  mediaDevices.dispatchDeviceChange()
+  await new Promise((resolve) => setTimeout(resolve, 1_700))
+  const swapsAfter = logs.filter((m) => m === 'mic re-acquired after device change').length
+  assert.equal(swapsAfter, swapsBefore, 'an unchanged default device does not cause a swap')
+  const comparisonStream = mediaDevices.micStreams[2]
+  assert.equal(
+    comparisonStream.getAudioTracks()[0].readyState,
+    'ended',
+    'the comparison-only candidate stream is released'
+  )
+
+  const result = await controller.stop(1_000)
+  assert.ok(result?.blob.size, 'mic audio survives to stop after a device swap')
+}
+
+async function verifySequentialStops(): Promise<void> {
+  // Field regression (3 Aug): the App effect's manual `stopping` flag was only
+  // reset on failure, so after one successful stop every later stop request
+  // (auto-stop, tray, on-screen button) was silently swallowed for the rest of
+  // the session. The single-flight wrapper must re-arm after completion.
+  let runs = 0
+  let ignored = 0
+  let release: (() => void) | null = null
+  const flight = createSingleFlight(
+    () =>
+      new Promise<void>((resolve) => {
+        runs += 1
+        release = resolve
+      }),
+    () => {
+      ignored += 1
+    }
+  )
+
+  const first = flight.invoke()
+  assert.equal(runs, 1, 'first stop request runs')
+  assert.equal(flight.isRunning(), true, 'stop reports in-flight while pending')
+
+  void flight.invoke()
+  assert.equal(runs, 1, 'concurrent stop request is coalesced')
+  assert.equal(ignored, 1, 'coalesced stop request is observable (logged)')
+
+  release!()
+  await first
+  assert.equal(flight.isRunning(), false, 'flight re-arms after success')
+
+  void flight.invoke()
+  assert.equal(runs, 2, 'stop works again for the NEXT recording after a successful stop')
+  release!()
+
+  // Failure must also re-arm.
+  let failures = 0
+  const failing = createSingleFlight(async () => {
+    failures += 1
+    throw new Error('boom')
+  })
+  await failing.invoke().catch(() => undefined)
+  assert.equal(failing.isRunning(), false, 'flight re-arms after failure')
+  await failing.invoke().catch(() => undefined)
+  assert.equal(failures, 2, 'stop can be retried after a failed stop')
+}
+
 void verifyDeviceChangeStop()
+  .then(() => verifyMicFollowsDeviceChange())
+  .then(() => verifySequentialStops())
   .then(() => console.log('Recording control verification passed'))
   .catch((error) => {
     console.error(error)

@@ -23,6 +23,14 @@
  *   silence with no track event at all (IN-468). MediaRecorder cannot survive
  *   a track swap, so on devicechange we re-acquire getDisplayMedia and start a
  *   new recorder segment; the backend stitches segments at their offsets.
+ * - The microphone has the same stuck-to-old-device problem (getUserMedia does
+ *   not follow the OS default; crbug 40199570), but unlike loopback the mic
+ *   may safely pass through Web Audio. The mic recorder therefore records a
+ *   stable MediaStreamAudioDestinationNode stream and on devicechange the
+ *   UPSTREAM source node is swapped to the new default input — the recorder
+ *   never notices, so no segmenting or backend change is needed. If the
+ *   AudioContext bridge cannot be built the mic falls back to the pre-fix
+ *   direct recording (device switches then mean silence until re-record).
  */
 
 import fixWebmDuration from 'fix-webm-duration'
@@ -154,6 +162,15 @@ export class CaptureController {
   private reacquireGeneration = 0
   private cancelReacquire: (() => void) | null = null
   private stopping = false
+  // Mic device-follow bridge (see header): the recorder consumes micDest's
+  // stable stream; micSource is the swappable upstream getUserMedia node.
+  private micContext: AudioContext | null = null
+  private micDest: MediaStreamAudioDestinationNode | null = null
+  private micSource: MediaStreamAudioSourceNode | null = null
+  private currentMicStream: MediaStream | null = null
+  private pinnedMicDeviceId = ''
+  private micReacquiring = false
+  private micReacquireGeneration = 0
   // Chunks must reach the main process in emission order or the spilled WebM
   // stream corrupts; blob→ArrayBuffer conversion is async, so chain per stream.
   private spillChains: Record<'mic' | 'sys', Promise<void>> = {
@@ -197,11 +214,32 @@ export class CaptureController {
         audio: micDeviceId ? { deviceId: { ideal: micDeviceId } } : true
       })
       this.streams.push(mic)
-      this.micRecorder = this.createRecorder(new MediaStream(mic.getAudioTracks()), this.micChunks, 'mic')
+      this.currentMicStream = mic
+      this.pinnedMicDeviceId = micDeviceId
+      // Bridge the mic through Web Audio so a later device switch swaps the
+      // source without restarting the recorder (see header). Falls back to
+      // direct recording when the bridge cannot be built.
+      let recordStream = new MediaStream(mic.getAudioTracks())
+      try {
+        const ctx = new AudioContext()
+        const dest = ctx.createMediaStreamDestination()
+        const source = ctx.createMediaStreamSource(mic)
+        source.connect(dest)
+        this.micContext = ctx
+        this.micDest = dest
+        this.micSource = source
+        recordStream = dest.stream
+        this.registerDeviceChangeListener()
+      } catch {
+        window.api?.debugLog?.('mic device-follow bridge unavailable — recording mic directly')
+      }
+      this.micRecorder = this.createRecorder(recordStream, this.micChunks, 'mic')
       this.micRecorder.start(1000)
       status.mic = 'active'
       this.micMonitorStop = this.startSilenceMonitor(
-        mic,
+        // Monitor the bridge output when present: it survives source swaps, so
+        // silence/recovery and the level meter keep working after a switch.
+        this.micDest ? this.micDest.stream : mic,
         SILENCE_WARN_AFTER_S,
         (rms, silentSeconds) => {
           if (this.status.mic !== 'active') return
@@ -284,6 +322,7 @@ export class CaptureController {
       this.deviceChangeTimer = null
     }
     this.cancelLoopbackReacquisition()
+    this.cancelMicReacquisition()
 
     // Detach the spill from the live session: it must survive stop() until the
     // caller confirms the audio is safe (discardCompletedSpill), or be dropped
@@ -425,15 +464,153 @@ export class CaptureController {
   }
 
   private onDeviceChange = (): void => {
-    if (this.stopping || !this.systemRecorder) return
+    if (this.stopping || (!this.systemRecorder && !this.micRecorder)) return
     if (this.deviceChangeTimer) clearTimeout(this.deviceChangeTimer)
     this.deviceChangeTimer = setTimeout(() => {
       this.deviceChangeTimer = null
-      window.api?.debugLog?.('audio device change detected — re-acquiring loopback', {
-        offsetMs: this.systemTimeline.currentOffsetMs()
-      })
-      void this.reacquireLoopback()
+      if (this.systemRecorder) {
+        window.api?.debugLog?.('audio device change detected — re-acquiring loopback', {
+          offsetMs: this.systemTimeline.currentOffsetMs()
+        })
+        void this.reacquireLoopback()
+      }
+      if (this.micRecorder && this.micDest) {
+        void this.reacquireMic()
+      }
     }, DEVICE_CHANGE_DEBOUNCE_MS)
+  }
+
+  /**
+   * Follow the OS default microphone after a device change (e.g. a Bluetooth
+   * headset connecting). Chromium does not re-route an open getUserMedia
+   * stream, so acquire the new default and swap it in upstream of the Web
+   * Audio bridge — the recorder keeps running untouched. A pinned device
+   * (explicit Settings choice) is respected while it exists; if it drops off
+   * the bus the capture falls back to the default input rather than going
+   * silent. On any failure the existing capture is left running.
+   */
+  private async reacquireMic(): Promise<void> {
+    if (this.micReacquiring || this.stopping || !this.micRecorder || !this.micContext || !this.micDest) {
+      return
+    }
+    this.micReacquiring = true
+    const generation = ++this.micReacquireGeneration
+    try {
+      const currentTrack = this.currentMicStream?.getAudioTracks()[0] ?? null
+      const currentLive = currentTrack?.readyState === 'live'
+      const currentSettings = currentLive ? (currentTrack?.getSettings?.() ?? {}) : {}
+
+      let constraints: MediaStreamConstraints = { audio: true }
+      if (this.pinnedMicDeviceId) {
+        const devices = await navigator.mediaDevices.enumerateDevices()
+        const pinnedPresent = devices.some(
+          (device) => device.kind === 'audioinput' && device.deviceId === this.pinnedMicDeviceId
+        )
+        if (pinnedPresent && currentLive) return // the user's pick still works — keep it
+        if (pinnedPresent) {
+          constraints = { audio: { deviceId: { exact: this.pinnedMicDeviceId } } }
+        } else {
+          window.api?.debugLog?.('pinned mic no longer present — falling back to default input')
+        }
+      }
+
+      const candidate = await this.acquireMicWithTimeout(generation, constraints)
+      if (
+        generation !== this.micReacquireGeneration ||
+        this.stopping ||
+        !this.micRecorder ||
+        !this.micContext ||
+        !this.micDest
+      ) {
+        candidate.getTracks().forEach((track) => track.stop())
+        return
+      }
+      const candidateTrack = candidate.getAudioTracks()[0]
+      if (!candidateTrack) {
+        candidate.getTracks().forEach((track) => track.stop())
+        return
+      }
+
+      // Same physical device and the current track still works → no churn.
+      // groupId is compared first because Chromium's virtual "default" id can
+      // stay literally "default" across a routing change; the group follows
+      // the physical device.
+      const candidateSettings = candidateTrack.getSettings?.() ?? {}
+      const sameDevice =
+        currentLive &&
+        ((Boolean(candidateSettings.groupId) &&
+          candidateSettings.groupId === currentSettings.groupId) ||
+          (Boolean(candidateSettings.deviceId) &&
+            candidateSettings.deviceId !== 'default' &&
+            candidateSettings.deviceId === currentSettings.deviceId))
+      if (sameDevice) {
+        candidate.getTracks().forEach((track) => track.stop())
+        return
+      }
+
+      const newSource = this.micContext.createMediaStreamSource(candidate)
+      newSource.connect(this.micDest)
+      try {
+        this.micSource?.disconnect()
+      } catch {
+        // best-effort — the old source may already be dead
+      }
+      const oldStream = this.currentMicStream
+      if (oldStream) {
+        this.streams = this.streams.filter((s) => s !== oldStream)
+        oldStream.getTracks().forEach((track) => track.stop())
+      }
+      this.streams.push(candidate)
+      this.micSource = newSource
+      this.currentMicStream = candidate
+      window.api?.debugLog?.('mic re-acquired after device change', {
+        trackLabel: candidateTrack.label ?? 'unknown'
+      })
+      if (this.status.mic !== 'active') {
+        this.status = { ...this.status, mic: 'active' }
+        this.statusListener?.({ ...this.status })
+      }
+    } catch (err) {
+      if (generation !== this.micReacquireGeneration || this.stopping) return
+      window.api?.debugLog?.('mic re-acquisition failed — keeping existing capture', {
+        message: err instanceof Error ? err.message : String(err)
+      })
+    } finally {
+      if (generation === this.micReacquireGeneration) {
+        this.micReacquiring = false
+      }
+    }
+  }
+
+  private async acquireMicWithTimeout(
+    generation: number,
+    constraints: MediaStreamConstraints
+  ): Promise<MediaStream> {
+    let timedOut = false
+    let timeout: ReturnType<typeof setTimeout> | null = null
+
+    const acquisition = navigator.mediaDevices.getUserMedia(constraints)
+    // getUserMedia is not abortable; release a late-resolving orphan stream.
+    void acquisition
+      .then((stream) => {
+        if (timedOut || generation !== this.micReacquireGeneration || this.stopping) {
+          stream.getTracks().forEach((track) => track.stop())
+        }
+      })
+      .catch(() => {})
+
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        timedOut = true
+        reject(new Error('mic re-acquisition timed out'))
+      }, LOOPBACK_REACQUIRE_TIMEOUT_MS)
+    })
+
+    try {
+      return await Promise.race([acquisition, deadline])
+    } finally {
+      if (timeout) clearTimeout(timeout)
+    }
   }
 
   /**
@@ -786,6 +963,20 @@ export class CaptureController {
       this.deviceChangeTimer = null
     }
     this.cancelLoopbackReacquisition()
+    this.cancelMicReacquisition()
+    try {
+      this.micSource?.disconnect()
+    } catch {
+      // best-effort
+    }
+    this.micSource = null
+    this.micDest = null
+    if (this.micContext) {
+      void this.micContext.close().catch(() => {})
+      this.micContext = null
+    }
+    this.currentMicStream = null
+    this.pinnedMicDeviceId = ''
     this.stopping = false
     this.micRecorder = null
     this.systemRecorder = null
@@ -806,6 +997,11 @@ export class CaptureController {
     this.cancelReacquire = null
     this.reacquiring = false
     cancel?.()
+  }
+
+  private cancelMicReacquisition(): void {
+    this.micReacquireGeneration += 1
+    this.micReacquiring = false
   }
 }
 
