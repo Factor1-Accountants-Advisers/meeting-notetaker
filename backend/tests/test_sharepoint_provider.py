@@ -101,53 +101,90 @@ class SharePointProviderTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsInstance(provider, GraphSharePointProvider)
 
-    async def test_graph_provider_grants_view_access_to_recipients(self):
-        captured = {}
+    async def test_graph_provider_grants_view_access_per_recipient(self):
+        # Option A (IN-398, 3 Aug): one invite request per recipient so a
+        # single ungrantable attendee cannot poison the batch.
+        calls = []
 
         def fake_urlopen(req, timeout=0):
-            captured["url"] = req.full_url
-            captured["method"] = req.get_method()
-            captured["body"] = json.loads(req.data.decode("utf-8"))
-            return _Response(
-                {"value": [{"id": "perm-1"}, {"id": "perm-2"}]}
+            calls.append(
+                {
+                    "url": req.full_url,
+                    "method": req.get_method(),
+                    "body": json.loads(req.data.decode("utf-8")),
+                }
             )
+            return _Response({"value": [{"id": f"perm-{len(calls)}"}]})
 
         provider = GraphSharePointProvider("drive-123", "")
         with patch("urllib.request.urlopen", fake_urlopen):
-            await provider.grant_view(
+            failed = await provider.grant_view(
                 item_id="item-abc-123",
                 recipients=["bb@factor1.com.au", "jt@factor1.com.au"],
                 access_token="token",
             )
 
-        self.assertEqual(
-            captured["url"],
-            "https://graph.microsoft.com/v1.0/drives/drive-123/items/item-abc-123/invite",
-        )
-        self.assertEqual(captured["method"], "POST")
-        self.assertEqual(captured["body"]["roles"], ["read"])
-        self.assertEqual(captured["body"]["requireSignIn"], True)
-        self.assertEqual(captured["body"]["sendInvitation"], False)
-        self.assertEqual(
-            captured["body"]["recipients"],
-            [{"email": "bb@factor1.com.au"}, {"email": "jt@factor1.com.au"}],
+        self.assertEqual(failed, [])
+        self.assertEqual(len(calls), 2)
+        for call in calls:
+            self.assertEqual(
+                call["url"],
+                "https://graph.microsoft.com/v1.0/drives/drive-123/items/item-abc-123/invite",
+            )
+            self.assertEqual(call["method"], "POST")
+            self.assertEqual(call["body"]["roles"], ["read"])
+            self.assertEqual(call["body"]["requireSignIn"], True)
+            self.assertEqual(call["body"]["sendInvitation"], False)
+        self.assertEqual(calls[0]["body"]["recipients"], [{"email": "bb@factor1.com.au"}])
+        self.assertEqual(calls[1]["body"]["recipients"], [{"email": "jt@factor1.com.au"}])
+
+    async def test_graph_provider_grant_view_reports_unresolved_recipient_and_continues(self):
+        responses = iter(
+            [
+                _Response({"value": []}),  # Graph 200 but nobody granted
+                _Response({"value": [{"id": "perm-2"}]}),
+            ]
         )
 
-    async def test_graph_provider_grant_view_raises_when_response_grants_fewer_than_requested(self):
+        provider = GraphSharePointProvider("drive-123", "")
+        with patch("urllib.request.urlopen", lambda req, timeout=0: next(responses)):
+            failed = await provider.grant_view(
+                item_id="item-abc-123",
+                recipients=["bb@factor1.com.au", "jt@factor1.com.au"],
+                access_token="token",
+            )
+
+        self.assertEqual(failed, ["bb@factor1.com.au"])
+
+    async def test_graph_provider_grant_view_captures_http_error_body(self):
+        # The 3 Aug field failure logged a bare "HTTP Error 400" with the
+        # Graph error body (which names the invalid recipient) discarded.
+        import io
+        import urllib.error
+
         def fake_urlopen(req, timeout=0):
-            # Graph returned HTTP 200 but only resolved one of the two
-            # requested recipients — a partial grant that must be treated
-            # as a full failure so the caller's atomic retry logic kicks in.
-            return _Response({"value": [{"id": "perm-1"}]})
+            raise urllib.error.HTTPError(
+                req.full_url,
+                400,
+                "Bad Request",
+                {},
+                io.BytesIO(b'{"error":{"code":"invalidRequest","message":"cannot grant to external user"}}'),
+            )
 
         provider = GraphSharePointProvider("drive-123", "")
         with patch("urllib.request.urlopen", fake_urlopen):
-            with self.assertRaises(RuntimeError):
-                await provider.grant_view(
+            with self.assertLogs("app.services.sharepoint", level="WARNING") as captured:
+                failed = await provider.grant_view(
                     item_id="item-abc-123",
-                    recipients=["bb@factor1.com.au", "jt@factor1.com.au"],
+                    recipients=["guest@external.example"],
                     access_token="token",
                 )
+
+        self.assertEqual(failed, ["guest@external.example"])
+        self.assertTrue(
+            any("cannot grant to external user" in line for line in captured.output),
+            f"Graph error body must be logged; got: {captured.output}",
+        )
 
     async def test_graph_provider_grant_view_is_noop_for_empty_recipients(self):
         def fake_urlopen(req, timeout=0):
@@ -155,7 +192,8 @@ class SharePointProviderTests(unittest.IsolatedAsyncioTestCase):
 
         provider = GraphSharePointProvider("drive-123", "")
         with patch("urllib.request.urlopen", fake_urlopen):
-            await provider.grant_view(item_id="item-abc-123", recipients=[], access_token="token")
+            failed = await provider.grant_view(item_id="item-abc-123", recipients=[], access_token="token")
+        self.assertEqual(failed, [])
 
     async def test_graph_provider_grant_view_requires_token(self):
         provider = GraphSharePointProvider("drive-123", "")
@@ -167,9 +205,10 @@ class SharePointProviderTests(unittest.IsolatedAsyncioTestCase):
     async def test_local_provider_grant_view_is_noop(self):
         provider = sharepoint.LocalSharePointProvider()
         # Should not raise even with no real permission system behind it.
-        await provider.grant_view(
+        failed = await provider.grant_view(
             item_id="anything", recipients=["bb@factor1.com.au"], access_token=None
         )
+        self.assertEqual(failed, [])
 
     def test_folder_path_default_is_library_root(self):
         from app.config import Settings

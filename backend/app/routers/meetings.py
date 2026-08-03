@@ -715,12 +715,16 @@ async def save_transcript_to_sharepoint(
             "sharepoint_status": SharePointStatus.saving,
             "sharepoint_error_message": None,
             "sharepoint_error_code": None,
+            "sharepoint_grant_warning": None,
         }
     )
     try:
         provider = get_sharepoint_provider(graph_token or None)
         recipients = _sharepoint_recipients(meeting)
         uploads = []
+        # Option A (IN-398 Test 1, 3 Aug): ungrantable recipients are collected
+        # and surfaced as a warning; they never fail the file delivery.
+        grant_failures: list[str] = []
         for filename, content in (
             (transcript_filename, transcript_text),
             (summary_filename, summary_text),
@@ -731,11 +735,13 @@ async def save_transcript_to_sharepoint(
                 content=content,
                 access_token=graph_token or None,
             )
-            await provider.grant_view(
+            for ungranted in await provider.grant_view(
                 item_id=upload.item_id,
                 recipients=recipients,
                 access_token=graph_token or None,
-            )
+            ):
+                if ungranted not in grant_failures:
+                    grant_failures.append(ungranted)
             uploads.append(upload)
     except Exception as exc:
         logger.exception("SharePoint meeting-artifact save failed for %s", meeting_id)
@@ -761,6 +767,13 @@ async def save_transcript_to_sharepoint(
             "sharepoint_status": SharePointStatus.saved,
             "sharepoint_error_message": None,
             "sharepoint_error_code": None,
+            "sharepoint_grant_warning": (
+                "View access could not be granted to: "
+                + ", ".join(grant_failures)
+                + ". The files are saved — share them manually if these attendees need access."
+            )
+            if grant_failures
+            else None,
             # Keep the existing single URL contract pointed at the transcript;
             # the summary's distinct URL rides alongside (IN-385).
             "sharepoint_web_url": uploads[0].web_url,

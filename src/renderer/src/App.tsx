@@ -872,7 +872,13 @@ function App(): JSX.Element {
             state: 'ready',
             meetingId,
             title,
-            message: `Transcript saved to SharePoint and emailed to ${emailResult.recipients.join(', ')}.`
+            // Option A (IN-398): a saved delivery can still carry a view-grant
+            // warning for ungrantable attendees — say so instead of hiding it.
+            message:
+              `Transcript saved to SharePoint and emailed to ${emailResult.recipients.join(', ')}.` +
+              (sharePointResult.sharepoint_grant_warning
+                ? ` ${sharePointResult.sharepoint_grant_warning}`
+                : '')
           })
         } else if (emailResult) {
           setPostCaptureNotice({
@@ -1050,7 +1056,10 @@ function App(): JSX.Element {
       meetingId,
       title,
       message: emailResult && sharePointResult?.sharepoint_web_url
-        ? `Transcript saved to SharePoint and emailed to ${emailResult.recipients.join(', ')}.`
+        ? `Transcript saved to SharePoint and emailed to ${emailResult.recipients.join(', ')}.` +
+          (sharePointResult.sharepoint_grant_warning
+            ? ` ${sharePointResult.sharepoint_grant_warning}`
+            : '')
         : emailResult
           ? 'Transcript email was sent, but SharePoint save still failed.'
           : sharePointResult?.sharepoint_web_url

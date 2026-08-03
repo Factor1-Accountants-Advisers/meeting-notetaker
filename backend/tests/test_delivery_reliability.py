@@ -77,11 +77,11 @@ class CaptureSharePointProvider:
     async def grant_view(self, *, item_id, recipients, access_token=None):
         self.grant_attempts += 1
         if self.grant_attempts == self.fail_grant_at:
-            raise RuntimeError(
-                f"SharePoint granted access to 0 of {len(recipients)} "
-                "recipient(s); expected all"
-            )
+            # Option A (IN-398 field failure, 3 Aug): ungrantable recipients
+            # are reported back to the caller, never raised.
+            return list(recipients)
         self.grants.append({"item_id": item_id, "recipients": recipients, "token": access_token})
+        return []
 
 
 class _GraphResponse:
@@ -280,38 +280,32 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(grants[0]["recipients"], ["benjamin@example.com"])
         self.assertEqual(grants[1]["recipients"], ["benjamin@example.com"])
 
-    async def test_sharepoint_grant_failure_marks_whole_delivery_failed_and_retry_recovers(self):
+    async def test_sharepoint_grant_failure_saves_with_warning_and_later_save_clears_it(self):
+        """Option A (IN-398 Test 1 failure, 3 Aug 2026): one ungrantable
+        attendee (external guest, DL) must not fail the whole delivery. Both
+        files upload, status is saved, and the skipped recipients surface as a
+        warning on the meeting record instead of a fake failure."""
         uploads = []
         grants = []
         meetings_router.get_sharepoint_provider = lambda token=None: CaptureSharePointProvider(
             uploads, grants, fail_grant_at=1
         )
 
-        with self.assertLogs("app.services.failure_reasons", level=logging.WARNING) as captured:
-            with self.assertRaises(HTTPException) as raised:
-                await meetings_router.save_transcript_to_sharepoint(
-                    self.meeting_id,
-                    actor="Joseph",
-                    graph_token="token",
-                )
-        self.assertEqual(raised.exception.status_code, 502)
-        # HTTPException detail still carries the raw exception text for the
-        # transient toast (intentionally NOT the stored field).
-        self.assertIn("granted access to 0 of 1", str(raised.exception.detail))
-        meeting = store.MEETINGS[self.meeting_id]
-        self.assertEqual(meeting.sharepoint_status, SharePointStatus.failed)
-        self.assertEqual(meeting.sharepoint_error_code, "processing_error")
-        self.assertEqual(
-            meeting.sharepoint_error_message,
-            USER_SENTENCES[FailureCategory.processing_error],
+        result = await meetings_router.save_transcript_to_sharepoint(
+            self.meeting_id,
+            actor="Joseph",
+            graph_token="token",
         )
-        self.assertNotIn("simulated", meeting.sharepoint_error_message or "")
-        self.assertTrue(any("stage=sharepoint" in line for line in captured.output))
-        self.assertTrue(any("code=RuntimeError" in line for line in captured.output))
-        self.assertEqual(len(uploads), 1)
-        self.assertEqual(len(grants), 0)
 
-        # Retry with a working provider re-runs both steps from scratch.
+        self.assertEqual(result.sharepoint_status, SharePointStatus.saved)
+        meeting = store.MEETINGS[self.meeting_id]
+        self.assertEqual(meeting.sharepoint_status, SharePointStatus.saved)
+        self.assertIsNone(meeting.sharepoint_error_message)
+        self.assertIn("benjamin@example.com", meeting.sharepoint_grant_warning or "")
+        self.assertEqual(len(uploads), 2)  # summary still uploads after the failed grant
+        self.assertEqual(len(grants), 1)  # the second file's grant succeeded
+
+        # A later fully-successful save clears the warning.
         meetings_router.get_sharepoint_provider = lambda token=None: CaptureSharePointProvider(uploads, grants)
         result = await meetings_router.save_transcript_to_sharepoint(
             self.meeting_id,
@@ -319,10 +313,9 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
             graph_token="token",
         )
         self.assertEqual(result.sharepoint_status, SharePointStatus.saved)
-        self.assertEqual(len(uploads), 3)
-        self.assertEqual(len(grants), 2)
+        self.assertIsNone(store.MEETINGS[self.meeting_id].sharepoint_grant_warning)
 
-    async def test_sharepoint_partial_grant_on_second_file_marks_delivery_failed(self):
+    async def test_sharepoint_partial_grant_on_second_file_saves_with_warning(self):
         responses = iter(
             [
                 {
@@ -334,8 +327,8 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
                     "webUrl": "https://sharepoint.example/summary.txt",
                     "id": "item-summary",
                 },
-                # A successful HTTP response with a missing grantee must still
-                # fail the complete two-file delivery.
+                # A successful HTTP response with a missing grantee: Option A
+                # keeps the delivery saved and surfaces the recipient instead.
                 {"value": []},
             ]
         )
@@ -350,23 +343,18 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch("urllib.request.urlopen", fake_urlopen):
-            with self.assertLogs("app.services.failure_reasons", level=logging.WARNING):
-                with self.assertRaises(HTTPException) as raised:
-                    await meetings_router.save_transcript_to_sharepoint(
-                        self.meeting_id,
-                        actor="Joseph",
-                        graph_token="token",
-                    )
+            result = await meetings_router.save_transcript_to_sharepoint(
+                self.meeting_id,
+                actor="Joseph",
+                graph_token="token",
+            )
 
-        self.assertEqual(raised.exception.status_code, 502)
-        self.assertIn("granted access to 0 of 1", str(raised.exception.detail))
+        self.assertEqual(result.sharepoint_status, SharePointStatus.saved)
         meeting = store.MEETINGS[self.meeting_id]
-        self.assertEqual(meeting.sharepoint_status, SharePointStatus.failed)
-        self.assertEqual(meeting.sharepoint_error_code, "processing_error")
-        self.assertEqual(
-            meeting.sharepoint_error_message,
-            USER_SENTENCES[FailureCategory.processing_error],
-        )
+        self.assertEqual(meeting.sharepoint_status, SharePointStatus.saved)
+        self.assertIsNone(meeting.sharepoint_error_message)
+        self.assertIn("benjamin@example.com", meeting.sharepoint_grant_warning or "")
+        self.assertEqual(meeting.sharepoint_summary_url, "https://sharepoint.example/summary.txt")
         self.assertEqual(len(requests), 4)
         self.assertIn("/items/item-transcript/invite", requests[1].full_url)
         self.assertIn("/items/item-summary/invite", requests[3].full_url)

@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import urllib.error
 import urllib.parse
 from datetime import datetime, timezone
 import urllib.request
@@ -51,7 +52,8 @@ class SharePointProvider(Protocol):
         item_id: str,
         recipients: list[str],
         access_token: str | None = None,
-    ) -> None:
+    ) -> list[str]:
+        """Grant read access; returns the recipients that could NOT be granted."""
         ...
 
 
@@ -117,9 +119,9 @@ class LocalSharePointProvider:
         item_id: str,
         recipients: list[str],
         access_token: str | None = None,
-    ) -> None:
+    ) -> list[str]:
         """Local stub mode has no real permission system; nothing to grant."""
-        return
+        return []
 
 
 class GraphSharePointProvider:
@@ -168,42 +170,82 @@ class GraphSharePointProvider:
         item_id: str,
         recipients: list[str],
         access_token: str | None = None,
-    ) -> None:
+    ) -> list[str]:
+        """Grant read access one recipient at a time (Option A, IN-398 Test 1
+        failure 3 Aug 2026: a batch invite 400s wholesale when it contains one
+        ungrantable attendee — external guest, distribution list — and the
+        Graph error body naming the culprit was being discarded). Recipients
+        that cannot be granted are returned for the caller to surface as a
+        warning; they must never fail the file delivery itself."""
         if not recipients:
-            return
+            return []
         if not access_token:
             raise ValueError("SharePoint permission grant requires a delegated Graph token")
         url = f"{GRAPH_DRIVE_BASE}/{self._drive_id}/items/{item_id}/invite"
-        payload = {
-            "recipients": [{"email": email} for email in recipients],
-            "requireSignIn": True,
-            "sendInvitation": False,
-            "roles": ["read"],
-        }
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-        granted = body.get("value")
-        if not isinstance(granted, list):
-            granted = []
-        if len(granted) < len(recipients):
-            raise RuntimeError(
-                f"SharePoint granted access to {len(granted)} of {len(recipients)} "
-                "recipient(s); expected all"
+        failed: list[str] = []
+        for email in recipients:
+            payload = {
+                "recipients": [{"email": email}],
+                "requireSignIn": True,
+                "sendInvitation": False,
+                "roles": ["read"],
+            }
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
             )
-        logger.info(
-            "SharePoint view access granted for item %s to %d recipient(s)",
-            item_id,
-            len(recipients),
-        )
+            try:
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+                granted = body.get("value")
+                if not isinstance(granted, list) or not granted:
+                    raise RuntimeError("Graph invite succeeded but granted no permission")
+            except Exception as exc:  # noqa: BLE001 — per-recipient isolation is the point
+                failed.append(email)
+                logger.warning(
+                    "SharePoint view grant failed for %s on item %s: %s",
+                    email,
+                    item_id,
+                    _grant_error_detail(exc),
+                )
+        granted_count = len(recipients) - len(failed)
+        if failed:
+            logger.warning(
+                "SharePoint view access granted for item %s to %d of %d recipient(s); ungranted: %s",
+                item_id,
+                granted_count,
+                len(recipients),
+                ", ".join(failed),
+            )
+        else:
+            logger.info(
+                "SharePoint view access granted for item %s to %d recipient(s)",
+                item_id,
+                granted_count,
+            )
+        return failed
+
+
+def _grant_error_detail(exc: Exception) -> str:
+    """Extract a diagnosable message from a grant failure.
+
+    The 3 Aug field incident logged a bare "HTTP Error 400: Bad Request" —
+    the Graph error body, which names the invalid recipient and the reason,
+    was read-once-and-lost inside urllib. Pull it out (bounded) so the log
+    line actually says why the grant failed.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        try:
+            body = exc.read().decode("utf-8", errors="replace")[:500]
+        except Exception:  # noqa: BLE001 — diagnostics only
+            body = ""
+        return f"HTTP {exc.code} {exc.reason}: {body}" if body else f"HTTP {exc.code} {exc.reason}"
+    return f"{exc.__class__.__name__}: {exc}"
 
 
 def get_sharepoint_provider(access_token: str | None = None) -> SharePointProvider:

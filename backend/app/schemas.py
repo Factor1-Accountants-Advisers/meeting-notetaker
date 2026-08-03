@@ -184,6 +184,9 @@ class Meeting(BaseModel):
     delivery_emailed_at: datetime | None = None
     sharepoint_status: SharePointStatus = SharePointStatus.not_started
     sharepoint_error_message: str | None = None
+    # Option A (IN-398, 3 Aug): delivery saved but view access could not be
+    # granted to some attendees — informational, never blocks the save.
+    sharepoint_grant_warning: str | None = None
     sharepoint_error_code: str | None = None  # FailureCategory value (IN-391)
     sharepoint_web_url: str | None = None
     # Distinct URL for the paired summary file (IN-385 two-file delivery).

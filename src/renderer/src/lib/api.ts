@@ -47,6 +47,8 @@ export interface MeetingDto {
   sharepoint_status: SharePointStatus
   sharepoint_error_message: string | null
   sharepoint_error_code: string | null
+  /** Option A (IN-398): saved, but view access could not be granted to some attendees. */
+  sharepoint_grant_warning?: string | null
   sharepoint_web_url: string | null
   blob_status: BlobStatus
   blob_error_message: string | null
