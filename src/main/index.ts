@@ -161,6 +161,11 @@ app.on('second-instance', (_event, argv) => {
 })
 
 app.whenReady().then(() => {
+  // A losing second instance calls app.quit() at module scope, but quit is
+  // asynchronous and 'ready' can still fire first — without this guard the
+  // doomed instance briefly built a full window, tray, and backend supervisor
+  // (observed as a window flash when a toast protocol launch raced the lock).
+  if (!gotSingleInstanceLock) return
   electronApp.setAppUserModelId('com.factor1.notetaker')
   // IN-483: toast action buttons activate via the notetaker:// protocol.
   // The installer registers the scheme (electron-builder `protocols`); this
