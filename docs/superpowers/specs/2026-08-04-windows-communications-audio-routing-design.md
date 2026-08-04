@@ -64,14 +64,16 @@ surface. That is disproportionate to this defect and is excluded.
 ### Windows endpoint helper
 
 Create a small Rust binary under `native/audio-endpoint-monitor/`. It uses the
-Windows Core Audio API to obtain:
+Windows Core Audio API to obtain both `eConsole` and `eCommunications` for:
 
-- `eCapture` + `eCommunications`; and
-- `eRender` + `eCommunications`.
+- `eCapture`; and
+- `eRender`.
 
 It emits newline-delimited JSON on stdout. Messages contain a schema version,
-message kind, generation number, and each endpoint's stable Windows ID and
-friendly label. It never changes Windows settings or accesses audio content.
+message kind, generation number, role, and each endpoint's stable Windows ID
+and friendly label. It never changes Windows settings or accesses audio
+content. Reporting both roles lets the app distinguish “the endpoint changed”
+from “Windows default and communications routing disagree.”
 Unexpected errors are emitted as structured status messages and to stderr.
 
 The first version may poll the two official endpoints at a short bounded
@@ -117,9 +119,15 @@ pinning remains available for users who intentionally need a different input.
 
 ### Microphone flow
 
-At capture start:
+Native Windows endpoint IDs and Chromium `MediaDeviceInfo.deviceId` values are
+not interchangeable. At capture start:
 
-- `follow_communications` requests Chromium's current default input;
+- `follow_communications` resolves the native communications-capture friendly
+  label against the current Chromium `audioinput` list and requests the unique
+  matching Chromium device exactly;
+- if native routing is unavailable or no unique label match exists,
+  `follow_communications` requests Chromium's current default input and marks
+  the route as a degraded fallback;
 - `pinned` requests the selected device exactly, falling back to the default
   only when the selected device is absent; and
 - the actual acquired track ID, group ID, and label are retained and exposed in
@@ -142,9 +150,13 @@ silent, the warning stays visible and names the active endpoint.
 
 ### System-audio flow
 
-Electron loopback continues capturing the Windows default render endpoint. A
-Windows render communications endpoint change triggers the existing segmented
-loopback replacement. Browser `devicechange` remains a fallback.
+Electron loopback continues capturing the Windows default render endpoint; its
+API does not accept an arbitrary endpoint ID. A Windows default-render change
+triggers the existing segmented loopback replacement. A communications-render
+change also triggers a comparison: when the default and communications render
+IDs differ, the app retains capture but shows a routing-mismatch warning rather
+than claiming that Teams audio is covered. Browser `devicechange` remains a
+fallback.
 
 If loopback remains silent for the existing 60-second threshold, Notetaker
 performs one controlled reacquisition for the current routing generation before
@@ -152,8 +164,10 @@ leaving the warning visible. Previous segments retain their pause-aware offsets
 and are merged by the existing backend path.
 
 This design cannot capture a Teams-only speaker override while Windows points
-elsewhere. Settings and the recording UI state this limitation and direct the
-user to Teams' Computer audio/system-default option.
+elsewhere. For reliable loopback, Windows default render, Windows communications
+render, and Teams Computer audio must resolve to the same physical endpoint.
+Settings and the recording UI state this limitation and direct the user to
+Teams' Computer audio/system-default option.
 
 ### UI and diagnostics
 
@@ -163,7 +177,8 @@ Settings:
 - refreshes microphone choices on `devicechange`;
 - keeps “Always use this microphone” as an explicit manual mode; and
 - displays the current Windows communications microphone and speaker when the
-  helper is available.
+  helper is available; and
+- warns when Windows default and communications endpoints are different.
 
 Recording status displays the actual active microphone and meeting-audio labels
 without adding video affordances. A transition may briefly show “Switching…”;
@@ -199,6 +214,9 @@ Automated tests must first fail for and then cover:
 - pinned device absent at start and reappearing later;
 - pinned device still active without unnecessary churn;
 - default communications microphone change during recording;
+- unique native-label to Chromium-device resolution and ambiguous-match
+  fallback;
+- Windows default/communications render mismatch detection;
 - duplicate native and browser notifications being coalesced;
 - one-shot microphone silence recovery and cooldown;
 - render endpoint change creating correctly offset loopback segments;
@@ -231,4 +249,3 @@ tests, and `git diff --check`, plus helper unit/build checks.
 - Changing Windows default devices on the user's behalf.
 - macOS or Linux native endpoint monitoring; those platforms retain the browser
   fallback until separately scoped.
-
