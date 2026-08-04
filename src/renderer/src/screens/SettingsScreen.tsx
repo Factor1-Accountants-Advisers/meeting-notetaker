@@ -118,7 +118,7 @@ export function SettingsScreen({
 
   const microphoneOptions = useMemo<SelectOption<string>[]>(
     () => [
-      { value: '', label: 'System default' },
+      { value: '', label: 'Follow Windows communications device' },
       ...devices.map((device) => ({ value: device.id, label: device.label }))
     ],
     [devices]
@@ -197,9 +197,16 @@ export function SettingsScreen({
               >
                 <SelectMenu
                   ariaLabel="Microphone"
-                  value={prefs.micDeviceId}
+                  value={
+                    prefs.micRoutingMode === 'pinned' ? prefs.pinnedMicDeviceId : ''
+                  }
                   options={microphoneOptions}
-                  onChange={(micDeviceId) => updatePrefs({ micDeviceId })}
+                  onChange={(deviceId) =>
+                    updatePrefs({
+                      micRoutingMode: deviceId ? 'pinned' : 'follow_communications',
+                      pinnedMicDeviceId: deviceId || prefs.pinnedMicDeviceId
+                    })
+                  }
                   className="w-[224px] max-[560px]:w-full"
                 />
               </SettingRow>

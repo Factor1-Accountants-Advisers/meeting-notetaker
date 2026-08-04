@@ -431,11 +431,16 @@ function App(): JSX.Element {
         autoGraphMetadataRef.current = graphMetadata
         const title = graphMetadata?.title?.trim() || 'Auto-recorded Teams meeting'
         const created = await createMeeting(title, graphMetadata?.joinWebUrl ?? null, 'online', graphMetadata)
-        const status = await capture.start('online', loadPrefs().micDeviceId, {
-          title,
-          meetingId: created?.id ?? null,
-          graphMetadata
-        })
+        const prefs = loadPrefs()
+        const status = await capture.start(
+          'online',
+          prefs.micRoutingMode === 'pinned' ? prefs.pinnedMicDeviceId : '',
+          {
+            title,
+            meetingId: created?.id ?? null,
+            graphMetadata
+          }
+        )
         setCaptureStatus(status)
         setRecording({
           meetingId: created?.id ?? null,
@@ -700,11 +705,16 @@ function App(): JSX.Element {
     const source = 'online' as const
     const created = await createMeeting(title, null, source, null, manualAttendees)
     const meetingId = created?.id ?? null
-    const status = await capture.start(source, loadPrefs().micDeviceId, {
-      title,
-      meetingId,
-      graphMetadata: null
-    })
+    const prefs = loadPrefs()
+    const status = await capture.start(
+      source,
+      prefs.micRoutingMode === 'pinned' ? prefs.pinnedMicDeviceId : '',
+      {
+        title,
+        meetingId,
+        graphMetadata: null
+      }
+    )
     setCaptureStatus(status)
     if (!status.recording) {
       window.api.debugLog('manual recording could not start', { title, status })
