@@ -16,7 +16,9 @@
 extends: ./electron-builder.yml
 win:
   # Re-enable resedit metadata editing + signing (base config disables it for
-  # dev machines without the symlink privilege).
+  # dev machines without the symlink privilege). electron-builder applies the
+  # same Azure signature to signable extraResources, including the native
+  # audio endpoint observer inherited from electron-builder.yml.
   signAndEditExecutable: true
   azureSignOptions:
     publisherName: CN=factor1.com.au, O=factor1.com.au, OU=IT Shared Services
