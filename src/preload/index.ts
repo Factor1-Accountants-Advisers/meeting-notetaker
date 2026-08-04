@@ -1,6 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
-import type { AudioEndpointSnapshot } from '../shared/audio-endpoints'
 
 export interface ApiResponse<T = unknown> {
   ok: boolean
@@ -146,20 +145,6 @@ const api = {
   /** Presentation-only admin capability; the Storage API authorizes every action. */
   getStorageAdminStatus: (): Promise<{ isAdmin: boolean }> =>
     ipcRenderer.invoke('auth:storage-admin-status'),
-
-  /** Current Windows default and communications audio endpoints, if observed. */
-  getAudioEndpointSnapshot: (): Promise<AudioEndpointSnapshot | null> =>
-    ipcRenderer.invoke('audio-endpoints:get'),
-
-  /** Listen for Windows default/communications audio endpoint changes. */
-  onAudioEndpointChanged: (
-    callback: (snapshot: AudioEndpointSnapshot) => void
-  ): (() => void) => {
-    const handler = (_event: IpcRendererEvent, snapshot: AudioEndpointSnapshot): void =>
-      callback(snapshot)
-    ipcRenderer.on('audio-endpoints:changed', handler)
-    return () => ipcRenderer.removeListener('audio-endpoints:changed', handler)
-  },
 
   /** Listen for main→renderer auto-start recording commands. Returns unsubscribe function. */
   onAutoStartRequest: (callback: (data: AutoStartRequest) => void): (() => void) => {

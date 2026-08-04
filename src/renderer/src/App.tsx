@@ -27,14 +27,12 @@ import { capture, type CaptureStatus, type SystemSegment } from './lib/capture'
 import { emailFailureMessage } from './lib/deliveryNotice'
 import notificationChimeUrl from './assets/notification.wav'
 import { loadPrefs } from './lib/prefs'
-import { resolveMicRoute, type MicRoute } from './lib/audioRouting'
 import { createSingleFlight } from './lib/singleFlight'
 import { audioDurationSeconds, blobToBase64 } from './lib/recorder'
 import { elapsedMs } from './screens/RecordingScreen'
 import { useTheme } from './lib/theme'
 import type { ScreenId } from './lib/nav'
 import type { BlobStatus, StaffMember } from './data/mock'
-import type { AudioEndpointSnapshot } from '../../shared/audio-endpoints'
 
 const USER_KEY = 'mn.user'
 
@@ -71,21 +69,6 @@ async function toSegmentUploads(segments: SystemSegment[]): Promise<SystemAudioS
       offsetMs: segment.offsetMs
     }))
   )
-}
-
-async function prepareMicRoute(): Promise<{
-  route: MicRoute
-  snapshot: AudioEndpointSnapshot | null
-}> {
-  const prefs = loadPrefs()
-  const [snapshot, devices] = await Promise.all([
-    typeof window.api?.getAudioEndpointSnapshot === 'function'
-      ? window.api.getAudioEndpointSnapshot().catch(() => null)
-      : Promise.resolve(null),
-    navigator.mediaDevices?.enumerateDevices().catch(() => [] as MediaDeviceInfo[]) ??
-      Promise.resolve([] as MediaDeviceInfo[])
-  ])
-  return { route: resolveMicRoute(prefs, snapshot, devices), snapshot }
 }
 
 type PostCaptureState = 'processing' | 'emailing' | 'ready' | 'upload_failed' | 'processing_failed' | 'email_failed'
@@ -448,17 +431,11 @@ function App(): JSX.Element {
         autoGraphMetadataRef.current = graphMetadata
         const title = graphMetadata?.title?.trim() || 'Auto-recorded Teams meeting'
         const created = await createMeeting(title, graphMetadata?.joinWebUrl ?? null, 'online', graphMetadata)
-        const { route, snapshot } = await prepareMicRoute()
-        const status = await capture.start(
-          'online',
-          route,
-          snapshot,
-          {
-            title,
-            meetingId: created?.id ?? null,
-            graphMetadata
-          }
-        )
+        const status = await capture.start('online', loadPrefs().micDeviceId, {
+          title,
+          meetingId: created?.id ?? null,
+          graphMetadata
+        })
         setCaptureStatus(status)
         setRecording({
           meetingId: created?.id ?? null,
@@ -723,17 +700,11 @@ function App(): JSX.Element {
     const source = 'online' as const
     const created = await createMeeting(title, null, source, null, manualAttendees)
     const meetingId = created?.id ?? null
-    const { route, snapshot } = await prepareMicRoute()
-    const status = await capture.start(
-      source,
-      route,
-      snapshot,
-      {
-        title,
-        meetingId,
-        graphMetadata: null
-      }
-    )
+    const status = await capture.start(source, loadPrefs().micDeviceId, {
+      title,
+      meetingId,
+      graphMetadata: null
+    })
     setCaptureStatus(status)
     if (!status.recording) {
       window.api.debugLog('manual recording could not start', { title, status })

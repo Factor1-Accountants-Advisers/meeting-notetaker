@@ -102,11 +102,6 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Install pinned Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.88.0
-
       - name: Install dependencies
         run: npm ci
 
@@ -118,12 +113,6 @@ jobs:
 
       - name: Type check
         run: npm run typecheck
-
-      - name: Test and build Windows audio endpoint observer
-        run: |
-          cargo test --manifest-path native/audio-endpoint-monitor/Cargo.toml
-          npm run build:audio-helper
-          powershell -ExecutionPolicy Bypass -File scripts/verify-audio-helper-package.ps1 -SkipPackagedCheck
 
       - name: Write credentials file (from GitHub secrets)
         # utf8NoBOM is required: a BOM-prefixed first line corrupts the first
@@ -181,7 +170,7 @@ jobs:
         # DV's brief.
         run: npx electron-vite build && npx electron-builder --publish never --config electron-builder.azure.yml
 
-      - name: Assert installer, app, and audio observer are signed and timestamped
+      - name: Assert installer and app binary are signed and timestamped
         # Private Trust: the runner does NOT have the factor1 root, so chain
         # validation is expected to fail here — assert signature presence,
         # signer subject, and timestamp instead. Managed-device validation is
@@ -190,8 +179,7 @@ jobs:
         run: |
           $targets = @(
             (Get-ChildItem "dist\*setup.exe" | Select-Object -First 1).FullName,
-            "dist\win-unpacked\Meeting Notetaker.exe",
-            "dist\win-unpacked\resources\audio\notetaker-audio-endpoints.exe"
+            "dist\win-unpacked\Meeting Notetaker.exe"
           )
           foreach ($target in $targets) {
             if (-not $target -or -not (Test-Path $target)) {
@@ -213,10 +201,6 @@ jobs:
             }
             Write-Host "OK: $target signed by '$($sig.SignerCertificate.Subject)', timestamped by '$($sig.TimeStamperCertificate.Subject)' (chain status on runner: $($sig.Status) — untrusted chain is expected under Private Trust)"
           }
-
-      - name: Assert audio endpoint observer shipped in packaged output
-        shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File scripts/verify-audio-helper-package.ps1
 
       - name: Assert credentials shipped in packaged output
         shell: pwsh

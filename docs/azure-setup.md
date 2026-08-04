@@ -70,64 +70,11 @@ If neither is set, `StubLLMProvider` returns deterministic placeholder output.
 
 ## 7. Code signing + releases
 
-- Azure Artifact Signing private-trust account `as-factor1`, certificate profile
-  `cp-private-factor1`; configuration is in `electron-builder.azure.yml`.
-- GitHub OIDC secrets: `AZURE_SIGNING_CLIENT_ID`, `AZURE_TENANT_ID`, and
-  `AZURE_SUBSCRIPTION_ID`. Grant the federated identity Artifact Signing
-  Certificate Profile Signer on the signing account.
-- Repository variable `UPDATES_STORAGE_ACCOUNT` identifies the Blob update-feed
-  account. The release identity needs Storage Blob Data Contributor on the
-  `updates` container.
-- Push a `vX.Y.Z` tag to build the backend, app, and audio endpoint helper;
-  sign/timestamp the app, helper, and NSIS installer; and publish the installer,
-  blockmap, and `latest.yml`. Private-trust validation requires the Factor1 root
-  deployed to managed devices.
-
-## 8. Windows communications audio routing
-
-No cloud credential is required for device routing. The packaged app includes
-`resources/audio/notetaker-audio-endpoints.exe`, a signed local helper that
-observes the Windows Core Audio console and communications defaults. Electron
-supervises it and falls back to Chromium `devicechange` events if it is missing
-or cannot start.
-
-Operational model:
-
-- **Follow Windows communications devices** is the recommended/default mode.
-  The helper's communications-microphone friendly name is matched to one
-  unique Chromium input and requested exactly.
-- **Always use this microphone** pins a Chromium input. If it disconnects,
-  recording continues on the current default and returns to the pinned input
-  when it reappears.
-- Missing/ambiguous native-to-Chromium matches use Chromium's current default
-  input and show a degraded-routing warning.
-- Electron loopback records the Windows **default** output. It cannot select a
-  Teams-only output override. Windows default output, Windows communications
-  output, and Teams Computer audio/system default must point to the same
-  physical device for reliable remote-participant capture.
-- A silent microphone is reacquired once after 8 seconds; silent loopback is
-  segmented and reacquired once after 60 seconds. Recovery is bounded by the
-  current routing generation and a 30-second cooldown.
-
-Useful local log prefixes in `main.log` are `[audio-endpoints]`, `mic
-re-acquired`, `loopback re-acquired`, `mic silence recovery`, and `system audio
-silence recovery`. Endpoint labels and routing outcomes are logged; audio and
-credentials are not.
-
-Build/packaging checks:
-
-```powershell
-npm run build:audio-helper
-npm run package:dir
-powershell -ExecutionPolicy Bypass -File scripts/verify-audio-helper-package.ps1
-```
-
-Before closing the hardware acceptance item, exercise Bluetooth connected
-before/during recording, disconnect/reconnect, A2DP/HFP transitions while
-Teams owns the device, Teams system-default and explicit-override cases,
-wired/USB switching, and pause/resume/extend/stop/spill/merged-audio behavior.
-Attach sanitized transition logs; configuration-only or synthetic fixture
-evidence is not a substitute for this signed-installer test.
+- OV certificate or Azure Trusted Signing (procurement decision, §10)
+- GitHub repo secrets: `CSC_LINK`, `CSC_KEY_PASSWORD` (or Trusted Signing
+  config), `AZURE_STORAGE_CONNECTION_STRING`
+- Uncomment the publish step in `.github/workflows/release.yml`; tag `vX.Y.Z`
+  to ship. Clients auto-update from the Blob feed on restart (decision #12).
 
 ## Stub → real map
 
