@@ -34,6 +34,8 @@
  */
 
 import fixWebmDuration from 'fix-webm-duration'
+import { resolveMicRoute, type MicRoute, type MicRouteDegradedReason } from './audioRouting'
+import type { AudioEndpointSnapshot } from '../../../shared/audio-endpoints'
 
 export type StreamState = 'active' | 'error' | 'off' | 'silent'
 
@@ -56,6 +58,7 @@ const DEVICE_CHANGE_DEBOUNCE_MS = 1500
 // transition. Neither is allowed to hold the recording controls indefinitely.
 const LOOPBACK_REACQUIRE_TIMEOUT_MS = 10_000
 const RECORDER_STOP_TIMEOUT_MS = 1_500
+const SILENCE_RECOVERY_COOLDOWN_MS = 30_000
 
 export interface CaptureStatus {
   mic: StreamState
@@ -65,6 +68,19 @@ export interface CaptureStatus {
   micLevel: number | null
   /** RMS level 0–1 for the system-audio loopback stream. null = no loopback or no monitor. */
   loopbackLevel: number | null
+  /** Actual live microphone endpoint details from the acquired Chromium track. */
+  micLabel?: string | null
+  micDeviceId?: string | null
+  micGroupId?: string | null
+  micRoutingMode?: MicRoute['mode']
+  micFallbackReason?: MicRouteDegradedReason | null
+  micSwitching?: boolean
+  /** Actual/default render label associated with the loopback stream. */
+  loopbackLabel?: string | null
+  loopbackSwitching?: boolean
+  renderMismatch?: boolean
+  micRecoveryAttempted?: boolean
+  loopbackRecoveryAttempted?: boolean
 }
 
 export interface SystemSegment {
@@ -86,6 +102,15 @@ export interface CaptureResult {
 }
 
 const IDLE: CaptureStatus = { mic: 'off', loopback: 'off', recording: false, micLevel: null, loopbackLevel: null }
+
+const DEFAULT_MIC_ROUTE: MicRoute = {
+  mode: 'follow_communications',
+  audioConstraints: true,
+  requestedDeviceId: null,
+  pinnedDeviceId: null,
+  targetLabel: null,
+  degradedReason: 'native_snapshot_unavailable'
+}
 
 /** Session details persisted alongside the spill so an interrupted recording is recoverable (IN-129). */
 export interface SpillSessionMeta {
@@ -136,6 +161,27 @@ export class SegmentTimeline {
   }
 }
 
+/** Bounded one-shot gate shared by the mic and loopback silence watchdogs. */
+export class SilenceRecoveryGate {
+  private lastGeneration: number | null = null
+  private lastAttemptMs = Number.NEGATIVE_INFINITY
+
+  constructor(private readonly cooldownMs = SILENCE_RECOVERY_COOLDOWN_MS) {}
+
+  tryAcquire(generation: number, nowMs = Date.now()): boolean {
+    if (this.lastGeneration === generation) return false
+    if (nowMs - this.lastAttemptMs < this.cooldownMs) return false
+    this.lastGeneration = generation
+    this.lastAttemptMs = nowMs
+    return true
+  }
+
+  reset(): void {
+    this.lastGeneration = null
+    this.lastAttemptMs = Number.NEGATIVE_INFINITY
+  }
+}
+
 export class CaptureController {
   private micRecorder: MediaRecorder | null = null
   private systemRecorder: MediaRecorder | null = null
@@ -158,6 +204,12 @@ export class CaptureController {
   private systemTimeline = new SegmentTimeline()
   private deviceChangeTimer: ReturnType<typeof setTimeout> | null = null
   private deviceChangeRegistered = false
+  private nativeEndpointUnsubscribe: (() => void) | null = null
+  private pendingMicReacquire = false
+  private pendingLoopbackReacquire = false
+  private routingGeneration = 0
+  private micSilenceRecovery = new SilenceRecoveryGate()
+  private loopbackSilenceRecovery = new SilenceRecoveryGate()
   private reacquiring = false
   private reacquireGeneration = 0
   private cancelReacquire: (() => void) | null = null
@@ -168,7 +220,8 @@ export class CaptureController {
   private micDest: MediaStreamAudioDestinationNode | null = null
   private micSource: MediaStreamAudioSourceNode | null = null
   private currentMicStream: MediaStream | null = null
-  private pinnedMicDeviceId = ''
+  private micRoute: MicRoute = { ...DEFAULT_MIC_ROUTE }
+  private nativeSnapshot: AudioEndpointSnapshot | null = null
   private micReacquiring = false
   private micReacquireGeneration = 0
   // Chunks must reach the main process in emission order or the spilled WebM
@@ -201,21 +254,43 @@ export class CaptureController {
 
   async start(
     source: 'online' | 'in_person',
-    micDeviceId = '',
+    micRoute: MicRoute = { ...DEFAULT_MIC_ROUTE },
+    nativeSnapshot: AudioEndpointSnapshot | null = null,
     spillMeta?: SpillSessionMeta
   ): Promise<CaptureStatus> {
     this.releaseAll()
 
     const status: CaptureStatus = { mic: 'off', loopback: 'off', recording: false, micLevel: null, loopbackLevel: null }
+    this.micRoute = micRoute
+    this.nativeSnapshot = nativeSnapshot
+    this.routingGeneration = nativeSnapshot?.generation ?? 0
     this.openSpillSession(source, spillMeta)
 
     try {
-      const mic = await navigator.mediaDevices.getUserMedia({
-        audio: micDeviceId ? { deviceId: { ideal: micDeviceId } } : true
-      })
+      let acquiredRoute = micRoute
+      let mic: MediaStream
+      try {
+        mic = await navigator.mediaDevices.getUserMedia({ audio: micRoute.audioConstraints })
+      } catch (error) {
+        if (micRoute.audioConstraints === true) throw error
+        acquiredRoute = {
+          ...micRoute,
+          audioConstraints: true,
+          requestedDeviceId: null,
+          degradedReason:
+            micRoute.mode === 'pinned'
+              ? 'pinned_device_missing'
+              : 'communications_match_missing'
+        }
+        window.api?.debugLog?.('requested microphone unavailable at capture start — using default', {
+          routingMode: micRoute.mode,
+          message: error instanceof Error ? error.message : String(error)
+        })
+        mic = await navigator.mediaDevices.getUserMedia({ audio: true })
+      }
       this.streams.push(mic)
       this.currentMicStream = mic
-      this.pinnedMicDeviceId = micDeviceId
+      this.micRoute = acquiredRoute
       // Bridge the mic through Web Audio so a later device switch swaps the
       // source without restarting the recorder (see header). Falls back to
       // direct recording when the bridge cannot be built.
@@ -236,6 +311,7 @@ export class CaptureController {
       this.micRecorder = this.createRecorder(recordStream, this.micChunks, 'mic')
       this.micRecorder.start(1000)
       status.mic = 'active'
+      Object.assign(status, this.micStatusFor(mic.getAudioTracks()[0] ?? null, acquiredRoute))
       this.micMonitorStop = this.startSilenceMonitor(
         // Monitor the bridge output when present: it survives source swaps, so
         // silence/recovery and the level meter keep working after a switch.
@@ -246,6 +322,14 @@ export class CaptureController {
           this.status = { ...this.status, mic: 'silent' }
           window.api?.debugLog?.('mic capture appears silent', { silentSeconds, rms })
           this.statusListener?.({ ...this.status })
+          if (this.micSilenceRecovery.tryAcquire(this.routingGeneration)) {
+            this.status = { ...this.status, micSwitching: true, micRecoveryAttempted: true }
+            this.statusListener?.({ ...this.status })
+            window.api?.debugLog?.('mic silence recovery requested', {
+              routingGeneration: this.routingGeneration
+            })
+            void this.reacquireMic(true, 'silence recovery')
+          }
         },
         (rms) => {
           if (this.status.mic !== 'silent') return
@@ -270,13 +354,16 @@ export class CaptureController {
         this.attachSystemStream(sys, 0)
         this.registerDeviceChangeListener()
         status.loopback = 'active'
+        status.loopbackLabel = this.loopbackEndpointLabel(sys.getAudioTracks()[0] ?? null)
       } catch {
         status.loopback = 'error'
       }
     }
 
     status.recording = Boolean(this.micRecorder || this.systemRecorder)
+    status.renderMismatch = this.hasRenderMismatch()
     this.status = status
+    this.registerNativeEndpointListener()
     return status
   }
 
@@ -317,6 +404,7 @@ export class CaptureController {
     // attach another recorder after we snapshot/finalize the live recorders.
     this.stopping = true
     this.unregisterDeviceChangeListener()
+    this.unregisterNativeEndpointListener()
     if (this.deviceChangeTimer) {
       clearTimeout(this.deviceChangeTimer)
       this.deviceChangeTimer = null
@@ -463,18 +551,150 @@ export class CaptureController {
     this.deviceChangeRegistered = false
   }
 
+  private registerNativeEndpointListener(): void {
+    if (
+      this.nativeEndpointUnsubscribe ||
+      typeof window.api?.onAudioEndpointChanged !== 'function'
+    ) {
+      return
+    }
+    this.nativeEndpointUnsubscribe = window.api.onAudioEndpointChanged((snapshot) => {
+      const previous = this.nativeSnapshot
+      if (previous && snapshot.generation <= previous.generation) return
+      this.nativeSnapshot = snapshot
+
+      const captureChanged = !this.sameEndpoint(
+        previous?.endpoints.captureCommunications ?? null,
+        snapshot.endpoints.captureCommunications
+      )
+      const renderChanged =
+        !this.sameEndpoint(
+          previous?.endpoints.renderConsole ?? null,
+          snapshot.endpoints.renderConsole
+        ) ||
+        !this.sameEndpoint(
+          previous?.endpoints.renderCommunications ?? null,
+          snapshot.endpoints.renderCommunications
+        )
+
+      this.status = {
+        ...this.status,
+        renderMismatch: this.hasRenderMismatch(snapshot),
+        loopbackLabel:
+          snapshot.endpoints.renderConsole?.label ?? this.status.loopbackLabel ?? null
+      }
+      this.statusListener?.({ ...this.status })
+      if (captureChanged || renderChanged) {
+        this.queueRouteRefresh(captureChanged, renderChanged, 'windows endpoint')
+      }
+    })
+  }
+
+  private unregisterNativeEndpointListener(): void {
+    this.nativeEndpointUnsubscribe?.()
+    this.nativeEndpointUnsubscribe = null
+  }
+
+  private sameEndpoint(
+    left: { id: string; label: string } | null,
+    right: { id: string; label: string } | null
+  ): boolean {
+    return (
+      left === right ||
+      (left !== null &&
+        right !== null &&
+        left.id === right.id &&
+        left.label === right.label)
+    )
+  }
+
+  private micStatusFor(
+    track: MediaStreamTrack | null,
+    route: MicRoute
+  ): Pick<
+    CaptureStatus,
+    | 'micLabel'
+    | 'micDeviceId'
+    | 'micGroupId'
+    | 'micRoutingMode'
+    | 'micFallbackReason'
+    | 'micSwitching'
+  > {
+    const settings = track?.getSettings?.() ?? {}
+    return {
+      micLabel: track?.label || route.targetLabel || null,
+      micDeviceId: settings.deviceId || null,
+      micGroupId: settings.groupId || null,
+      micRoutingMode: route.mode,
+      micFallbackReason: route.degradedReason,
+      micSwitching: false
+    }
+  }
+
+  private loopbackEndpointLabel(track: MediaStreamTrack | null): string | null {
+    return (
+      this.nativeSnapshot?.endpoints.renderConsole?.label ??
+      track?.label ??
+      null
+    )
+  }
+
+  private hasRenderMismatch(snapshot = this.nativeSnapshot): boolean {
+    const consoleEndpoint = snapshot?.endpoints.renderConsole
+    const communicationsEndpoint = snapshot?.endpoints.renderCommunications
+    return Boolean(
+      consoleEndpoint &&
+        communicationsEndpoint &&
+        consoleEndpoint.id !== communicationsEndpoint.id
+    )
+  }
+
+  private async resolveCurrentMicRoute(): Promise<MicRoute> {
+    const devices = await navigator.mediaDevices.enumerateDevices()
+    return resolveMicRoute(
+      {
+        version: 2,
+        micRoutingMode: this.micRoute.mode,
+        pinnedMicDeviceId: this.micRoute.pinnedDeviceId ?? '',
+        language: 'auto'
+      },
+      this.nativeSnapshot,
+      devices
+    )
+  }
+
   private onDeviceChange = (): void => {
     if (this.stopping || (!this.systemRecorder && !this.micRecorder)) return
+    this.queueRouteRefresh(Boolean(this.micRecorder), Boolean(this.systemRecorder), 'browser device')
+  }
+
+  private queueRouteRefresh(mic: boolean, loopback: boolean, reason: string): void {
+    if (this.stopping || (!this.systemRecorder && !this.micRecorder)) return
+    this.pendingMicReacquire ||= mic && Boolean(this.micRecorder && this.micDest)
+    this.pendingLoopbackReacquire ||= loopback && Boolean(this.systemRecorder)
     if (this.deviceChangeTimer) clearTimeout(this.deviceChangeTimer)
     this.deviceChangeTimer = setTimeout(() => {
       this.deviceChangeTimer = null
-      if (this.systemRecorder) {
-        window.api?.debugLog?.('audio device change detected — re-acquiring loopback', {
+      const refreshMic = this.pendingMicReacquire
+      const refreshLoopback = this.pendingLoopbackReacquire
+      this.pendingMicReacquire = false
+      this.pendingLoopbackReacquire = false
+      this.routingGeneration += 1
+      if (refreshMic) this.status = { ...this.status, micRecoveryAttempted: false }
+      if (refreshLoopback) this.status = { ...this.status, loopbackRecoveryAttempted: false }
+      if (refreshLoopback && this.systemRecorder) {
+        this.status = { ...this.status, loopbackSwitching: true }
+        this.statusListener?.({ ...this.status })
+        window.api?.debugLog?.('audio route change detected — re-acquiring loopback', {
+          reason,
+          routingGeneration: this.routingGeneration,
           offsetMs: this.systemTimeline.currentOffsetMs()
         })
         void this.reacquireLoopback()
       }
-      if (this.micRecorder && this.micDest) {
+      if (refreshMic && this.micRecorder && this.micDest) {
+        this.status = { ...this.status, micSwitching: true }
+        this.statusListener?.({ ...this.status })
         void this.reacquireMic()
       }
     }, DEVICE_CHANGE_DEBOUNCE_MS)
@@ -489,32 +709,37 @@ export class CaptureController {
    * the bus the capture falls back to the default input rather than going
    * silent. On any failure the existing capture is left running.
    */
-  private async reacquireMic(): Promise<void> {
+  private async reacquireMic(forceReplace = false, reason = 'route change'): Promise<void> {
     if (this.micReacquiring || this.stopping || !this.micRecorder || !this.micContext || !this.micDest) {
       return
     }
     this.micReacquiring = true
     const generation = ++this.micReacquireGeneration
     try {
+      const route = await this.resolveCurrentMicRoute()
+      if (generation !== this.micReacquireGeneration || this.stopping) return
       const currentTrack = this.currentMicStream?.getAudioTracks()[0] ?? null
       const currentLive = currentTrack?.readyState === 'live'
       const currentSettings = currentLive ? (currentTrack?.getSettings?.() ?? {}) : {}
 
-      let constraints: MediaStreamConstraints = { audio: true }
-      if (this.pinnedMicDeviceId) {
-        const devices = await navigator.mediaDevices.enumerateDevices()
-        const pinnedPresent = devices.some(
-          (device) => device.kind === 'audioinput' && device.deviceId === this.pinnedMicDeviceId
-        )
-        if (pinnedPresent && currentLive) return // the user's pick still works — keep it
-        if (pinnedPresent) {
-          constraints = { audio: { deviceId: { exact: this.pinnedMicDeviceId } } }
-        } else {
-          window.api?.debugLog?.('pinned mic no longer present — falling back to default input')
-        }
+      // A live stream is only proof that the pin is satisfied when its actual
+      // Chromium device ID matches. A live fallback must never block a pin
+      // that disappeared at start and reappeared later.
+      if (
+        !forceReplace &&
+        route.requestedDeviceId &&
+        currentLive &&
+        currentSettings.deviceId === route.requestedDeviceId
+      ) {
+        this.micRoute = route
+        this.status = { ...this.status, ...this.micStatusFor(currentTrack, route) }
+        this.statusListener?.({ ...this.status })
+        return
       }
 
-      const candidate = await this.acquireMicWithTimeout(generation, constraints)
+      const candidate = await this.acquireMicWithTimeout(generation, {
+        audio: route.audioConstraints
+      })
       if (
         generation !== this.micReacquireGeneration ||
         this.stopping ||
@@ -528,6 +753,8 @@ export class CaptureController {
       const candidateTrack = candidate.getAudioTracks()[0]
       if (!candidateTrack) {
         candidate.getTracks().forEach((track) => track.stop())
+        this.status = { ...this.status, micSwitching: false }
+        this.statusListener?.({ ...this.status })
         return
       }
 
@@ -543,8 +770,11 @@ export class CaptureController {
           (Boolean(candidateSettings.deviceId) &&
             candidateSettings.deviceId !== 'default' &&
             candidateSettings.deviceId === currentSettings.deviceId))
-      if (sameDevice) {
+      if (sameDevice && !forceReplace) {
         candidate.getTracks().forEach((track) => track.stop())
+        this.micRoute = route
+        this.status = { ...this.status, ...this.micStatusFor(currentTrack, route) }
+        this.statusListener?.({ ...this.status })
         return
       }
 
@@ -563,18 +793,26 @@ export class CaptureController {
       this.streams.push(candidate)
       this.micSource = newSource
       this.currentMicStream = candidate
+      this.micRoute = route
       window.api?.debugLog?.('mic re-acquired after device change', {
-        trackLabel: candidateTrack.label ?? 'unknown'
+        trackLabel: candidateTrack.label ?? 'unknown',
+        routingMode: route.mode,
+        fallbackReason: route.degradedReason,
+        reason
       })
-      if (this.status.mic !== 'active') {
-        this.status = { ...this.status, mic: 'active' }
-        this.statusListener?.({ ...this.status })
+      this.status = {
+        ...this.status,
+        mic: 'active',
+        ...this.micStatusFor(candidateTrack, route)
       }
+      this.statusListener?.({ ...this.status })
     } catch (err) {
       if (generation !== this.micReacquireGeneration || this.stopping) return
       window.api?.debugLog?.('mic re-acquisition failed — keeping existing capture', {
         message: err instanceof Error ? err.message : String(err)
       })
+      this.status = { ...this.status, micSwitching: false }
+      this.statusListener?.({ ...this.status })
     } finally {
       if (generation === this.micReacquireGeneration) {
         this.micReacquiring = false
@@ -654,10 +892,14 @@ export class CaptureController {
       }
 
       this.attachSystemStream(sys, switchOffset, wasPaused)
-      if (this.status.loopback !== 'active') {
-        this.status = { ...this.status, loopback: 'active' }
-        this.statusListener?.({ ...this.status })
+      this.status = {
+        ...this.status,
+        loopback: 'active',
+        loopbackLabel: this.loopbackEndpointLabel(sys.getAudioTracks()[0] ?? null),
+        loopbackSwitching: false,
+        renderMismatch: this.hasRenderMismatch()
       }
+      this.statusListener?.({ ...this.status })
       window.api?.debugLog?.('loopback re-acquired after device change', {
         offsetMs: switchOffset,
         segments: this.finalizedSystemSegments.length + 1
@@ -667,6 +909,8 @@ export class CaptureController {
       window.api?.debugLog?.('loopback re-acquisition failed — keeping existing capture', {
         message: err instanceof Error ? err.message : String(err)
       })
+      this.status = { ...this.status, loopbackSwitching: false }
+      this.statusListener?.({ ...this.status })
     } finally {
       // A cancelled older attempt must not clear the guard/canceller belonging
       // to a newer recording session.
@@ -928,6 +1172,18 @@ export class CaptureController {
         this.status = { ...this.status, loopback: 'silent' }
         window.api?.debugLog?.('system audio capture appears silent', { silentSeconds, rms })
         this.statusListener?.({ ...this.status })
+        if (this.loopbackSilenceRecovery.tryAcquire(this.routingGeneration)) {
+          this.status = {
+            ...this.status,
+            loopbackSwitching: true,
+            loopbackRecoveryAttempted: true
+          }
+          this.statusListener?.({ ...this.status })
+          window.api?.debugLog?.('system audio silence recovery requested', {
+            routingGeneration: this.routingGeneration
+          })
+          void this.reacquireLoopback()
+        }
       },
       (rms) => {
         if (this.status.loopback !== 'silent') return
@@ -958,6 +1214,7 @@ export class CaptureController {
     this.loopbackMonitorStop?.()
     this.loopbackMonitorStop = null
     this.unregisterDeviceChangeListener()
+    this.unregisterNativeEndpointListener()
     if (this.deviceChangeTimer) {
       clearTimeout(this.deviceChangeTimer)
       this.deviceChangeTimer = null
@@ -976,7 +1233,13 @@ export class CaptureController {
       this.micContext = null
     }
     this.currentMicStream = null
-    this.pinnedMicDeviceId = ''
+    this.micRoute = { ...DEFAULT_MIC_ROUTE }
+    this.nativeSnapshot = null
+    this.pendingMicReacquire = false
+    this.pendingLoopbackReacquire = false
+    this.routingGeneration = 0
+    this.micSilenceRecovery.reset()
+    this.loopbackSilenceRecovery.reset()
     this.stopping = false
     this.micRecorder = null
     this.systemRecorder = null

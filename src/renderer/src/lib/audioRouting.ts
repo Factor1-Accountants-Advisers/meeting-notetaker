@@ -13,6 +13,8 @@ export interface MicRoute {
   mode: MicRoutingMode
   audioConstraints: true | MediaTrackConstraints
   requestedDeviceId: string | null
+  /** The user's desired manual device, retained even while fallback is active. */
+  pinnedDeviceId: string | null
   targetLabel: string | null
   degradedReason: MicRouteDegradedReason | null
 }
@@ -24,12 +26,14 @@ function normalizeLabel(label: string): string {
 function fallback(
   mode: MicRoutingMode,
   reason: MicRouteDegradedReason,
-  targetLabel: string | null = null
+  targetLabel: string | null = null,
+  pinnedDeviceId: string | null = null
 ): MicRoute {
   return {
     mode,
     audioConstraints: true,
     requestedDeviceId: null,
+    pinnedDeviceId,
     targetLabel,
     degradedReason: reason
   }
@@ -50,11 +54,14 @@ export function resolveMicRoute(
   if (prefs.micRoutingMode === 'pinned') {
     if (!prefs.pinnedMicDeviceId) return fallback('pinned', 'pinned_device_not_selected')
     const selected = inputs.find((device) => device.deviceId === prefs.pinnedMicDeviceId)
-    if (!selected) return fallback('pinned', 'pinned_device_missing')
+    if (!selected) {
+      return fallback('pinned', 'pinned_device_missing', null, prefs.pinnedMicDeviceId)
+    }
     return {
       mode: 'pinned',
       audioConstraints: { deviceId: { exact: selected.deviceId } },
       requestedDeviceId: selected.deviceId,
+      pinnedDeviceId: prefs.pinnedMicDeviceId,
       targetLabel: selected.label || null,
       degradedReason: null
     }
@@ -84,6 +91,7 @@ export function resolveMicRoute(
     mode: 'follow_communications',
     audioConstraints: { deviceId: { exact: selected.deviceId } },
     requestedDeviceId: selected.deviceId,
+    pinnedDeviceId: null,
     targetLabel: selected.label || endpoint.label,
     degradedReason: null
   }

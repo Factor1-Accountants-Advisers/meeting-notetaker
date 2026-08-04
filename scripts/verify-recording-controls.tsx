@@ -366,6 +366,286 @@ async function verifyMicFollowsDeviceChange(): Promise<void> {
   assert.ok(result?.blob.size, 'mic audio survives to stop after a device swap')
 }
 
+async function verifyPinnedMicReappears(): Promise<void> {
+  let pinnedPresent = false
+  let micRecorders = 0
+  const calls: MediaStreamConstraints[] = []
+
+  class RoutedTrack extends FakeTrack {
+    constructor(
+      label: string,
+      private readonly settings: { deviceId: string; groupId: string }
+    ) {
+      super()
+      this.label = label
+    }
+
+    getSettings(): { deviceId: string; groupId: string } {
+      return this.settings
+    }
+  }
+
+  class RoutedMediaDevices {
+    private deviceChangeListeners = new Set<() => void>()
+    readonly streams: FakeMediaStream[] = []
+
+    getUserMedia(constraints: MediaStreamConstraints): Promise<FakeMediaStream> {
+      calls.push(constraints)
+      const requested = (constraints.audio as MediaTrackConstraints | undefined)?.deviceId
+      const exact = typeof requested === 'object' && 'exact' in requested ? requested.exact : null
+      const usePinned = exact === 'pinned-id' && pinnedPresent
+      const stream = new FakeMediaStream([
+        new RoutedTrack(usePinned ? 'Bluetooth microphone' : 'Laptop microphone', {
+          deviceId: usePinned ? 'pinned-id' : 'fallback-id',
+          groupId: usePinned ? 'pinned-group' : 'fallback-group'
+        })
+      ])
+      this.streams.push(stream)
+      return Promise.resolve(stream)
+    }
+
+    getDisplayMedia(): Promise<FakeMediaStream> {
+      return Promise.reject(new Error('mic-only fixture'))
+    }
+
+    enumerateDevices(): Promise<MediaDeviceInfo[]> {
+      return Promise.resolve(
+        pinnedPresent
+          ? ([
+              {
+                kind: 'audioinput',
+                deviceId: 'pinned-id',
+                groupId: 'pinned-group',
+                label: 'Bluetooth microphone'
+              }
+            ] as MediaDeviceInfo[])
+          : []
+      )
+    }
+
+    addEventListener(type: string, listener: () => void): void {
+      if (type === 'devicechange') this.deviceChangeListeners.add(listener)
+    }
+
+    removeEventListener(type: string, listener: () => void): void {
+      if (type === 'devicechange') this.deviceChangeListeners.delete(listener)
+    }
+
+    dispatchDeviceChange(): void {
+      for (const listener of this.deviceChangeListeners) listener()
+    }
+  }
+
+  class BridgeAudioContext {
+    createMediaStreamDestination(): { stream: FakeMediaStream } {
+      return { stream: new FakeMediaStream([new FakeTrack()]) }
+    }
+
+    createMediaStreamSource(): { connect: () => void; disconnect: () => void } {
+      return { connect: () => undefined, disconnect: () => undefined }
+    }
+
+    close(): Promise<void> {
+      return Promise.resolve()
+    }
+  }
+
+  class CountingMediaRecorder extends FakeMediaRecorder {
+    constructor(stream: FakeMediaStream) {
+      super(stream)
+      micRecorders += 1
+    }
+  }
+
+  const mediaDevices = new RoutedMediaDevices()
+  Object.defineProperties(globalThis, {
+    window: {
+      configurable: true,
+      value: { api: { debugLog: () => undefined } }
+    },
+    navigator: { configurable: true, value: { mediaDevices } },
+    MediaStream: { configurable: true, value: FakeMediaStream },
+    MediaRecorder: { configurable: true, value: CountingMediaRecorder },
+    AudioContext: { configurable: true, value: BridgeAudioContext }
+  })
+
+  const controller = new CaptureController()
+  const route = {
+    mode: 'pinned' as const,
+    audioConstraints: true as const,
+    requestedDeviceId: null,
+    pinnedDeviceId: 'pinned-id',
+    targetLabel: 'Bluetooth microphone',
+    degradedReason: 'pinned_device_missing' as const
+  }
+  const status = await controller.start('in_person', route, null)
+  assert.equal(status.mic, 'active', 'fallback mic starts while the pin is absent')
+  const fallbackStream = mediaDevices.streams[0]
+
+  pinnedPresent = true
+  mediaDevices.dispatchDeviceChange()
+  await new Promise((resolve) => setTimeout(resolve, 1_700))
+
+  assert.deepEqual(
+    calls.at(-1),
+    { audio: { deviceId: { exact: 'pinned-id' } } },
+    'the reappearing pin is requested exactly instead of keeping the live fallback'
+  )
+  assert.equal(micRecorders, 1, 'the stable mic recorder is not restarted')
+  assert.equal(
+    fallbackStream.getAudioTracks()[0].readyState,
+    'ended',
+    'the fallback stream is released after the pin returns'
+  )
+  await controller.stop(1_000)
+}
+
+async function verifyNativeCommunicationsMicChange(): Promise<void> {
+  let activeDevice = { id: 'mic-a', groupId: 'group-a', label: 'Laptop microphone' }
+  let nativeListener: ((snapshot: unknown) => void) | null = null
+  let unsubscribed = false
+  let micRecorders = 0
+  const calls: MediaStreamConstraints[] = []
+
+  class NativeTrack extends FakeTrack {
+    constructor(private readonly device: typeof activeDevice) {
+      super()
+      this.label = device.label
+    }
+
+    getSettings(): { deviceId: string; groupId: string } {
+      return { deviceId: this.device.id, groupId: this.device.groupId }
+    }
+  }
+
+  class NativeMediaDevices {
+    private listeners = new Set<() => void>()
+
+    getUserMedia(constraints: MediaStreamConstraints): Promise<FakeMediaStream> {
+      calls.push(constraints)
+      return Promise.resolve(new FakeMediaStream([new NativeTrack({ ...activeDevice })]))
+    }
+
+    getDisplayMedia(): Promise<FakeMediaStream> {
+      return Promise.reject(new Error('mic-only fixture'))
+    }
+
+    enumerateDevices(): Promise<MediaDeviceInfo[]> {
+      return Promise.resolve([
+        {
+          kind: 'audioinput',
+          deviceId: activeDevice.id,
+          groupId: activeDevice.groupId,
+          label: activeDevice.label
+        } as MediaDeviceInfo
+      ])
+    }
+
+    addEventListener(type: string, listener: () => void): void {
+      if (type === 'devicechange') this.listeners.add(listener)
+    }
+
+    removeEventListener(type: string, listener: () => void): void {
+      if (type === 'devicechange') this.listeners.delete(listener)
+    }
+
+    dispatchDeviceChange(): void {
+      for (const listener of this.listeners) listener()
+    }
+  }
+
+  class BridgeAudioContext {
+    createMediaStreamDestination(): { stream: FakeMediaStream } {
+      return { stream: new FakeMediaStream([new FakeTrack()]) }
+    }
+
+    createMediaStreamSource(): { connect: () => void; disconnect: () => void } {
+      return { connect: () => undefined, disconnect: () => undefined }
+    }
+
+    close(): Promise<void> {
+      return Promise.resolve()
+    }
+  }
+
+  class CountingMediaRecorder extends FakeMediaRecorder {
+    constructor(stream: FakeMediaStream) {
+      super(stream)
+      micRecorders += 1
+    }
+  }
+
+  const mediaDevices = new NativeMediaDevices()
+  Object.defineProperties(globalThis, {
+    window: {
+      configurable: true,
+      value: {
+        api: {
+          debugLog: () => undefined,
+          onAudioEndpointChanged: (listener: (snapshot: unknown) => void) => {
+            nativeListener = listener
+            return () => {
+              unsubscribed = true
+              nativeListener = null
+            }
+          }
+        }
+      }
+    },
+    navigator: { configurable: true, value: { mediaDevices } },
+    MediaStream: { configurable: true, value: FakeMediaStream },
+    MediaRecorder: { configurable: true, value: CountingMediaRecorder },
+    AudioContext: { configurable: true, value: BridgeAudioContext }
+  })
+
+  const snapshotA = {
+    schemaVersion: 1 as const,
+    kind: 'snapshot' as const,
+    generation: 1,
+    endpoints: {
+      captureConsole: { id: 'win-a', label: 'Laptop microphone' },
+      captureCommunications: { id: 'win-a', label: 'Laptop microphone' },
+      renderConsole: null,
+      renderCommunications: null
+    }
+  }
+  const controller = new CaptureController()
+  await controller.start(
+    'in_person',
+    {
+      mode: 'follow_communications',
+      audioConstraints: { deviceId: { exact: 'mic-a' } },
+      requestedDeviceId: 'mic-a',
+      pinnedDeviceId: null,
+      targetLabel: 'Laptop microphone',
+      degradedReason: null
+    },
+    snapshotA
+  )
+  assert.ok(nativeListener, 'capture subscribes to native endpoint updates')
+
+  activeDevice = { id: 'mic-b', groupId: 'group-b', label: 'Bluetooth microphone' }
+  nativeListener?.({
+    ...snapshotA,
+    generation: 2,
+    endpoints: {
+      ...snapshotA.endpoints,
+      captureCommunications: { id: 'win-b', label: 'Bluetooth microphone' }
+    }
+  })
+  mediaDevices.dispatchDeviceChange()
+  await new Promise((resolve) => setTimeout(resolve, 1_700))
+
+  assert.deepEqual(calls.at(-1), {
+    audio: { deviceId: { exact: 'mic-b' } }
+  })
+  assert.equal(calls.length, 2, 'native and browser signals coalesce into one acquisition')
+  assert.equal(micRecorders, 1, 'native route changes keep the mic recorder stable')
+
+  await controller.stop(1_000)
+  assert.equal(unsubscribed, true, 'native endpoint subscription is removed at stop')
+}
+
 async function verifySequentialStops(): Promise<void> {
   // Field regression (3 Aug): the App effect's manual `stopping` flag was only
   // reset on failure, so after one successful stop every later stop request
@@ -415,6 +695,8 @@ async function verifySequentialStops(): Promise<void> {
 
 void verifyDeviceChangeStop()
   .then(() => verifyMicFollowsDeviceChange())
+  .then(() => verifyPinnedMicReappears())
+  .then(() => verifyNativeCommunicationsMicChange())
   .then(() => verifySequentialStops())
   .then(() => console.log('Recording control verification passed'))
   .catch((error) => {
