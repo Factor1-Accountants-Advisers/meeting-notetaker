@@ -26,6 +26,7 @@
     "verify:audio-endpoint-protocol": "esbuild scripts/verify-audio-endpoint-protocol.ts --bundle --platform=node --format=cjs --outfile=out/verify-audio-endpoint-protocol.cjs --log-level=error && node out/verify-audio-endpoint-protocol.cjs",
     "verify:audio-endpoint-service": "esbuild scripts/verify-audio-endpoint-service.ts --bundle --platform=node --format=cjs --outfile=out/verify-audio-endpoint-service.cjs --log-level=error && node out/verify-audio-endpoint-service.cjs",
     "verify:audio-routing": "esbuild scripts/verify-audio-routing.ts --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-audio-routing.cjs --log-level=error && node out/verify-audio-routing.cjs",
+    "verify:audio-routing-ui": "esbuild scripts/verify-audio-routing-ui.tsx --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-audio-routing-ui.cjs --log-level=error && node out/verify-audio-routing-ui.cjs",
     "verify:update-gate": "esbuild scripts/verify-update-gate.ts --bundle --platform=node --format=cjs --outfile=out/verify-update-gate.cjs --log-level=error && node out/verify-update-gate.cjs",
     "verify:token-cache": "esbuild scripts/verify-token-cache.ts --bundle --platform=node --format=cjs --outfile=out/verify-token-cache.cjs --log-level=error && node out/verify-token-cache.cjs",
     "verify:storage-cutover": "esbuild scripts/verify-storage-cutover.ts --bundle --platform=node --format=cjs --outfile=out/verify-storage-cutover.cjs --log-level=error && node out/verify-storage-cutover.cjs",

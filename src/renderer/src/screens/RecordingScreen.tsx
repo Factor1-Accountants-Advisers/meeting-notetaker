@@ -128,6 +128,8 @@ export function RecordingScreen({
           <LevelMeter
             icon={captureStatus?.mic === 'error' || captureStatus?.mic === 'silent' ? MicOff : Mic}
             label="Microphone"
+            detail={captureStatus?.micLabel ?? null}
+            switching={captureStatus?.micSwitching ?? false}
             level={captureStatus?.micLevel ?? 0}
             state={captureStatus?.mic ?? 'off'}
           />
@@ -135,6 +137,8 @@ export function RecordingScreen({
             <LevelMeter
               icon={AudioWaveformIcon}
               label="System audio"
+              detail={captureStatus?.loopbackLabel ?? null}
+              switching={captureStatus?.loopbackSwitching ?? false}
               level={captureStatus?.loopbackLevel ?? 0}
               state={captureStatus?.loopback ?? 'off'}
             />
@@ -241,11 +245,15 @@ function AudioWaveform({ paused, level }: { paused: boolean; level: number }): J
 function LevelMeter({
   icon: Icon,
   label,
+  detail,
+  switching,
   level,
   state
 }: {
   icon: typeof Mic
   label: string
+  detail: string | null
+  switching: boolean
   level: number
   state: CaptureStatus['mic']
 }): JSX.Element {
@@ -254,9 +262,16 @@ function LevelMeter({
 
   return (
     <div className="grid grid-cols-[minmax(8rem,1fr)_minmax(7rem,2fr)_auto] items-center gap-3 border-t border-edge-tertiary py-2 max-[560px]:grid-cols-1">
-      <span className="flex min-w-0 items-center gap-[7px] text-[14px] text-content-primary">
+      <span className="flex min-w-0 items-center gap-[7px] text-content-primary">
         <Icon size={15} strokeWidth={1.75} className="text-content-secondary" />
-        {label}
+        <span className="min-w-0">
+          <span className="block text-[14px]">{label}</span>
+          {(detail || switching) && (
+            <span className="block truncate text-[12px] text-content-tertiary">
+              {switching ? 'Switching…' : detail}
+            </span>
+          )}
+        </span>
       </span>
       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--color-background-muted)]">
         <div
@@ -289,6 +304,49 @@ function CaptureWarnings({
 }): JSX.Element | null {
   const warnings: { icon: typeof AlertTriangle; text: string; tone: string }[] = []
 
+  if (captureStatus?.micSwitching) {
+    warnings.push({
+      icon: Mic,
+      text: `Switching microphone${captureStatus.micLabel ? ` from ${captureStatus.micLabel}` : ''}…`,
+      tone: 'text-content-info'
+    })
+  }
+  if (session.source === 'online' && captureStatus?.loopbackSwitching) {
+    warnings.push({
+      icon: AudioWaveformIcon,
+      text: 'Switching system audio to the current Windows output…',
+      tone: 'text-content-info'
+    })
+  }
+  if (
+    captureStatus?.micFallbackReason === 'pinned_device_missing' ||
+    captureStatus?.micFallbackReason === 'pinned_device_not_selected'
+  ) {
+    warnings.push({
+      icon: AlertTriangle,
+      text: 'The selected microphone is unavailable — using the current default microphone.',
+      tone: 'text-content-warning'
+    })
+  } else if (captureStatus?.micFallbackReason === 'communications_match_ambiguous') {
+    warnings.push({
+      icon: AlertTriangle,
+      text: 'The Windows communications microphone matched more than one input — using the current default microphone.',
+      tone: 'text-content-warning'
+    })
+  } else if (captureStatus?.micFallbackReason) {
+    warnings.push({
+      icon: AlertTriangle,
+      text: 'Windows communications routing is unavailable — using the current default microphone.',
+      tone: 'text-content-warning'
+    })
+  }
+  if (session.source === 'online' && captureStatus?.renderMismatch) {
+    warnings.push({
+      icon: AlertTriangle,
+      text: 'Windows default output differs from the communications output — Notetaker records the default output. Align Windows and Teams system-default audio.',
+      tone: 'text-content-warning'
+    })
+  }
   if (captureStatus?.mic === 'error') {
     warnings.push({
       icon: MicOff,
@@ -298,7 +356,9 @@ function CaptureWarnings({
   } else if (captureStatus?.mic === 'silent') {
     warnings.push({
       icon: MicOff,
-      text: 'Microphone appears silent — check your selected microphone.',
+      text: captureStatus.micRecoveryAttempted
+        ? `Microphone is still silent after recovery${captureStatus.micLabel ? ` (${captureStatus.micLabel})` : ''}. Check the Teams and Windows microphone settings.`
+        : 'Microphone appears silent — attempting recovery.',
       tone: 'text-content-danger'
     })
   }
@@ -311,7 +371,9 @@ function CaptureWarnings({
   } else if (session.source === 'online' && captureStatus?.loopback === 'silent') {
     warnings.push({
       icon: AlertTriangle,
-      text: 'System audio has been silent for over a minute — check your audio output device.',
+      text: captureStatus.loopbackRecoveryAttempted
+        ? 'System audio is still silent after recovery — check that Teams and Windows use the same output device.'
+        : 'System audio has been silent for over a minute — attempting recovery from the current output device.',
       tone: 'text-content-danger'
     })
   }

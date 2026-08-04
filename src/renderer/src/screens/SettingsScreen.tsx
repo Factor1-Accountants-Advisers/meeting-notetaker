@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   ArrowLeft,
+  AlertTriangle,
   Check,
   ChevronRight,
   CircleCheck,
@@ -15,8 +16,9 @@ import {
 } from 'lucide-react'
 import { Card } from '@renderer/components/ui/Card'
 import { SelectMenu, type SelectOption } from '@renderer/components/ui/SelectMenu'
-import { loadPrefs, savePrefs } from '@renderer/lib/prefs'
+import { loadPrefs, savePrefs, type MicRoutingMode } from '@renderer/lib/prefs'
 import type { Theme } from '@renderer/lib/theme'
+import type { AudioEndpointSnapshot } from '../../../shared/audio-endpoints'
 
 interface Props {
   previewMode?: boolean
@@ -43,6 +45,23 @@ const THEME_OPTIONS: SelectOption<Theme>[] = [
   { value: 'dark', label: 'Dark' }
 ]
 
+const ROUTING_OPTIONS: SelectOption<MicRoutingMode>[] = [
+  { value: 'follow_communications', label: 'Follow Windows communications devices' },
+  { value: 'pinned', label: 'Always use this microphone' }
+]
+
+const PREVIEW_ENDPOINTS: AudioEndpointSnapshot = {
+  schemaVersion: 1,
+  kind: 'snapshot',
+  generation: 1,
+  endpoints: {
+    captureConsole: { id: 'preview-mic', label: 'Laptop microphone' },
+    captureCommunications: { id: 'preview-headset-mic', label: 'Bluetooth headset microphone' },
+    renderConsole: { id: 'preview-speakers', label: 'Laptop speakers' },
+    renderCommunications: { id: 'preview-headphones', label: 'Bluetooth headset headphones' }
+  }
+}
+
 export function SettingsScreen({
   previewMode = false,
   theme,
@@ -56,7 +75,12 @@ export function SettingsScreen({
 }: Props): JSX.Element {
   const [page, setPage] = useState<'main' | 'advanced'>('main')
   const [prefs, setPrefs] = useState(loadPrefs)
-  const [devices, setDevices] = useState<{ id: string; label: string }[]>([])
+  const [devices, setDevices] = useState<{ id: string; label: string }[]>(() =>
+    previewMode ? [{ id: 'preview-headset-mic', label: 'Bluetooth headset microphone' }] : []
+  )
+  const [nativeEndpoints, setNativeEndpoints] = useState<AudioEndpointSnapshot | null>(() =>
+    previewMode ? PREVIEW_ENDPOINTS : null
+  )
   const [autoLaunch, setAutoLaunch] = useState<AutoLaunchStatus | null>(null)
   const [autoLaunchBusy, setAutoLaunchBusy] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
@@ -101,7 +125,7 @@ export function SettingsScreen({
       )
   }, [previewMode])
 
-  useEffect(() => {
+  const refreshDevices = useCallback((): void => {
     navigator.mediaDevices
       ?.enumerateDevices()
       .then((all) => {
@@ -116,12 +140,48 @@ export function SettingsScreen({
       .catch(() => setDevices([]))
   }, [])
 
+  useEffect(() => {
+    if (previewMode) return
+    refreshDevices()
+    const mediaDevices = navigator.mediaDevices
+    if (!mediaDevices?.addEventListener) return
+    mediaDevices.addEventListener('devicechange', refreshDevices)
+    return () => mediaDevices.removeEventListener('devicechange', refreshDevices)
+  }, [previewMode, refreshDevices])
+
+  useEffect(() => {
+    if (previewMode) return
+    let active = true
+    void window.api
+      ?.getAudioEndpointSnapshot?.()
+      .then((snapshot) => {
+        if (active) setNativeEndpoints(snapshot)
+      })
+      .catch(() => {
+        if (active) setNativeEndpoints(null)
+      })
+    const unsubscribe = window.api?.onAudioEndpointChanged?.((snapshot) => {
+      if (active) setNativeEndpoints(snapshot)
+    })
+    return () => {
+      active = false
+      unsubscribe?.()
+    }
+  }, [previewMode])
+
   const microphoneOptions = useMemo<SelectOption<string>[]>(
-    () => [
-      { value: '', label: 'Follow Windows communications device' },
-      ...devices.map((device) => ({ value: device.id, label: device.label }))
-    ],
+    () =>
+      devices.length > 0
+        ? devices.map((device) => ({ value: device.id, label: device.label }))
+        : [{ value: '', label: 'No microphones found' }],
     [devices]
+  )
+
+  const renderMismatch = Boolean(
+    nativeEndpoints?.endpoints.renderConsole &&
+      nativeEndpoints.endpoints.renderCommunications &&
+      nativeEndpoints.endpoints.renderConsole.id !==
+        nativeEndpoints.endpoints.renderCommunications.id
   )
 
   const updatePrefs = (changes: Partial<typeof prefs>): void => {
@@ -192,37 +252,66 @@ export function SettingsScreen({
             </h3>
             <Card className="!overflow-visible">
               <SettingRow
-                label="Microphone"
-                hint="Falls back to the system default if disconnected"
+                label="Audio routing"
+                hint="Recommended: use the same Windows communications devices as Teams. Choose Always use this microphone only for an intentional override."
               >
                 <SelectMenu
-                  ariaLabel="Microphone"
-                  value={
-                    prefs.micRoutingMode === 'pinned' ? prefs.pinnedMicDeviceId : ''
-                  }
-                  options={microphoneOptions}
-                  onChange={(deviceId) =>
+                  ariaLabel="Audio routing"
+                  value={prefs.micRoutingMode}
+                  options={ROUTING_OPTIONS}
+                  onChange={(micRoutingMode) =>
                     updatePrefs({
-                      micRoutingMode: deviceId ? 'pinned' : 'follow_communications',
-                      pinnedMicDeviceId: deviceId || prefs.pinnedMicDeviceId
+                      micRoutingMode,
+                      pinnedMicDeviceId:
+                        prefs.pinnedMicDeviceId || devices[0]?.id || ''
                     })
                   }
                   className="w-[224px] max-[560px]:w-full"
                 />
               </SettingRow>
-              <SettingRow
-                label="System audio"
-                hint="Captures remote participants in online meetings"
-              >
-                <span className="flex items-center gap-1.5 text-[14px] text-content-secondary">
-                  <CircleCheck
-                    size={15}
-                    className="text-[var(--color-status-ok)]"
-                    aria-hidden="true"
+              {prefs.micRoutingMode === 'pinned' && (
+                <SettingRow
+                  label="Pinned microphone"
+                  hint="Falls back to the current default if this device disconnects"
+                >
+                  <SelectMenu
+                    ariaLabel="Pinned microphone"
+                    value={prefs.pinnedMicDeviceId}
+                    options={microphoneOptions}
+                    onChange={(pinnedMicDeviceId) => updatePrefs({ pinnedMicDeviceId })}
+                    className="w-[224px] max-[560px]:w-full"
                   />
-                  Ready
-                </span>
+                </SettingRow>
+              )}
+              <SettingRow
+                label="Windows communications microphone"
+                hint="Notetaker follows this input in the recommended mode"
+              >
+                <EndpointValue
+                  label={nativeEndpoints?.endpoints.captureCommunications?.label ?? null}
+                />
               </SettingRow>
+              <SettingRow
+                label="Windows communications output"
+                hint="Teams and Windows default output should use this same device"
+              >
+                <EndpointValue
+                  label={nativeEndpoints?.endpoints.renderCommunications?.label ?? null}
+                />
+              </SettingRow>
+              {renderMismatch && (
+                <div className="flex items-start gap-2 border-t border-edge-tertiary py-2.5 text-[12px] text-content-warning">
+                  <AlertTriangle size={14} strokeWidth={1.75} className="mt-0.5 shrink-0" />
+                  <span>
+                    Windows default output differs from the communications output. Notetaker
+                    records the default output, so remote participants may be missed.
+                  </span>
+                </div>
+              )}
+              <div className="border-t border-edge-tertiary pt-2.5 text-[12px] text-content-tertiary">
+                In Teams, choose Computer audio and keep the microphone and speaker on system
+                default so Teams and Notetaker follow the same devices.
+              </div>
             </Card>
           </div>
 
@@ -646,5 +735,21 @@ function SettingRow({
       </div>
       <div className="shrink-0 max-[560px]:w-full max-[560px]:justify-self-start">{children}</div>
     </div>
+  )
+}
+
+function EndpointValue({ label }: { label: string | null }): JSX.Element {
+  return (
+    <span
+      title={label ?? 'Unavailable'}
+      className="flex max-w-[224px] items-center gap-1.5 text-[14px] text-content-secondary max-[560px]:max-w-full"
+    >
+      <CircleCheck
+        size={15}
+        className={label ? 'shrink-0 text-[var(--color-status-ok)]' : 'shrink-0 text-content-tertiary'}
+        aria-hidden="true"
+      />
+      <span className="truncate">{label ?? 'Routing unavailable'}</span>
+    </span>
   )
 }
