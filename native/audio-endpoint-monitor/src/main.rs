@@ -60,33 +60,51 @@ fn optional_endpoint(
     flow: EDataFlow,
     role: ERole,
     name: &str,
-) -> Option<AudioEndpoint> {
+) -> (Option<AudioEndpoint>, Option<String>) {
     match read_endpoint(enumerator, flow, role) {
-        Ok(endpoint) => Some(endpoint),
-        Err(error) => {
-            eprintln!("audio endpoint {name} unavailable: {error}");
-            None
-        }
+        Ok(endpoint) => (Some(endpoint), None),
+        Err(error) => (
+            None,
+            Some(format!("audio endpoint {name} unavailable: {error}")),
+        ),
     }
 }
 
-fn read_endpoints(enumerator: &IMMDeviceEnumerator) -> AudioEndpointSet {
-    AudioEndpointSet {
-        capture_console: optional_endpoint(enumerator, eCapture, eConsole, "capture-console"),
-        capture_communications: optional_endpoint(
-            enumerator,
-            eCapture,
-            eCommunications,
-            "capture-communications",
-        ),
-        render_console: optional_endpoint(enumerator, eRender, eConsole, "render-console"),
-        render_communications: optional_endpoint(
-            enumerator,
-            eRender,
-            eCommunications,
-            "render-communications",
-        ),
-    }
+fn read_endpoints(enumerator: &IMMDeviceEnumerator) -> (AudioEndpointSet, Vec<String>) {
+    let (capture_console, capture_console_error) =
+        optional_endpoint(enumerator, eCapture, eConsole, "capture-console");
+    let (capture_communications, capture_communications_error) = optional_endpoint(
+        enumerator,
+        eCapture,
+        eCommunications,
+        "capture-communications",
+    );
+    let (render_console, render_console_error) =
+        optional_endpoint(enumerator, eRender, eConsole, "render-console");
+    let (render_communications, render_communications_error) = optional_endpoint(
+        enumerator,
+        eRender,
+        eCommunications,
+        "render-communications",
+    );
+    let errors = [
+        capture_console_error,
+        capture_communications_error,
+        render_console_error,
+        render_communications_error,
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    (
+        AudioEndpointSet {
+            capture_console,
+            capture_communications,
+            render_console,
+            render_communications,
+        },
+        errors,
+    )
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -98,7 +116,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut emitter = SnapshotEmitter::default();
 
     loop {
-        if let Some(snapshot) = emitter.observe(read_endpoints(&enumerator)) {
+        let (endpoints, errors) = read_endpoints(&enumerator);
+        if let Some(snapshot) = emitter.observe(endpoints) {
+            for error in errors {
+                eprintln!("{error}");
+            }
             serde_json::to_writer(&mut output, &snapshot)?;
             output.write_all(b"\n")?;
             output.flush()?;

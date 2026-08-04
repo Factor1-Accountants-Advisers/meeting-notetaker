@@ -362,6 +362,22 @@ async function verifyMicFollowsDeviceChange(): Promise<void> {
     'the comparison-only candidate stream is released'
   )
 
+  // A silence-triggered replacement has not proven recovery yet. Keep the
+  // warning visible until the stable analyser actually observes signal.
+  Object.assign((controller as unknown as { status: { mic: string } }).status, {
+    mic: 'silent'
+  })
+  await (
+    controller as unknown as {
+      reacquireMic: (forceReplace: boolean, reason: string) => Promise<void>
+    }
+  ).reacquireMic(true, 'silence recovery')
+  assert.equal(
+    controller.getStatus().mic,
+    'silent',
+    'silence recovery keeps the warning until the analyser observes real signal'
+  )
+
   const result = await controller.stop(1_000)
   assert.ok(result?.blob.size, 'mic audio survives to stop after a device swap')
 }

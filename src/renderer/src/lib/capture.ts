@@ -802,7 +802,10 @@ export class CaptureController {
       })
       this.status = {
         ...this.status,
-        mic: 'active',
+        // A fresh stream is not proof that a silent route recovered. The
+        // stable analyser owns that transition and clears the warning only
+        // after it observes real signal.
+        mic: reason === 'silence recovery' ? this.status.mic : 'active',
         ...this.micStatusFor(candidateTrack, route)
       }
       this.statusListener?.({ ...this.status })

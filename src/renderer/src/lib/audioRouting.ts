@@ -43,6 +43,17 @@ function audioInputs(devices: readonly MediaDeviceInfo[]): readonly MediaDeviceI
   return devices.filter((device) => device.kind === 'audioinput')
 }
 
+/** Keep a valid pin or choose the first physical input, never a virtual alias. */
+export function chooseAvailablePinnedMic(
+  currentDeviceId: string,
+  availableDeviceIds: readonly string[]
+): string {
+  const physicalIds = availableDeviceIds.filter(
+    (deviceId) => deviceId && deviceId !== 'default' && deviceId !== 'communications'
+  )
+  return physicalIds.includes(currentDeviceId) ? currentDeviceId : (physicalIds[0] ?? '')
+}
+
 /** Resolve a native Windows communications endpoint into Chromium constraints. */
 export function resolveMicRoute(
   prefs: Prefs,

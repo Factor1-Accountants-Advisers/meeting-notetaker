@@ -17,6 +17,7 @@ import {
 import { Card } from '@renderer/components/ui/Card'
 import { SelectMenu, type SelectOption } from '@renderer/components/ui/SelectMenu'
 import { loadPrefs, savePrefs, type MicRoutingMode } from '@renderer/lib/prefs'
+import { chooseAvailablePinnedMic } from '@renderer/lib/audioRouting'
 import type { Theme } from '@renderer/lib/theme'
 import type { AudioEndpointSnapshot } from '../../../shared/audio-endpoints'
 
@@ -131,7 +132,13 @@ export function SettingsScreen({
       .then((all) => {
         const unique = new Map<string, string>()
         all
-          .filter((device) => device.kind === 'audioinput' && device.deviceId)
+          .filter(
+            (device) =>
+              device.kind === 'audioinput' &&
+              device.deviceId &&
+              device.deviceId !== 'default' &&
+              device.deviceId !== 'communications'
+          )
           .forEach((device, index) => {
             unique.set(device.deviceId, device.label || `Microphone ${index + 1}`)
           })
@@ -262,8 +269,10 @@ export function SettingsScreen({
                   onChange={(micRoutingMode) =>
                     updatePrefs({
                       micRoutingMode,
-                      pinnedMicDeviceId:
-                        prefs.pinnedMicDeviceId || devices[0]?.id || ''
+                      pinnedMicDeviceId: chooseAvailablePinnedMic(
+                        prefs.pinnedMicDeviceId,
+                        devices.map((device) => device.id)
+                      )
                     })
                   }
                   className="w-[224px] max-[560px]:w-full"

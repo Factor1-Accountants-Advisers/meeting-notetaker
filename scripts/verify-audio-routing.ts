@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 
-import { resolveMicRoute } from '../src/renderer/src/lib/audioRouting'
+import { chooseAvailablePinnedMic, resolveMicRoute } from '../src/renderer/src/lib/audioRouting'
 import { migratePrefs } from '../src/renderer/src/lib/prefs'
 import type { AudioEndpointSnapshot } from '../src/shared/audio-endpoints'
 
@@ -46,6 +46,17 @@ const devices = [
   { kind: 'audioinput', deviceId: 'usb-id', label: 'USB desk microphone' },
   { kind: 'audiooutput', deviceId: 'speaker-id', label: 'Jabra Link 380' }
 ] as MediaDeviceInfo[]
+
+assert.equal(
+  chooseAvailablePinnedMic('usb-id', devices.map((device) => device.deviceId)),
+  'usb-id',
+  'an available retained manual choice stays selected'
+)
+assert.equal(
+  chooseAvailablePinnedMic('stale-id', devices.map((device) => device.deviceId)),
+  'jabra-browser-id',
+  'entering manual mode cannot display one device while retaining a stale ID'
+)
 
 const communicationsRoute = resolveMicRoute(legacyDefault, snapshot, devices)
 assert.deepEqual(communicationsRoute.audioConstraints, {
