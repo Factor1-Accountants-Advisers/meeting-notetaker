@@ -1012,7 +1012,11 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   Artifact Signing checks. An unpacked local package contained and successfully
   ran the helper; it emitted the real four-endpoint snapshot. Local signature
   status was correctly `NotSigned`; CI is responsible for the private-trust
-  signature and timestamp.
+  signature and timestamp. The first `v2.0.16` release run stopped before
+  publication when that assertion proved electron-builder bypasses its signing
+  transformer for a single-file `extraResources` mapping. The mapping now uses
+  a one-file filtered directory copy, which follows electron-builder's signing
+  path; the packaging verifier enforces that regression-sensitive shape.
 - Verification: Rust tests **3 passed**; Graph, recording-control, capture,
   endpoint-protocol, endpoint-service, routing, and routing-UI fixtures passed;
   node/web typechecks and the production Electron build passed; unpacked helper

@@ -26,8 +26,12 @@ extraResources:
   - from: resources/tray-icon.png
     to: tray-icon.png
   # Native Core Audio observer. Kept outside ASAR so Electron can spawn it.
-  - from: native/audio-endpoint-monitor/target/release/notetaker-audio-endpoints.exe
-    to: audio/notetaker-audio-endpoints.exe
+  # Use a filtered directory copy: electron-builder 26 bypasses its Windows
+  # signing transformer for single-file extraResources mappings.
+  - from: native/audio-endpoint-monitor/target/release
+    to: audio
+    filter:
+      - notetaker-audio-endpoints.exe
 extraMetadata:
   SliceVersion: 1.0.0
 win:

@@ -13,11 +13,14 @@ if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) {
 }
 
 $config = Get-Content -LiteralPath $builderConfig -Raw
-if ($config -notmatch 'from:\s*native/audio-endpoint-monitor/target/release/notetaker-audio-endpoints\.exe') {
-  throw 'electron-builder.yml does not map the release audio endpoint helper.'
+if ($config -notmatch 'from:\s*native/audio-endpoint-monitor/target/release\s') {
+  throw 'electron-builder.yml must map the helper release directory so its signing transformer runs.'
 }
-if ($config -notmatch 'to:\s*audio/notetaker-audio-endpoints\.exe') {
-  throw 'electron-builder.yml does not package the helper at resources/audio/notetaker-audio-endpoints.exe.'
+if ($config -notmatch 'to:\s*audio\s') {
+  throw 'electron-builder.yml does not map the helper into resources/audio.'
+}
+if ($config -notmatch '(?ms)filter:\s*\r?\n\s*-\s*notetaker-audio-endpoints\.exe\s') {
+  throw 'electron-builder.yml must filter the helper directory to notetaker-audio-endpoints.exe.'
 }
 
 if (-not $SkipPackagedCheck -and -not (Test-Path -LiteralPath $packagedHelper -PathType Leaf)) {
