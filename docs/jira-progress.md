@@ -1022,3 +1022,47 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   preserve item ids and permissions but change `webUrl`, so
   `sharepoint_web_url` values stored on already-delivered meetings now point
   at the old paths. Jira was not changed.
+
+## 5 Aug 2026 — Central people directory: empty attendee-dropdown fix
+
+- [x] Root cause (diagnosed against the live install): the manual-recording
+  attendee dropdown filters to `enrollment === 'enrolled'`
+  (`AttendeePicker.tsx`), but `GET /people` derived enrolment from the LOCAL
+  `voiceprints.json` registry only — post-Slice-2 every machine's people
+  store held just the signed-in "me" with `enrolled=false`, so the dropdown
+  was empty fleet-wide (live probe: `/people` returned exactly one record).
+- [x] Storage API (branch `feature/voiceprint-directory`, commits ec361d3 +
+  1a714e8 — **merge = deploy, Joseph's call**): new non-admin
+  `GET /api/v1/voiceprints/directory` returning `{email, display_name}` of
+  ACTIVE enrolments to any authenticated principal; registered ahead of the
+  `/voiceprints/{person_oid}` catch-all (the red phase reproduced the 403
+  shadowing); active-only, has-email-only, sorted, never oids/timestamps/
+  voiceprint material; reads not audited (matches admin list). Contract doc
+  §5 updated + mirrored here byte-for-byte. 238 tests + ruff green.
+- [x] Desktop backend: `StorageApiClient.list_directory` seam (Rest:
+  `allow_not_found` → `StorageApiUnavailable` so an old server degrades, 5s
+  timeout so a hung central API can never drag `GET /people` past the
+  proxy's 15s GET abort and take the LOCAL list down; stub enumerates its
+  file-backed records). `list_people` merges the directory when consultable
+  (stub mode always; Rest only with oid+token headers), authoritative for
+  `centrally_enrolled` on success (set + clear), never removes people,
+  fail-soft to the local list on any `StorageApiError`.
+  `test_people_directory.py` (8 tests, written red-first);
+  `test_seeded_enrollment_sync.py` gained a stub reset (its bare
+  `list_people()` now exercises the merge).
+- [x] Desktop main/renderer: `GET /api/v1/people` added to `isStorageRoute`
+  (single switch for storage-token + email/oid injection, verified by
+  `verify:storage-cutover`); `PersonEnrollmentDto.centrally_enrolled`;
+  `enrollmentState` now `enrolled OR centrally_enrolled` (exported;
+  `reenrollment_required` still wins). `verify:ad-hoc-attendees` extended
+  red-first (central DTO maps to 'enrolled' and appears in suggestions).
+- [x] Verification: desktop backend **341 tests** (sole failure = the known
+  pre-existing `test_stub_serializes_concurrent_exports_for_one_meeting`
+  flake, which also fails on unchanged code); `verify:ad-hoc-attendees`,
+  `verify:storage-cutover`, `typecheck`, `build`, `git diff --check` all
+  green. Storage-api: 238 + ruff green.
+- [ ] Live smoke after the storage-api branch deploys: manual-recording
+  dropdown lists centrally enrolled colleagues; against the old server the
+  app behaves exactly as before (one warn line in the backend log).
+  Plan: `docs/superpowers/plans/2026-08-05-central-people-directory.md`
+  (reviewed, 2 rounds). Ships in desktop v2.0.20.

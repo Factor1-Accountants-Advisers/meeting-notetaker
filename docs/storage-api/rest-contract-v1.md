@@ -6,7 +6,9 @@ was implemented under IN-377 and verified live on 23 July 2026. The IN-378
 meeting-candidate operation was deployed and verified live on 24 July 2026.
 The additive IN-381 event taxonomy and administrator audit-read operation are
 implemented. The IN-380/IN-382 administrator lifecycle operations described
-below are implemented on their feature branch and are not deployed. The section 7
+below are implemented on their feature branch and are not deployed. The
+additive section 5 staff directory operation (5 Aug 2026) is implemented on
+its feature branch and is not yet deployed. The section 7
 meeting JSON/audio delivery endpoints were ratified and implemented under
 IN-386 on their feature branch and are not yet deployed. Sections marked
 "reserved" describe future work only.
@@ -266,6 +268,28 @@ Lifecycle data writes and audit appends are separate operations. If the data
 write succeeds and the audit append fails, the request returns 503; retrying
 disable is safe and creates the required audit event. Existing audit entries
 are never mutated or deleted.
+
+### `GET /api/v1/voiceprints/directory` — staff directory (5 Aug 2026)
+
+Minimal-disclosure directory of colleagues holding an **active** central
+voiceprint, for the desktop app's attendee suggestions. Available to **any
+authenticated principal** (no role required) — the deliberate exception to
+the no-non-admin-enumeration stance, bounded to the two fields the picker UI
+displays anyway:
+
+```json
+{ "items": [ { "email": "amy@factor1.com.au", "display_name": "Amy Active" } ] }
+```
+
+- Active records only; records without a usable email are omitted.
+- Emails are normalised lowercase; items sorted by `display_name` then
+  `email` (casefold).
+- NEVER includes oids, lifecycle timestamps, sample sources, counts, or
+  voiceprint material — all of that remains behind `StorageApi.Admin`.
+- Reads are not audit-logged (matches the admin list).
+- Registered before `GET /api/v1/voiceprints/{person_oid}` — the path would
+  otherwise be captured as `person_oid="directory"` (same ordering constraint
+  as `audit-events`).
 
 ### `POST /api/v1/voiceprints/meeting-candidates` — IN-378
 
