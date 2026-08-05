@@ -11,11 +11,16 @@ import unittest
 from app import store
 from app.routers.people import ensure_current_staff, list_people
 from app.schemas import CurrentUserRequest
+from app.services import storage_api
 from app.services.voiceprints import Voiceprint, get_voiceprint_repository
 
 
 class SeededEnrollmentSyncTests(unittest.TestCase):
     def setUp(self):
+        # list_people() now merges the stub central directory in stub mode
+        # (5 Aug 2026) — start from clean stub state so records leaked by
+        # other suites can't make this order-dependent.
+        storage_api.reset_stub_for_tests()
         self._people_backup = list(store.PEOPLE)
         store.PEOPLE[:] = []
         get_voiceprint_repository().enroll(

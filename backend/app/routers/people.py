@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import binascii
+import logging
 from datetime import datetime, timezone
 from typing import Annotated
 
@@ -12,11 +13,14 @@ from app.schemas import CurrentUserRequest, EnrollRequest, EnrolmentStatus, Pers
 from app.services.pyannote_client import PyannoteAIClient, PyannoteAIError, PyannotePollConfig
 from app.services.storage_api import (
     CentralEnrolment,
+    DirectoryEntry,
     StorageApiError,
     central_enrolment_required,
     get_storage_api_client,
 )
 from app.services.voiceprints import Voiceprint, get_voiceprint_repository
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/people", tags=["people"])
 
@@ -67,11 +71,66 @@ def _sync_people_with_voiceprint_registry() -> None:
         store.save_snapshot()
 
 
+def _merge_central_directory(entries: list[DirectoryEntry]) -> None:
+    """Fold the central directory into the people store.
+
+    A successful fetch is authoritative for the ``centrally_enrolled`` flag:
+    set for listed emails, cleared for unlisted ones (voiceprint disabled or
+    deleted upstream). People are never REMOVED — local records and the
+    signed-in "me" must survive central hiccups and offboarding alike. The
+    merge is a read-projection of the central store (whose own writes are
+    audited server-side), so it deliberately writes no local audit entries.
+    """
+    listed = {entry.email: entry for entry in entries}
+    changed = False
+    for person in store.PEOPLE:
+        should = person.employee_id in listed
+        if person.centrally_enrolled != should:
+            person.centrally_enrolled = should
+            changed = True
+    for email, entry in listed.items():
+        if not any(p.employee_id == email for p in store.PEOPLE):
+            store.PEOPLE.append(
+                PersonEnrollment(
+                    employee_id=email,
+                    display_name=entry.display_name,
+                    role="Factor1 staff",
+                    enrolled=False,
+                    model_version=None,
+                    reenrollment_required=False,
+                    centrally_enrolled=True,
+                )
+            )
+            changed = True
+    if changed:
+        store.save_snapshot()
+
+
 @router.get("", response_model=list[PersonEnrollment])
-async def list_people() -> list[PersonEnrollment]:
+async def list_people(
+    user_oid: UserOid = None,
+    storage_token: StorageToken = None,
+) -> list[PersonEnrollment]:
     """Staff with enrollment status. Clients/externals are never listed here
-    (enrollment is staff-only, requirements §4.2)."""
+    (enrollment is staff-only, requirements §4.2).
+
+    Since the Slice-2 central cutover, "known" colleagues live in the central
+    voiceprint store, not the per-machine registry — merge the central
+    directory in when it can be consulted, fail-soft to the local list when
+    it can't (signed out, old server, central outage). Empty dropdown fix,
+    5 Aug 2026.
+    """
     _sync_people_with_voiceprint_registry()
+    required = central_enrolment_required()
+    token = (storage_token or "").strip()
+    oid = (user_oid or "").strip()
+    if not required or (oid and token):
+        try:
+            _merge_central_directory(
+                get_storage_api_client().list_directory(token or None)
+            )
+        except StorageApiError as exc:
+            logger.warning("central directory unavailable — serving local people list: %s", exc)
     return store.PEOPLE
 
 

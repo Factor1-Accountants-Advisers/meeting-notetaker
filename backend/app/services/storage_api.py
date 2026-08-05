@@ -86,6 +86,19 @@ class VoiceprintAdminListResponse(BaseModel):
     items: list[VoiceprintAdminRecord]
 
 
+class DirectoryEntry(BaseModel):
+    """Minimal-disclosure directory row (contract §5 staff directory,
+    5 Aug 2026): active enrolments as email + display name only, for the
+    attendee-suggestions dropdown."""
+
+    email: str
+    display_name: str
+
+
+class VoiceprintDirectoryResponse(BaseModel):
+    items: list[DirectoryEntry]
+
+
 class VoiceprintAdminActionResponse(BaseModel):
     record: VoiceprintAdminRecord
     audit_event_id: str
@@ -168,6 +181,7 @@ def _meeting_lock(meeting_id: UUID) -> threading.Lock:
 class StorageApiClient(Protocol):
     def register_voiceprint(self, enrolment: CentralEnrolment, access_token: str | None) -> CentralEnrolment: ...
     def get_enrolment(self, person_id: str, access_token: str | None) -> CentralEnrolment | None: ...
+    def list_directory(self, access_token: str | None) -> list[DirectoryEntry]: ...
     def list_voiceprints(self, access_token: str | None) -> VoiceprintAdminListResponse: ...
     def disable_voiceprint(self, person_id: str, access_token: str | None) -> VoiceprintAdminActionResponse: ...
     def enable_voiceprint(self, person_id: str, access_token: str | None) -> VoiceprintAdminActionResponse: ...
@@ -265,6 +279,21 @@ class StubStorageApiClient:
     def get_enrolment(self, person_id: str, access_token: str | None) -> CentralEnrolment | None:
         raw = self._load().get(person_id)
         return CentralEnrolment.model_validate(raw) if raw is not None else None
+
+    def list_directory(self, access_token: str | None) -> list[DirectoryEntry]:
+        entries = []
+        for raw in self._load().values():
+            try:
+                record = CentralEnrolment.model_validate(raw)
+            except pydantic.ValidationError:
+                continue
+            if record.status != "active" or not record.email:
+                continue
+            entries.append(
+                DirectoryEntry(email=record.email.lower(), display_name=record.display_name)
+            )
+        entries.sort(key=lambda entry: (entry.display_name.casefold(), entry.email))
+        return entries
 
     @staticmethod
     def _admin_record(record: CentralEnrolment) -> VoiceprintAdminRecord:
@@ -524,6 +553,7 @@ class RestStorageApiClient:
         payload: dict | None = None,
         *,
         allow_not_found: bool = False,
+        timeout_s: int = 30,
     ):
         if not access_token:
             raise StorageApiUnavailable(
@@ -540,7 +570,7 @@ class RestStorageApiClient:
             },
         )
         try:
-            with self._opener(req, timeout=30) as res:
+            with self._opener(req, timeout=timeout_s) as res:
                 text = res.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             if exc.code == 404 and allow_not_found:
@@ -585,6 +615,28 @@ class RestStorageApiClient:
             return CentralEnrolment.model_validate(raw)
         except pydantic.ValidationError as exc:
             raise StorageApiContractError("storage API returned a malformed record: enrolment lookup response failed validation") from exc
+
+    def list_directory(self, access_token: str | None) -> list[DirectoryEntry]:
+        # allow_not_found: an old deployed server without the endpoint must
+        # read as "temporarily can't consult" (callers degrade to the local
+        # list), not a rejection. timeout_s=5: the main-process proxy aborts
+        # GETs at 15s, so a hung central API must never take the whole
+        # /people response — and the LOCAL list with it — down.
+        raw = self._request(
+            "GET",
+            "/api/v1/voiceprints/directory",
+            access_token,
+            allow_not_found=True,
+            timeout_s=5,
+        )
+        if raw is None:
+            raise StorageApiUnavailable("directory endpoint not deployed")
+        try:
+            return VoiceprintDirectoryResponse.model_validate(raw).items
+        except pydantic.ValidationError as exc:
+            raise StorageApiContractError(
+                "storage API returned a malformed voiceprint directory"
+            ) from exc
 
     def list_voiceprints(
         self, access_token: str | None
