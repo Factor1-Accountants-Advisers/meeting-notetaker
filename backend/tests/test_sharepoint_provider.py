@@ -210,10 +210,226 @@ class SharePointProviderTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(failed, [])
 
-    def test_folder_path_default_is_library_root(self):
+    def test_folder_path_default_is_nested_transcriptions_folder(self):
+        # 29 Jul 2026 Teams decision (David Ahlhaus) superseding IN-387's
+        # flat-root design: per-user folders live inside the library's
+        # existing nested "Transcriptions" folder.
         from app.config import Settings
 
-        self.assertEqual(Settings().sharepoint_folder_path, "")
+        self.assertEqual(Settings().sharepoint_folder_path, "Transcriptions")
+
+    def test_safe_owner_folder_sanitizes_display_name(self):
+        self.assertEqual(sharepoint.safe_owner_folder("Joseph Guerrero"), "Joseph Guerrero")
+        # Same character policy as the artifact filenames.
+        self.assertEqual(sharepoint.safe_owner_folder("Joseph / Guerrero"), "Joseph - Guerrero")
+        self.assertEqual(sharepoint.safe_owner_folder("  D.Vučetić  "), "D.Vu-eti")
+
+    def test_safe_owner_folder_falls_back_when_name_is_unusable(self):
+        self.assertEqual(sharepoint.safe_owner_folder(""), "Unknown user")
+        self.assertEqual(sharepoint.safe_owner_folder("..."), "Unknown user")
+
+    async def test_graph_provider_ensures_owner_folder_then_uploads_into_it(self):
+        meeting = Meeting(
+            id=uuid4(),
+            title="Owner folder upload",
+            source=MeetingSource.online,
+            owner_id="joseph@example.com",
+            created_at=datetime.now(timezone.utc),
+        )
+        calls = []
+
+        def fake_urlopen(req, timeout=0):
+            calls.append(
+                {
+                    "url": req.full_url,
+                    "method": req.get_method(),
+                    "body": json.loads(req.data.decode("utf-8")) if req.get_method() == "POST" else None,
+                }
+            )
+            if req.get_method() == "POST":
+                return _Response({"id": "folder-1", "name": "Joseph Guerrero"})
+            return _Response()
+
+        provider = GraphSharePointProvider("drive-123", "Transcriptions")
+        with patch("urllib.request.urlopen", fake_urlopen):
+            await provider.save_transcript(
+                meeting=meeting,
+                filename="minutes.txt",
+                content="transcript",
+                access_token="token",
+                owner_folder="Joseph Guerrero",
+            )
+
+        self.assertEqual(
+            [call["method"] for call in calls],
+            ["POST", "PUT"],
+            "folder must be ensured before the upload",
+        )
+        self.assertEqual(
+            calls[0]["url"],
+            "https://graph.microsoft.com/v1.0/drives/drive-123/root:/Transcriptions:/children",
+        )
+        self.assertEqual(calls[0]["body"]["name"], "Joseph Guerrero")
+        self.assertEqual(calls[0]["body"]["folder"], {})
+        self.assertEqual(calls[0]["body"]["@microsoft.graph.conflictBehavior"], "fail")
+        self.assertEqual(
+            calls[1]["url"],
+            "https://graph.microsoft.com/v1.0/drives/drive-123/root:/Transcriptions/Joseph%20Guerrero/minutes.txt:/content",
+        )
+
+    async def test_graph_provider_ensures_owner_folder_once_per_delivery(self):
+        # One delivery = one provider instance uploading transcript + summary;
+        # the second upload must not re-issue the folder-create call.
+        meeting = Meeting(
+            id=uuid4(),
+            title="Two artifacts",
+            source=MeetingSource.online,
+            owner_id="joseph@example.com",
+            created_at=datetime.now(timezone.utc),
+        )
+        methods = []
+
+        def fake_urlopen(req, timeout=0):
+            methods.append(req.get_method())
+            if req.get_method() == "POST":
+                return _Response({"id": "folder-1"})
+            return _Response()
+
+        provider = GraphSharePointProvider("drive-123", "Transcriptions")
+        with patch("urllib.request.urlopen", fake_urlopen):
+            for filename in ("a - Transcript.md", "a - Summary.md"):
+                await provider.save_transcript(
+                    meeting=meeting,
+                    filename=filename,
+                    content="content",
+                    access_token="token",
+                    owner_folder="Joseph Guerrero",
+                )
+
+        self.assertEqual(methods, ["POST", "PUT", "PUT"])
+
+    async def test_graph_provider_treats_existing_owner_folder_as_success(self):
+        import io
+        import urllib.error
+
+        meeting = Meeting(
+            id=uuid4(),
+            title="Existing folder",
+            source=MeetingSource.online,
+            owner_id="joseph@example.com",
+            created_at=datetime.now(timezone.utc),
+        )
+        methods = []
+
+        def fake_urlopen(req, timeout=0):
+            methods.append(req.get_method())
+            if req.get_method() == "POST":
+                raise urllib.error.HTTPError(
+                    req.full_url,
+                    409,
+                    "Conflict",
+                    {},
+                    io.BytesIO(b'{"error":{"code":"nameAlreadyExists"}}'),
+                )
+            return _Response()
+
+        provider = GraphSharePointProvider("drive-123", "Transcriptions")
+        with patch("urllib.request.urlopen", fake_urlopen):
+            result = await provider.save_transcript(
+                meeting=meeting,
+                filename="minutes.txt",
+                content="transcript",
+                access_token="token",
+                owner_folder="Joseph Guerrero",
+            )
+
+        self.assertEqual(methods, ["POST", "PUT"])
+        self.assertEqual(result.item_id, "item-abc-123")
+
+    async def test_graph_provider_owner_folder_create_failure_fails_delivery(self):
+        import io
+        import urllib.error
+
+        meeting = Meeting(
+            id=uuid4(),
+            title="Folder create denied",
+            source=MeetingSource.online,
+            owner_id="joseph@example.com",
+            created_at=datetime.now(timezone.utc),
+        )
+
+        def fake_urlopen(req, timeout=0):
+            if req.get_method() == "POST":
+                raise urllib.error.HTTPError(
+                    req.full_url, 403, "Forbidden", {}, io.BytesIO(b"{}")
+                )
+            raise AssertionError("upload must not run when the folder cannot be ensured")
+
+        provider = GraphSharePointProvider("drive-123", "Transcriptions")
+        with patch("urllib.request.urlopen", fake_urlopen):
+            with self.assertRaises(urllib.error.HTTPError):
+                await provider.save_transcript(
+                    meeting=meeting,
+                    filename="minutes.txt",
+                    content="transcript",
+                    access_token="token",
+                    owner_folder="Joseph Guerrero",
+                )
+
+    async def test_graph_provider_without_owner_folder_keeps_flat_upload(self):
+        # Backward-compatible path: no owner folder → no folder-create call.
+        meeting = Meeting(
+            id=uuid4(),
+            title="Flat upload",
+            source=MeetingSource.online,
+            owner_id="joseph@example.com",
+            created_at=datetime.now(timezone.utc),
+        )
+        calls = []
+
+        def fake_urlopen(req, timeout=0):
+            calls.append({"method": req.get_method(), "url": req.full_url})
+            return _Response()
+
+        provider = GraphSharePointProvider("drive-123", "Transcriptions")
+        with patch("urllib.request.urlopen", fake_urlopen):
+            await provider.save_transcript(
+                meeting=meeting,
+                filename="minutes.txt",
+                content="transcript",
+                access_token="token",
+            )
+
+        self.assertEqual(
+            calls,
+            [
+                {
+                    "method": "PUT",
+                    "url": "https://graph.microsoft.com/v1.0/drives/drive-123/root:/Transcriptions/minutes.txt:/content",
+                }
+            ],
+        )
+
+    async def test_local_provider_writes_into_owner_subfolder(self):
+        meeting = Meeting(
+            id=uuid4(),
+            title="Local owner folder",
+            source=MeetingSource.in_person,
+            owner_id="joseph@example.com",
+            created_at=datetime.now(timezone.utc),
+        )
+        provider = sharepoint.LocalSharePointProvider()
+
+        result = await provider.save_transcript(
+            meeting=meeting,
+            filename="local-owner-test.md",
+            content="content",
+            owner_folder="Joseph Guerrero",
+        )
+
+        expected = sharepoint.LOCAL_SHAREPOINT_DIR / "Joseph Guerrero" / "local-owner-test.md"
+        self.assertTrue(expected.exists())
+        self.assertEqual(result.item_id, str(expected))
 
     def test_safe_transcript_filename_is_stable_across_retries(self):
         # IN-387 final review bug: filename must not depend on wall-clock

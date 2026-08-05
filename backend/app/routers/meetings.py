@@ -55,6 +55,7 @@ from app.services.meeting_export import refresh_meeting_export
 from app.services.blob_delivery import kick_blob_delivery
 from app.services.sharepoint import (
     get_sharepoint_provider,
+    safe_owner_folder,
     safe_summary_filename,
     safe_transcript_filename,
 )
@@ -665,11 +666,12 @@ async def save_transcript_to_sharepoint(
 ) -> Meeting:
     """Save separate transcript and summary artifacts to SharePoint.
 
-    The transcript keeps the established ``Title-YYYY-MM-DD.txt`` filename;
-    the summary and action items use ``Title-YYYY-MM-DD-summary.txt``. Both
-    uploads and both view grants form one delivery attempt. The source outputs
-    are never modified or deleted by delivery failures; failures only update
-    SharePoint status so the user can retry the complete delivery.
+    Files use the IN-385 ``YYYY-MM-DD Title - Transcript.md`` /
+    ``- Summary.md`` names and land in the actor's per-user folder under the
+    library's nested ``Transcriptions`` folder (created on first delivery).
+    Both uploads and both view grants form one delivery attempt. The source
+    outputs are never modified or deleted by delivery failures; failures only
+    update SharePoint status so the user can retry the complete delivery.
     """
     require(meeting_id, actor, AccessRole.owner)
     meeting, participants, segments, summary, action_items = _delivery_artifacts(meeting_id)
@@ -734,6 +736,10 @@ async def save_transcript_to_sharepoint(
                 filename=filename,
                 content=content,
                 access_token=graph_token or None,
+                # Per-user folder (David A, 29 Jul 2026): the signed-in
+                # actor is the recording owner — endpoint access already
+                # requires AccessRole.owner.
+                owner_folder=safe_owner_folder(actor),
             )
             for ungranted in await provider.grant_view(
                 item_id=upload.item_id,

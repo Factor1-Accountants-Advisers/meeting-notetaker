@@ -57,7 +57,9 @@ class Settings(BaseSettings):
     # (provisioned by David A, 30 Jun 2026; discovered 29 Jul 2026). Safe to
     # commit — this is a non-secret identifier like the Storage API URL.
     sharepoint_drive_id: str = "b!its7p8x1KUWVWYJnCLxVhp1w_W9IycxPs8OjtR0Tbd_9RFZUGE0fTJ_8PkmnBf55"
-    sharepoint_folder_path: str = ""
+    # Uploads land in per-owner folders under this nested library folder
+    # (David A, 29 Jul 2026 — supersedes IN-387's flat library root).
+    sharepoint_folder_path: str = "Transcriptions"
 
     # IN-383 company context file that enriches meeting summaries. Both empty
     # (default) = local stand-in mode: backend/var/context/company-context.md

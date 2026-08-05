@@ -43,6 +43,7 @@ class SharePointProvider(Protocol):
         filename: str,
         content: str,
         access_token: str | None = None,
+        owner_folder: str = "",
     ) -> SharePointUploadResult:
         ...
 
@@ -81,6 +82,20 @@ def safe_summary_filename(title: str, created_at: datetime) -> str:
     return f"{_filename_basis(title, created_at)} - Summary.md"
 
 
+def safe_owner_folder(owner: str) -> str:
+    """Folder name for the recording owner's per-user SharePoint folder.
+
+    One folder per user inside the library's nested ``Transcriptions``
+    folder, created on first delivery (David Ahlhaus, 29 Jul 2026 —
+    supersedes the IN-387 flat-root design). Uses the same character policy
+    as the artifact filenames so folder and file naming stay consistent.
+    The owner is the signed-in actor's display name (``X-MN-User``), which
+    matches the AAD display name SharePoint shows as the file author.
+    """
+    cleaned = re.sub(r"[^A-Za-z0-9_. -]+", "-", owner or "").strip(" .-")
+    return cleaned[:60] if cleaned else "Unknown user"
+
+
 def _filename_basis(title: str, created_at: datetime) -> str:
     """Shared ``YYYY-MM-DD Title`` stem for the IN-385 artifact pair.
 
@@ -106,9 +121,11 @@ class LocalSharePointProvider:
         filename: str,
         content: str,
         access_token: str | None = None,
+        owner_folder: str = "",
     ) -> SharePointUploadResult:
-        LOCAL_SHAREPOINT_DIR.mkdir(parents=True, exist_ok=True)
-        path = LOCAL_SHAREPOINT_DIR / filename
+        target_dir = LOCAL_SHAREPOINT_DIR / owner_folder if owner_folder else LOCAL_SHAREPOINT_DIR
+        target_dir.mkdir(parents=True, exist_ok=True)
+        path = target_dir / filename
         path.write_text(content, encoding="utf-8")
         logger.info("local SharePoint artifact saved for %s: %s", meeting.id, path)
         return SharePointUploadResult(web_url=path.as_uri(), item_id=str(path))
@@ -130,6 +147,10 @@ class GraphSharePointProvider:
     def __init__(self, drive_id: str, folder_path: str) -> None:
         self._drive_id = drive_id
         self._folder_path = folder_path.strip("/")
+        # Owner folders already ensured by this provider instance (one
+        # instance = one delivery attempt, so transcript + summary share
+        # a single folder-create call).
+        self._ensured_folders: set[str] = set()
 
     async def save_transcript(
         self,
@@ -138,10 +159,14 @@ class GraphSharePointProvider:
         filename: str,
         content: str,
         access_token: str | None = None,
+        owner_folder: str = "",
     ) -> SharePointUploadResult:
         if not access_token:
             raise ValueError("SharePoint save requires a delegated Graph token")
-        upload_path = f"{self._folder_path}/{filename}" if self._folder_path else filename
+        if owner_folder:
+            self._ensure_owner_folder(owner_folder, access_token)
+        segments = [part for part in (self._folder_path, owner_folder) if part]
+        upload_path = "/".join([*segments, filename]) if segments else filename
         quoted_path = urllib.parse.quote(upload_path)
         url = f"{GRAPH_DRIVE_BASE}/{self._drive_id}/root:/{quoted_path}:/content"
         req = urllib.request.Request(
@@ -161,8 +186,47 @@ class GraphSharePointProvider:
         item_id = body.get("id")
         if not isinstance(item_id, str) or not item_id:
             raise RuntimeError("Graph upload completed but returned no item id")
-        logger.info("SharePoint artifact saved for %s: %s", meeting.id, filename)
+        logger.info("SharePoint artifact saved for %s: %s", meeting.id, upload_path)
         return SharePointUploadResult(web_url=web_url, item_id=item_id)
+
+    def _ensure_owner_folder(self, owner_folder: str, access_token: str) -> None:
+        """Create the per-owner folder if it does not exist yet.
+
+        Uses ``conflictBehavior: fail`` and treats the resulting 409
+        (``nameAlreadyExists``) as success — an idempotent look-or-create
+        with no read-before-write race when two machines deliver at once.
+        Any other failure propagates so the whole delivery is marked failed
+        and retried atomically, per the IN-387 error-handling design.
+        """
+        if owner_folder in self._ensured_folders:
+            return
+        if self._folder_path:
+            quoted_parent = urllib.parse.quote(self._folder_path)
+            url = f"{GRAPH_DRIVE_BASE}/{self._drive_id}/root:/{quoted_parent}:/children"
+        else:
+            url = f"{GRAPH_DRIVE_BASE}/{self._drive_id}/root/children"
+        payload = {
+            "name": owner_folder,
+            "folder": {},
+            "@microsoft.graph.conflictBehavior": "fail",
+        }
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60):
+                pass
+            logger.info("SharePoint owner folder created: %s", owner_folder)
+        except urllib.error.HTTPError as exc:
+            if exc.code != 409:
+                raise
+        self._ensured_folders.add(owner_folder)
 
     async def grant_view(
         self,

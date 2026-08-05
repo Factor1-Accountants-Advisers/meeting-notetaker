@@ -981,3 +981,44 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   Real Entra tenant role/claim and production Storage API checks are
   explicitly deferred to Joseph; no live evidence is claimed here. Jira was
   not changed.
+
+## 5 Aug 2026 — IN-387 follow-up: per-user SharePoint folders + library migration
+
+- [x] Per-user folder structure (David A's 29 Jul Teams decision, superseding
+  the IN-387 flat-root design; spec amended in
+  `docs/superpowers/specs/2026-07-28-in387-sharepoint-library-design.md`):
+  - `sharepoint_folder_path` default changed `""` → `"Transcriptions"`
+    (`backend/app/config.py`), so uploads target the library's nested
+    `Transcriptions` folder; `backend.env.template` updated to match.
+  - `SharePointProvider.save_transcript` gained `owner_folder`;
+    `save_transcript_to_sharepoint` passes `safe_owner_folder(actor)` — the
+    signed-in actor's display name, which matches the AAD display name
+    SharePoint shows as file author. `GraphSharePointProvider` ensures the
+    folder before the first upload of a delivery (`POST
+    /drives/{id}/root:/Transcriptions:/children`, `conflictBehavior: fail`,
+    409 treated as already-exists — look-or-create with no read-before-write
+    race). Any other ensure failure fails the whole delivery for atomic
+    retry, per the IN-387 error-handling design. `LocalSharePointProvider`
+    mirrors the structure under `backend/var/sharepoint/<owner>/`.
+  - Tests (written first, watched fail): `test_sharepoint_provider.py` —
+    owner-folder sanitisation/fallback, ensure-then-upload ordering and URL
+    shape, one ensure per delivery, 409-as-success, ensure-failure fails
+    delivery, flat-path backward compatibility, local per-owner subfolder;
+    `test_delivery_reliability.py` — endpoint passes the actor as owner
+    folder; existing partial-grant and local stand-in tests updated for the
+    new call sequence/paths.
+  - Verification: full backend suite **333 tests, OK** (5 Aug 2026). The
+    known `test_stub_serializes_concurrent_exports_for_one_meeting` flake
+    reproduced on stashed pre-change code (2/3 runs) and passed 3/3 with the
+    change — pre-existing, unrelated.
+- [x] Live migration (5 Aug 2026, via Joseph's signed-in SharePoint session):
+  created `Transcriptions/Transcriptions/<owner>/` folders and moved all 46
+  loose files (13 root `.md` + 33 legacy nested `.txt`) into their
+  uploader's folder, attributed by the library's own Created By field (list
+  REST `Author`): Joseph Miguel Guerrero 17, David Ahlhaus 25, Jose Tabbada
+  2, Daniel Vucetic 2. Post-migration verification: library root holds only
+  the `Transcriptions` and `Voiceprint` folders; nested folder holds exactly
+  the four owner folders; 46/46 files accounted for. Note: SharePoint moves
+  preserve item ids and permissions but change `webUrl`, so
+  `sharepoint_web_url` values stored on already-delivered meetings now point
+  at the old paths. Jira was not changed.

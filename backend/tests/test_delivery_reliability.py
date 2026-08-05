@@ -50,7 +50,7 @@ class _FakeHttpError(Exception):
 
 
 class UnavailableSharePointProvider:
-    async def save_transcript(self, *, meeting, filename, content, access_token=None):
+    async def save_transcript(self, *, meeting, filename, content, access_token=None, owner_folder=""):
         raise _FakeHttpError(503)
 
     async def grant_view(self, *, item_id, recipients, access_token=None):  # pragma: no cover - not reached
@@ -65,8 +65,16 @@ class CaptureSharePointProvider:
         self.fail_grant_at = fail_grant_at
         self.grant_attempts = 0
 
-    async def save_transcript(self, *, meeting, filename, content, access_token=None):
-        self.uploads.append({"meeting": meeting, "filename": filename, "content": content, "token": access_token})
+    async def save_transcript(self, *, meeting, filename, content, access_token=None, owner_folder=""):
+        self.uploads.append(
+            {
+                "meeting": meeting,
+                "filename": filename,
+                "content": content,
+                "token": access_token,
+                "owner_folder": owner_folder,
+            }
+        )
         if len(self.uploads) == self.fail_upload_at:
             raise RuntimeError("simulated second SharePoint upload failure")
         return sharepoint.SharePointUploadResult(
@@ -236,6 +244,22 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
             "have been delivered. Check your inbox before resending.",
         )
 
+    async def test_sharepoint_save_uploads_into_actor_owner_folder(self):
+        # Per-user folder decision (David Ahlhaus, 29 Jul 2026): each upload
+        # lands in a folder named for the recording owner — the signed-in
+        # actor performing the delivery.
+        uploads = []
+        grants = []
+        meetings_router.get_sharepoint_provider = lambda token=None: CaptureSharePointProvider(uploads, grants)
+
+        await meetings_router.save_transcript_to_sharepoint(
+            self.meeting_id,
+            actor="Joseph",
+            graph_token="token",
+        )
+
+        self.assertEqual([u["owner_folder"] for u in uploads], ["Joseph", "Joseph"])
+
     async def test_sharepoint_save_writes_separate_transcript_and_summary_files(self):
         uploads = []
         grants = []
@@ -318,6 +342,9 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
     async def test_sharepoint_partial_grant_on_second_file_saves_with_warning(self):
         responses = iter(
             [
+                # The delivery's first Graph call is now the owner-folder
+                # ensure (per-user folders, 29 Jul 2026).
+                {"id": "folder-owner", "name": "Joseph"},
                 {
                     "webUrl": "https://sharepoint.example/transcript.txt",
                     "id": "item-transcript",
@@ -355,9 +382,10 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(meeting.sharepoint_error_message)
         self.assertIn("benjamin@example.com", meeting.sharepoint_grant_warning or "")
         self.assertEqual(meeting.sharepoint_summary_url, "https://sharepoint.example/summary.txt")
-        self.assertEqual(len(requests), 4)
-        self.assertIn("/items/item-transcript/invite", requests[1].full_url)
-        self.assertIn("/items/item-summary/invite", requests[3].full_url)
+        self.assertEqual(len(requests), 5)
+        self.assertIn("/root/children", requests[0].full_url)
+        self.assertIn("/items/item-transcript/invite", requests[2].full_url)
+        self.assertIn("/items/item-summary/invite", requests[4].full_url)
 
     async def test_sharepoint_second_upload_failure_marks_delivery_failed(self):
         uploads = []
@@ -409,7 +437,9 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 sharepoint.LOCAL_SHAREPOINT_DIR = original_dir
 
-            files = sorted(Path(temp_dir).glob("*.md"))
+            # Local stand-in mirrors the per-user folder structure: files
+            # land in a folder named for the delivering actor.
+            files = sorted((Path(temp_dir) / "Joseph").glob("*.md"))
             self.assertEqual(result.sharepoint_status, SharePointStatus.saved)
             self.assertEqual(len(files), 2)
             self.assertTrue(any(path.name.endswith(" - Summary.md") for path in files))

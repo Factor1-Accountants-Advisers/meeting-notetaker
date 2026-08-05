@@ -92,6 +92,19 @@ considered complete.
 
 ## Folder structure
 
+> **Superseded 29 Jul 2026 (implemented 5 Aug 2026).** David Ahlhaus's Teams
+> reply the day after this spec was approved chose one folder per user
+> instead of the flat root: "I think one folder per user would be best.
+> Notetaker could look for the folder and if it doesn't exist already,
+> create it." Uploads now land in
+> `Transcriptions/<owner display name>/` inside the library (the nested
+> `Transcriptions` folder), the folder being created on first delivery via
+> `POST .../children` with `conflictBehavior: fail` (409 = already exists).
+> The owner is the signed-in actor (`safe_owner_folder(actor)` in
+> `backend/app/services/sharepoint.py`); existing root/legacy files were
+> migrated into per-owner folders on 5 Aug 2026. The paragraph below is the
+> original, now-superseded design.
+
 Flat. No per-meeting or per-month subfolders. IN-385's filename convention
 already embeds date and title, which is sufficient for sorting and search
 without folder nesting. All Summary/Transcript files for every meeting sit
