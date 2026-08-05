@@ -37,6 +37,9 @@ export function isStorageRoute(req: Pick<ApiRequest, 'method' | 'path'>): boolea
     storageBackedMeetingRoute ||
     /^\/api\/v1\/voiceprint-admin(?:\/|$)/.test(path) ||
     (req.method === 'GET' && path === '/api/v1/people/me/enrolment-status') ||
+    // Central people directory merge (5 Aug 2026): the people list consults
+    // the central voiceprint store when a storage identity rides along.
+    (req.method === 'GET' && path === '/api/v1/people') ||
     (req.method === 'POST' && /^\/api\/v1\/people\/[^/]+\/enroll$/.test(path))
   )
 }

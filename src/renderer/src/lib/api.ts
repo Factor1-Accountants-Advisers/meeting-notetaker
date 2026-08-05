@@ -24,6 +24,8 @@ interface PersonEnrollmentDto {
   enrolled: boolean
   model_version: string | null
   reenrollment_required: boolean
+  /** Active central voiceprint (Slice-2 store) — counts as enrolled. */
+  centrally_enrolled?: boolean
 }
 
 export interface MeetingDto {
@@ -566,9 +568,12 @@ export async function fetchEnrolmentStatus(): Promise<EnrolmentStatus | null> {
   return call<EnrolmentStatus>('GET', '/people/me/enrolment-status')
 }
 
-function enrollmentState(dto: PersonEnrollmentDto): EnrollmentState {
+export function enrollmentState(dto: PersonEnrollmentDto): EnrollmentState {
   if (dto.reenrollment_required) return 'reenroll_required'
-  return dto.enrolled ? 'enrolled' : 'not_enrolled'
+  // Central enrolment counts: since the Slice-2 cutover the per-machine
+  // registry no longer reflects colleagues, so "known" = local OR central
+  // (empty attendee-dropdown fix, 5 Aug 2026).
+  return dto.enrolled || dto.centrally_enrolled ? 'enrolled' : 'not_enrolled'
 }
 
 export async function fetchPeople(): Promise<StaffMember[] | null> {

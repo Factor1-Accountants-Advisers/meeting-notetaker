@@ -9,6 +9,7 @@ import {
   type ManualAttendee
 } from '../src/renderer/src/components/AttendeePicker'
 import { HomeScreen } from '../src/renderer/src/screens/HomeScreen'
+import { enrollmentState } from '../src/renderer/src/lib/api'
 import type { StaffMember } from '../src/renderer/src/data/mock'
 
 const people: StaffMember[] = [
@@ -120,5 +121,34 @@ const home = renderToStaticMarkup(
 assert.match(home, /Add attendees/)
 assert.match(home, /Optional/)
 assert.match(home, /aria-expanded="false"/)
+
+// Central cutover (5 Aug 2026): a colleague enrolled centrally but absent
+// from the local registry must map to 'enrolled' — that is what puts them in
+// the dropdown's suggestions. Local reenroll flags still win.
+const centralDto = {
+  employee_id: 'melissahall@factor1.com.au',
+  display_name: 'Melissa Hall',
+  role: 'Factor1 staff',
+  enrolled: false,
+  model_version: null,
+  reenrollment_required: false,
+  centrally_enrolled: true
+}
+assert.equal(enrollmentState(centralDto), 'enrolled')
+assert.equal(enrollmentState({ ...centralDto, reenrollment_required: true }), 'reenroll_required')
+assert.equal(enrollmentState({ ...centralDto, centrally_enrolled: false }), 'not_enrolled')
+// A centrally enrolled colleague flows through to the suggestion list.
+const centralMember: StaffMember = {
+  id: centralDto.employee_id,
+  name: centralDto.display_name,
+  role: centralDto.role,
+  tone: 'info',
+  enrollment: enrollmentState(centralDto),
+  modelVersion: null
+}
+assert.deepEqual(
+  filterAttendeeSuggestions([centralMember], 'melissa', []).map((person) => person.id),
+  ['melissahall@factor1.com.au']
+)
 
 console.log('Ad-hoc attendee verification passed')
