@@ -1,5 +1,13 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { UserPlus, X } from 'lucide-react'
+import {
+  MENU_MAX_HEIGHT,
+  SUGGESTION_ROW_HEIGHT,
+  clampActiveIndex,
+  computeMenuPlacement,
+  nextActiveIndex,
+  type MenuPlacement
+} from '@renderer/lib/menuPlacement'
 import type { StaffMember } from '@renderer/data/mock'
 
 export const MAX_MANUAL_ATTENDEES = 49
@@ -7,6 +15,18 @@ export const MAX_MANUAL_ATTENDEES = 49
 export interface ManualAttendee {
   name: string | null
   email: string
+}
+
+// Placement must be measured before paint so the menu never flashes in the
+// wrong spot; the verify scripts render this through react-dom/server, where
+// useLayoutEffect is a no-op that warns, so fall back to useEffect there.
+const useMenuLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
+
+/** One row of the suggestion menu: a staff match, or the "add by email" row. */
+interface AttendeeMenuItem {
+  key: string
+  person: StaffMember | null
+  attendee: { name: string | null; email: string }
 }
 
 interface AttendeePickerProps {
@@ -78,6 +98,16 @@ export function AttendeePicker({
   const [query, setQuery] = useState('')
   const [focused, setFocused] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  // Escape hides the menu without blurring the input, so the user can keep
+  // typing; any edit or refocus brings the suggestions back.
+  const [dismissed, setDismissed] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(0)
+  const [placement, setPlacement] = useState<MenuPlacement>({
+    openUp: false,
+    maxHeight: MENU_MAX_HEIGHT
+  })
+  const anchorRef = useRef<HTMLDivElement>(null)
+  const listboxId = useId()
   const suggestions = useMemo(
     () => filterAttendeeSuggestions(people, query, selected),
     [people, query, selected]
@@ -88,7 +118,49 @@ export function AttendeePicker({
     selected.length < MAX_MANUAL_ATTENDEES &&
     !selected.some((attendee) => attendee.email === normalizedQuery) &&
     !suggestions.some((person) => normalizeEmail(person.id) === normalizedQuery)
-  const showMenu = focused && !disabled && (suggestions.length > 0 || canAddTypedEmail)
+
+  // One flat list so arrow keys traverse the staff rows and the "Add by email"
+  // row alike; index 0 stays the first suggestion, preserving Enter's old
+  // behaviour of taking the top match.
+  const menuItems = useMemo<AttendeeMenuItem[]>(() => {
+    const items: AttendeeMenuItem[] = suggestions.map((person) => ({
+      key: person.id,
+      person,
+      attendee: { name: person.name, email: person.id }
+    }))
+    if (canAddTypedEmail) {
+      items.push({
+        key: `add-by-email:${normalizedQuery}`,
+        person: null,
+        attendee: { name: null, email: normalizedQuery }
+      })
+    }
+    return items
+  }, [suggestions, canAddTypedEmail, normalizedQuery])
+
+  const showMenu = focused && !dismissed && !disabled && menuItems.length > 0
+  const safeActiveIndex = clampActiveIndex(activeIndex, menuItems.length)
+
+  // Re-point at the top match whenever the list itself changes underneath.
+  useEffect(() => {
+    setActiveIndex(0)
+  }, [normalizedQuery, menuItems.length])
+
+  useMenuLayoutEffect(() => {
+    if (!showMenu || !anchorRef.current) return
+    const rect = anchorRef.current.getBoundingClientRect()
+    const scrollViewport = anchorRef.current.closest('main')?.getBoundingClientRect()
+    setPlacement(
+      computeMenuPlacement({
+        anchorTop: rect.top,
+        anchorBottom: rect.bottom,
+        viewportTop: scrollViewport?.top ?? 0,
+        viewportBottom: scrollViewport?.bottom ?? window.innerHeight,
+        itemCount: menuItems.length,
+        itemHeight: SUGGESTION_ROW_HEIGHT
+      })
+    )
+  }, [showMenu, menuItems.length])
 
   const choose = (attendee: { name?: string | null; email: string }): void => {
     const next = addAttendee(selected, attendee)
@@ -106,17 +178,47 @@ export function AttendeePicker({
   }
 
   const addFromInput = (): void => {
-    if (suggestions.length > 0) {
-      const first = suggestions[0]
-      choose({ name: first.name, email: first.id })
-      return
-    }
-    if (canAddTypedEmail) {
-      choose({ name: null, email: normalizedQuery })
+    // menuItems already collapses "top suggestion" and "add the typed email"
+    // into one ordered list, so the highlighted row is the whole decision.
+    const item = menuItems[safeActiveIndex]
+    if (item) {
+      choose(item.attendee)
       return
     }
     if (query.trim()) {
       setMessage('Enter a complete work email or choose a known staff member.')
+    }
+  }
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === 'Escape') {
+      if (!showMenu) return
+      event.preventDefault()
+      setDismissed(true)
+      return
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      if (menuItems.length === 0) return
+      event.preventDefault()
+      if (!showMenu) {
+        // Re-open a menu the user dismissed, without moving the selection.
+        setDismissed(false)
+        return
+      }
+      setActiveIndex((current) =>
+        nextActiveIndex(
+          clampActiveIndex(current, menuItems.length),
+          event.key === 'ArrowDown' ? 1 : -1,
+          menuItems.length
+        )
+      )
+      return
+    }
+    // Deliberately no Space handling: SelectMenu selects on Space, but this
+    // anchor is a text input where Space must stay a literal character.
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      addFromInput()
     }
   }
 
@@ -156,71 +258,99 @@ export function AttendeePicker({
       >
         Add another person
       </label>
-      <div className="relative">
+      <div ref={anchorRef} className="relative">
         <input
           id="manual-attendees"
           type="text"
           value={query}
           disabled={disabled || selected.length >= MAX_MANUAL_ATTENDEES}
           aria-label="Search or add attendee"
+          role="combobox"
+          aria-expanded={showMenu}
+          aria-controls={listboxId}
+          aria-autocomplete="list"
+          aria-activedescendant={
+            showMenu ? `${listboxId}-option-${safeActiveIndex}` : undefined
+          }
           autoComplete="off"
           placeholder="Search staff or enter a work email"
-          onFocus={() => setFocused(true)}
+          onFocus={() => {
+            setFocused(true)
+            setDismissed(false)
+          }}
           onBlur={() => setFocused(false)}
           onChange={(event) => {
             setQuery(event.target.value)
             setMessage(null)
+            setDismissed(false)
           }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault()
-              addFromInput()
-            }
-          }}
+          onKeyDown={handleKeyDown}
           className="ui-control h-7 w-full rounded-control border border-edge-tertiary bg-bg-secondary px-2 text-[14px] text-content-primary placeholder:text-content-tertiary focus:border-brand-blue focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
         />
 
         {showMenu && (
-          <div className="ui-popover absolute z-20 mt-1 w-full overflow-hidden rounded-[9px] border border-edge-secondary bg-[var(--color-background-popover)] p-1">
-            {suggestions.map((person) => (
-              <button
-                key={person.id}
-                type="button"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => choose({ name: person.name, email: person.id })}
-                className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left hover:bg-bg-info focus:bg-bg-info focus:outline-none"
-              >
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-bg-info text-[10px] font-medium text-content-info">
-                  {initials(person.name)}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[14px] text-content-primary">
-                    {person.name}
+          <div
+            id={listboxId}
+            role="listbox"
+            aria-label="Attendee suggestions"
+            style={{ maxHeight: `${placement.maxHeight}px` }}
+            className={`ui-popover absolute z-20 w-full overflow-y-auto rounded-[9px] border border-edge-secondary bg-[var(--color-background-popover)] p-1 ${
+              placement.openUp ? 'bottom-[calc(100%+4px)]' : 'top-[calc(100%+4px)]'
+            }`}
+          >
+            {menuItems.map((item, index) => {
+              const active = index === safeActiveIndex
+              const rowClass = `flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left focus:outline-none ${
+                active ? 'bg-bg-info' : 'hover:bg-bg-info'
+              }`
+              return item.person ? (
+                <button
+                  key={item.key}
+                  id={`${listboxId}-option-${index}`}
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  onMouseEnter={() => setActiveIndex(index)}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => choose(item.attendee)}
+                  className={rowClass}
+                >
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-bg-info text-[10px] font-medium text-content-info">
+                    {initials(item.person.name)}
                   </span>
-                  <span className="block truncate text-[12px] text-content-tertiary">
-                    {person.id}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[14px] text-content-primary">
+                      {item.person.name}
+                    </span>
+                    <span className="block truncate text-[12px] text-content-tertiary">
+                      {item.person.id}
+                    </span>
                   </span>
-                </span>
-              </button>
-            ))}
-            {canAddTypedEmail && (
-              <button
-                type="button"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => choose({ name: null, email: normalizedQuery })}
-                className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left hover:bg-bg-info focus:bg-bg-info focus:outline-none"
-              >
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-bg-secondary text-content-secondary">
-                  <UserPlus size={13} strokeWidth={1.75} />
-                </span>
-                <span className="min-w-0">
-                  <span className="block text-[14px] text-content-primary">Add by email</span>
-                  <span className="block truncate text-[12px] text-content-tertiary">
-                    {normalizedQuery}
+                </button>
+              ) : (
+                <button
+                  key={item.key}
+                  id={`${listboxId}-option-${index}`}
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  onMouseEnter={() => setActiveIndex(index)}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => choose(item.attendee)}
+                  className={rowClass}
+                >
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-bg-secondary text-content-secondary">
+                    <UserPlus size={13} strokeWidth={1.75} />
                   </span>
-                </span>
-              </button>
-            )}
+                  <span className="min-w-0">
+                    <span className="block text-[14px] text-content-primary">Add by email</span>
+                    <span className="block truncate text-[12px] text-content-tertiary">
+                      {item.attendee.email}
+                    </span>
+                  </span>
+                </button>
+              )
+            })}
           </div>
         )}
       </div>

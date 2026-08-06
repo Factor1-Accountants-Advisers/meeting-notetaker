@@ -10,6 +10,15 @@ import {
 } from '../src/renderer/src/components/AttendeePicker'
 import { HomeScreen } from '../src/renderer/src/screens/HomeScreen'
 import { enrollmentState } from '../src/renderer/src/lib/api'
+import {
+  MENU_MAX_HEIGHT,
+  MENU_MIN_HEIGHT,
+  SELECT_ROW_HEIGHT,
+  SUGGESTION_ROW_HEIGHT,
+  clampActiveIndex,
+  computeMenuPlacement,
+  nextActiveIndex
+} from '../src/renderer/src/lib/menuPlacement'
 import type { StaffMember } from '../src/renderer/src/data/mock'
 
 const people: StaffMember[] = [
@@ -150,5 +159,100 @@ assert.deepEqual(
   filterAttendeeSuggestions([centralMember], 'melissa', []).map((person) => person.id),
   ['melissahall@factor1.com.au']
 )
+
+// --- Suggestion-menu placement (ported from SelectMenu, 6 Aug 2026) ---------
+// A 600px-tall <main> viewport is the reference frame in every case below.
+const VIEWPORT = { viewportTop: 0, viewportBottom: 600 }
+
+// Roomy anchor near the top: opens downward, capped at MENU_MAX_HEIGHT.
+const roomy = computeMenuPlacement({
+  ...VIEWPORT,
+  anchorTop: 100,
+  anchorBottom: 128,
+  itemCount: 6,
+  itemHeight: SUGGESTION_ROW_HEIGHT
+})
+assert.equal(roomy.openUp, false, 'a menu that fits below opens downward')
+assert.equal(roomy.maxHeight, MENU_MAX_HEIGHT, 'ample room is capped at the max height')
+
+// Anchor pinned near the bottom with plenty of room above: flips up.
+const tight = computeMenuPlacement({
+  ...VIEWPORT,
+  anchorTop: 520,
+  anchorBottom: 548,
+  itemCount: 6,
+  itemHeight: SUGGESTION_ROW_HEIGHT
+})
+assert.equal(tight.openUp, true, 'no room below but room above flips the menu up')
+assert.equal(tight.maxHeight, MENU_MAX_HEIGHT, 'flipped menus still cap at the max height')
+
+// Squeezed both ways: still returns a usable height rather than a sliver.
+const squeezed = computeMenuPlacement({
+  viewportTop: 300,
+  viewportBottom: 400,
+  anchorTop: 330,
+  anchorBottom: 358,
+  itemCount: 6,
+  itemHeight: SUGGESTION_ROW_HEIGHT
+})
+assert.equal(squeezed.maxHeight, MENU_MIN_HEIGHT, 'a cramped viewport falls back to the min height')
+
+// Below-space wins ties. Sized so the menu genuinely does NOT fit either way
+// (200px each side vs a 240px menu) — otherwise this passes for the wrong
+// reason, by fitting below rather than by the tie-break.
+const tied = computeMenuPlacement({
+  viewportTop: 0,
+  viewportBottom: 456,
+  anchorTop: 208,
+  anchorBottom: 248,
+  itemCount: 6,
+  itemHeight: SUGGESTION_ROW_HEIGHT
+})
+assert.equal(tied.openUp, false, 'equal space above and below opens downward')
+assert.equal(tied.maxHeight, 200, 'a tied menu takes the space actually available')
+
+// A short list that fits below never flips, even low in the viewport.
+const shortList = computeMenuPlacement({
+  ...VIEWPORT,
+  anchorTop: 460,
+  anchorBottom: 488,
+  itemCount: 1,
+  itemHeight: SUGGESTION_ROW_HEIGHT
+})
+assert.equal(shortList.openUp, false, 'a one-row menu that fits below stays below')
+
+// The maxHeight cap is what forces internal scrolling: a full 6-row suggestion
+// list is taller than the cap, so the menu must scroll rather than grow.
+assert.ok(
+  6 * SUGGESTION_ROW_HEIGHT > MENU_MAX_HEIGHT,
+  'a full suggestion list exceeds the cap, so the menu scrolls internally'
+)
+
+// Parity: fed SelectMenu's own row height, the shared helper reproduces the
+// numbers SelectMenu computed inline before the port.
+const selectParity = computeMenuPlacement({
+  ...VIEWPORT,
+  anchorTop: 520,
+  anchorBottom: 548,
+  itemCount: 4,
+  itemHeight: SELECT_ROW_HEIGHT
+})
+assert.deepEqual(
+  selectParity,
+  { openUp: true, maxHeight: 240 },
+  'placement matches SelectMenu for SelectMenu-shaped input'
+)
+
+// --- Arrow-key traversal ----------------------------------------------------
+assert.equal(nextActiveIndex(0, 1, 3), 1, 'ArrowDown advances')
+assert.equal(nextActiveIndex(2, 1, 3), 0, 'ArrowDown wraps to the top')
+assert.equal(nextActiveIndex(0, -1, 3), 2, 'ArrowUp wraps to the bottom')
+assert.equal(nextActiveIndex(1, -1, 3), 0, 'ArrowUp retreats')
+assert.equal(nextActiveIndex(0, 1, 0), 0, 'an empty menu has no active row')
+
+// A remembered index survives the list shrinking as the query narrows.
+assert.equal(clampActiveIndex(5, 2), 1, 'a stale index clamps onto the shorter list')
+assert.equal(clampActiveIndex(0, 0), 0, 'an empty list clamps to zero')
+assert.equal(clampActiveIndex(1, 4), 1, 'a valid index is left alone')
 
 console.log('Ad-hoc attendee verification passed')
