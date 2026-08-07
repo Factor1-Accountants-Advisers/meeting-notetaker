@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     # Raw-audio retention (requirements §6.2 engineering default).
     audio_retention_days: int = 30
 
+    # Delivery recipient allowlist (7 Aug 2026 incident). Comma-separated mail
+    # domains permitted to receive transcripts/summaries by email or SharePoint
+    # grant. Blank = the built-in group list in app.services.recipient_policy;
+    # it never means "allow nothing". Widening this is the supported way to add
+    # a company without a release.
+    delivery_domain_allowlist: str = ""
+
     # IN-471 Storage API (Slice 2). Empty = stub mode AND central enrolment
     # not yet required (config-flagged cutover). MN_STORAGE_API_SCOPE is also
     # read by the Electron main process for MSAL token acquisition — both

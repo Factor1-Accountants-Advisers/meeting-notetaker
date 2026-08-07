@@ -131,7 +131,7 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
             manual_attendees=[
                 ManualMeetingAttendee(
                     name="Benjamin Bryant",
-                    email="benjamin@example.com",
+                    email="benjamin@factor1.com.au",
                 )
             ],
         )
@@ -177,7 +177,7 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(HTTPException) as raised:
                 await meetings_router.email_notes(
                     self.meeting_id,
-                    meetings_router.EmailRequest(recorder_email="joseph@example.com"),
+                    meetings_router.EmailRequest(recorder_email="joseph@factor1.com.au"),
                     actor="Joseph",
                     graph_token="token",
                 )
@@ -204,7 +204,7 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HTTPException) as raised:
             await meetings_router.email_notes(
                 self.meeting_id,
-                meetings_router.EmailRequest(recorder_email="joseph@example.com"),
+                meetings_router.EmailRequest(recorder_email="joseph@factor1.com.au"),
                 actor="Joseph",
                 graph_token="",
             )
@@ -229,7 +229,7 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HTTPException) as raised:
             await meetings_router.email_notes(
                 self.meeting_id,
-                meetings_router.EmailRequest(recorder_email="joseph@example.com"),
+                meetings_router.EmailRequest(recorder_email="joseph@factor1.com.au"),
                 actor="Joseph",
                 graph_token="token",
             )
@@ -301,8 +301,8 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(grants), 2)
         self.assertEqual(grants[0]["item_id"], "item-test-1")
         self.assertEqual(grants[1]["item_id"], "item-test-2")
-        self.assertEqual(grants[0]["recipients"], ["benjamin@example.com"])
-        self.assertEqual(grants[1]["recipients"], ["benjamin@example.com"])
+        self.assertEqual(grants[0]["recipients"], ["benjamin@factor1.com.au"])
+        self.assertEqual(grants[1]["recipients"], ["benjamin@factor1.com.au"])
 
     async def test_sharepoint_grant_failure_saves_with_warning_and_later_save_clears_it(self):
         """Option A (IN-398 Test 1 failure, 3 Aug 2026): one ungrantable
@@ -325,7 +325,7 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
         meeting = store.MEETINGS[self.meeting_id]
         self.assertEqual(meeting.sharepoint_status, SharePointStatus.saved)
         self.assertIsNone(meeting.sharepoint_error_message)
-        self.assertIn("benjamin@example.com", meeting.sharepoint_grant_warning or "")
+        self.assertIn("benjamin@factor1.com.au", meeting.sharepoint_grant_warning or "")
         self.assertEqual(len(uploads), 2)  # summary still uploads after the failed grant
         self.assertEqual(len(grants), 1)  # the second file's grant succeeded
 
@@ -380,7 +380,7 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
         meeting = store.MEETINGS[self.meeting_id]
         self.assertEqual(meeting.sharepoint_status, SharePointStatus.saved)
         self.assertIsNone(meeting.sharepoint_error_message)
-        self.assertIn("benjamin@example.com", meeting.sharepoint_grant_warning or "")
+        self.assertIn("benjamin@factor1.com.au", meeting.sharepoint_grant_warning or "")
         self.assertEqual(meeting.sharepoint_summary_url, "https://sharepoint.example/summary.txt")
         self.assertEqual(len(requests), 5)
         self.assertIn("/root/children", requests[0].full_url)
@@ -467,7 +467,7 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HTTPException) as raised:
             await meetings_router.email_notes(
                 self.meeting_id,
-                meetings_router.EmailRequest(recorder_email="joseph@example.com"),
+                meetings_router.EmailRequest(recorder_email="joseph@factor1.com.au"),
                 actor="Viewer",
                 graph_token="token",
             )
@@ -483,7 +483,7 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HTTPException) as raised:
             await meetings_router.email_notes(
                 self.meeting_id,
-                meetings_router.EmailRequest(recorder_email="joseph@example.com"),
+                meetings_router.EmailRequest(recorder_email="joseph@factor1.com.au"),
                 actor="Joseph",
                 graph_token="token",
             )

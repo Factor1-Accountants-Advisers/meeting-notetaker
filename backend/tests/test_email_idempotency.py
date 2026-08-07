@@ -105,7 +105,7 @@ class _EmailEndpointTestBase(unittest.IsolatedAsyncioTestCase):
     async def _email(self):
         return await meetings_router.email_notes(
             self.meeting_id,
-            meetings_router.EmailRequest(recorder_email="joseph@example.com"),
+            meetings_router.EmailRequest(recorder_email="joseph@factor1.com.au"),
             actor="Joseph",
             graph_token="token",
         )
@@ -145,7 +145,7 @@ class EmailIdempotencyTests(_EmailEndpointTestBase):
         result = await self._email()
 
         self.assertEqual(len(self.provider.sends), 1)
-        self.assertEqual(result.recipients, ["joseph@example.com"])
+        self.assertEqual(result.recipients, ["joseph@factor1.com.au"])
         self.assertEqual(store.MEETINGS[self.meeting_id].delivery_status, DeliveryStatus.emailed)
 
     async def test_delivery_reset_clears_replay_fields(self):
@@ -227,7 +227,7 @@ class EmailDeliveryDurabilityTests(_EmailEndpointTestBase):
         result = await self._email()
 
         self.assertEqual(len(self.provider.sends), 1)
-        self.assertEqual(result.recipients, ["joseph@example.com"])
+        self.assertEqual(result.recipients, ["joseph@factor1.com.au"])
         self.assertEqual(store.MEETINGS[self.meeting_id].delivery_status, DeliveryStatus.emailed)
 
     async def test_startup_reconcile_flips_stale_emailing_to_unconfirmed(self):

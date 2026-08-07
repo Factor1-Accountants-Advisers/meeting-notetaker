@@ -52,6 +52,7 @@ from app.services.failure_reasons import (
     log_delivery_failure,
 )
 from app.services.meeting_export import refresh_meeting_export
+from app.services.recipient_policy import filter_deliverable
 from app.services.blob_delivery import kick_blob_delivery
 from app.services.sharepoint import (
     get_sharepoint_provider,
@@ -555,7 +556,10 @@ async def email_notes(
 
     recipients = _email_recipients(meeting, body.recorder_email)
     if not recipients:
-        raise HTTPException(status.HTTP_409_CONFLICT, "No email recipients resolved")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "No email recipients resolved — no invitee is on an allowed company domain",
+        )
     if not graph_token:
         reason = FailureReason.for_category(
             FailureCategory.azure_signin, detail="signin_check"
@@ -817,6 +821,11 @@ def _email_recipients(meeting: Meeting, recorder_email: str | None) -> list[str]
     person who recorded it (Jira IN-94/IN-119). Manual/ad-hoc/upload recordings
     have no attendees and fall back to the recorder alone. Preserve first-seen
     order while deduping case-insensitively.
+
+    Every candidate — attendees, organiser and recorder alike — then passes the
+    delivery domain allowlist. Until 7 Aug 2026 this list was used verbatim, so
+    an external invitee on a calendar event received the summary and the full
+    transcript (see app/services/recipient_policy.py).
     """
     recipients: list[str] = []
 
@@ -838,7 +847,7 @@ def _email_recipients(meeting: Meeting, recorder_email: str | None) -> list[str]
     # safety net for calendar recordings.
     _add(recorder_email)
 
-    return recipients
+    return filter_deliverable(recipients, channel="email", meeting_id=meeting.id)
 
 
 def _sharepoint_recipients(meeting: Meeting) -> list[str]:
@@ -850,9 +859,13 @@ def _sharepoint_recipients(meeting: Meeting) -> list[str]:
     Manual/ad-hoc recordings grant view access to the recorder's ad-hoc
     attendee picker selections instead. Recipients with no usable email
     (room/resource attendees, unresolved external attendees) are silently
-    skipped rather than failing delivery. The recording owner is not included
-    here: they already have access as the identity that performed the
-    upload. Preserve first-seen order while deduping case-insensitively.
+    skipped rather than failing delivery, and the result passes the same
+    delivery domain allowlist as email — on 7 Aug 2026 this function tried to
+    share an interview transcript with an external candidate and was stopped
+    only by the tenant's external-sharing policy (HTTP 400 sharingFailed).
+    The recording owner is not included here: they already have access as the
+    identity that performed the upload. Preserve first-seen order while
+    deduping case-insensitively.
 
     Unlike ``_email_recipients``, which currently drops manual attendees
     entirely (email has no ad-hoc delivery path), this function intentionally
@@ -874,7 +887,7 @@ def _sharepoint_recipients(meeting: Meeting) -> list[str]:
         for attendee in meeting.manual_attendees:
             _add(attendee.email)
 
-    return recipients
+    return filter_deliverable(recipients, channel="sharepoint", meeting_id=meeting.id)
 
 
 def _build_review(meeting: Meeting) -> MeetingReview:
