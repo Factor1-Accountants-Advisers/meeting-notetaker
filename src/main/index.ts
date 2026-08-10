@@ -306,9 +306,31 @@ app.on('window-all-closed', () => {
   // Keep running in tray on all platforms.
 })
 
+let quitFailsafeArmed = false
 app.on('before-quit', () => {
   cleanupRecordingIpc()
   stopBackendSupervisor()
   stopUpdaterTimers()
   destroyTray()
+
+  // Teardown-hang failsafe. Observed live 10 Aug 2026 (v2.0.21): tray-Quit ran
+  // this handler to completion (backend killed, tray gone, windows gone) but
+  // the main process never terminated — still alive 15 minutes later — leaving
+  // a zombie that holds the single-instance lock and blocks the next launch.
+  // Root cause unidentified (suspect a native-module thread refusing to join);
+  // until it is, a hung teardown gets 8s and is then forced out. Normal quits
+  // exit well before the timer fires, so this is inert on the happy path.
+  // Safe with quitAndInstall: electron-updater spawns the installer as a
+  // separate process before quitting, so a forced exit cannot interrupt it.
+  if (!quitFailsafeArmed) {
+    quitFailsafeArmed = true
+    setTimeout(() => {
+      try {
+        logger().warn('[app] teardown hung after quit — forcing exit')
+      } catch {
+        // logging is best-effort on the way out
+      }
+      process.exit(0)
+    }, 8_000)
+  }
 })

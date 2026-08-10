@@ -16,3 +16,7 @@ recordings
 backend.env
 backend/backend.env
 backend/third_party/ffmpeg/
+
+# Rust build output under native/ (e.g. audio-endpoint-monitor) — hundreds of
+# MB of artifacts; sources (Cargo.toml, src/) remain committable.
+native/**/target/

@@ -106,20 +106,45 @@ function killPortListeners(): void {
       if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) pids.add(pid)
     }
     for (const pid of pids) {
-      try {
-        process.kill(pid)
-        logger().info('[supervisor] killed backend-port listener', { pid })
-      } catch (err) {
-        logger().warn('[supervisor] could not kill backend-port listener', {
-          pid,
-          message: err instanceof Error ? err.message : String(err),
-        })
-      }
+      // Tree-kill: a listener's multiprocessing children don't hold the port
+      // themselves and would survive a single-pid kill (same failure mode as
+      // the 10 Aug quit orphan — see killProcessTree).
+      killProcessTree(pid)
+      logger().info('[supervisor] killed backend-port listener tree', { pid })
     }
   } catch (err) {
     logger().warn('[supervisor] port-listener sweep failed', {
       message: err instanceof Error ? err.message : String(err),
     })
+  }
+}
+
+/**
+ * Kill a process AND its descendants. Windows TerminateProcess has no group
+ * semantics, so a single-pid kill orphans backend grandchildren — observed
+ * live 10 Aug 2026: tray-Quit killed the direct child (14028) in 38ms but its
+ * PyInstaller/multiprocessing child (18820) survived, holding port 8787.
+ * taskkill /T walks the tree. Fixed-argument execFileSync, same no-shell
+ * pattern as the netstat sweep above. Falls back to plain kill off-Windows.
+ */
+function killProcessTree(pid: number): void {
+  if (process.platform === 'win32') {
+    try {
+      execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        windowsHide: true,
+        stdio: 'ignore',
+        timeout: 5_000,
+      })
+      return
+    } catch {
+      // taskkill failed (already exited, access denied) — fall through so the
+      // plain kill still gets a chance at the root pid.
+    }
+  }
+  try {
+    process.kill(pid)
+  } catch {
+    // already exited
   }
 }
 
@@ -147,12 +172,12 @@ function readPidFile(): number | null {
  */
 export function forceKillBackendChild(): void {
   try {
-    if (child && !child.killed) child.kill('SIGKILL')
+    if (child?.pid && !child.killed) killProcessTree(child.pid)
   } catch {
     // best-effort only
   }
   try {
-    if (adoptedPid) process.kill(adoptedPid)
+    if (adoptedPid) killProcessTree(adoptedPid)
   } catch {
     // already gone or not ours — fine
   }
@@ -169,12 +194,8 @@ export function stopBackendSupervisor(): void {
     // one of them (IN-484: a second orphan survived a pid-file kill on a
     // fleet machine, 31 Jul).
     if (adoptedPid) {
-      logger().info('[supervisor] stopping adopted backend', { pid: adoptedPid })
-      try {
-        process.kill(adoptedPid)
-      } catch {
-        // already exited or PID no longer ours
-      }
+      logger().info('[supervisor] stopping adopted backend tree', { pid: adoptedPid })
+      killProcessTree(adoptedPid)
       adoptedPid = null
       clearPidFile()
     }
@@ -182,21 +203,15 @@ export function stopBackendSupervisor(): void {
     return
   }
 
-  logger().info('[supervisor] stopping backend child', { pid: proc.pid })
+  logger().info('[supervisor] stopping backend child tree', { pid: proc.pid })
 
-  // Graceful shutdown first.
-  proc.kill('SIGTERM')
-
-  // Wait briefly, then force-kill.
-  const forceTimer = setTimeout(() => {
-    if (!proc.killed) {
-      logger().warn('[supervisor] force-killing backend child', { pid: proc.pid })
-      proc.kill('SIGKILL')
-    }
-  }, 3_000)
+  // Tree-kill, not proc.kill: on Windows proc.kill terminates only the direct
+  // child, orphaning its multiprocessing children (10 Aug quit orphan). It is
+  // also synchronous — the old 3s SIGKILL fallback timer could never fire on
+  // the quit path anyway, because the app exits before the timer does.
+  if (proc.pid) killProcessTree(proc.pid)
 
   proc.on('exit', () => {
-    clearTimeout(forceTimer)
     logger().info('[supervisor] backend child exited')
   })
 
