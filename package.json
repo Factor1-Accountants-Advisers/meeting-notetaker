@@ -1,6 +1,6 @@
 {
   "name": "meeting-notetaker",
-  "version": "2.0.21",
+  "version": "2.0.22",
   "description": "Meeting recording, transcription, speaker identification, and transcript delivery",
   "main": "./out/main/index.js",
   "author": "Factor1",
@@ -25,6 +25,7 @@
     "verify:backend-supervisor": "esbuild scripts/verify-backend-supervisor.ts --bundle --platform=node --format=cjs --outfile=out/verify-backend-supervisor.cjs --log-level=error && node out/verify-backend-supervisor.cjs",
     "verify:update-gate": "esbuild scripts/verify-update-gate.ts --bundle --platform=node --format=cjs --outfile=out/verify-update-gate.cjs --log-level=error && node out/verify-update-gate.cjs",
     "verify:token-cache": "esbuild scripts/verify-token-cache.ts --bundle --platform=node --format=cjs --outfile=out/verify-token-cache.cjs --log-level=error && node out/verify-token-cache.cjs",
+    "verify:tray-icon": "esbuild scripts/verify-tray-icon.ts --bundle --platform=node --format=cjs --outfile=out/verify-tray-icon.cjs --log-level=error --external:electron && node out/verify-tray-icon.cjs",
     "verify:storage-cutover": "esbuild scripts/verify-storage-cutover.ts --bundle --platform=node --format=cjs --outfile=out/verify-storage-cutover.cjs --log-level=error && node out/verify-storage-cutover.cjs",
     "verify:voiceprint-admin": "esbuild scripts/verify-voiceprint-admin.tsx --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-voiceprint-admin.cjs --log-level=error --external:electron && node out/verify-voiceprint-admin.cjs",
     "package": "electron-vite build && electron-builder",

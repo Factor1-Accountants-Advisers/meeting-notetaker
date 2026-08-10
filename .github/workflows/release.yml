@@ -114,6 +114,12 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      # IN-472 fix: pins the tray-icon truth table and, critically, asserts the
+      # light-theme icon is actually dark. IN-472 shipped a white glyph that was
+      # invisible on Windows' light taskbar and nothing caught it.
+      - name: Verify tray icons
+        run: npm run verify:tray-icon
+
       - name: Write credentials file (from GitHub secrets)
         # utf8NoBOM is required: a BOM-prefixed first line corrupts the first
         # key name and the supervisor would silently fall back to stubs.
@@ -211,6 +217,21 @@ jobs:
             exit 1
           }
           Write-Host "Packaged credentials present: $packagedEnv"
+
+      - name: Assert both tray icons shipped in packaged output
+        # IN-472 fix: catches an extraResources misconfiguration, which would leave
+        # the tray falling back to the generated circle (or, if only one variant
+        # shipped, invisible on half the fleet's taskbars).
+        shell: pwsh
+        run: |
+          foreach ($theme in @('light', 'dark')) {
+            $icon = "dist/win-unpacked/resources/tray-icon-$theme.ico"
+            if (-not (Test-Path $icon)) {
+              Write-Error "Packaged output is missing $icon — tray icon would not render correctly"
+              exit 1
+            }
+            Write-Host "Packaged tray icon present: $icon"
+          }
 
       - name: Publish to Blob update feed (IN-469)
         # Live since 31 Jul 2026. The REPLACE_ME guard below is regression

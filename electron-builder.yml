@@ -23,8 +23,12 @@ files:
 extraResources:
   - from: backend/dist/notetaker-backend
     to: backend
-  - from: resources/tray-icon.png
-    to: tray-icon.png
+  # IN-472 fix: theme-paired tray icons. Both must ship — shipping only one is the
+  # IN-472 bug (a white glyph is invisible on a light taskbar).
+  - from: resources/tray-icon-light.ico
+    to: tray-icon-light.ico
+  - from: resources/tray-icon-dark.ico
+    to: tray-icon-dark.ico
 extraMetadata:
   SliceVersion: 1.0.0
 win:
