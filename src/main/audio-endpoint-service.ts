@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { EventEmitter } from 'node:events'
 
@@ -23,6 +24,7 @@ interface AudioEndpointLog {
 interface AudioEndpointServiceOptions {
   helperPath: string
   spawnHelper?: (helperPath: string) => AudioEndpointChild
+  existsFn?: (path: string) => boolean
   scheduleRestart?: (callback: () => void, delayMs: number) => unknown
   cancelRestart?: (handle: unknown) => void
   onSnapshot?: (snapshot: AudioEndpointSnapshot) => void
@@ -103,6 +105,14 @@ export class AudioEndpointService {
 
   start(): void {
     if (this.started) return
+    // Dev machines before a cargo build (and broken installs) have no helper
+    // exe; observation is optional, so degrade with one warning, no restarts.
+    if (!(this.options.existsFn ?? existsSync)(this.options.helperPath)) {
+      this.options.log.warn(
+        `[audio-endpoints] helper binary not found at ${this.options.helperPath}; endpoint observation disabled`
+      )
+      return
+    }
     this.started = true
     this.stopRequested = false
     this.restartCount = 0

@@ -50,6 +50,7 @@ const warnings: string[] = []
 
 const service = new AudioEndpointService({
   helperPath: 'C:\\test\\notetaker-audio-endpoints.exe',
+  existsFn: () => true,
   spawnHelper: () => {
     const child = new FakeChild()
     children.push(child)
@@ -102,6 +103,7 @@ service.stop()
 const stopChild = new FakeChild()
 const stopService = new AudioEndpointService({
   helperPath: 'C:\\test\\notetaker-audio-endpoints.exe',
+  existsFn: () => true,
   spawnHelper: () => stopChild,
   log: {
     info: () => undefined,
@@ -121,5 +123,28 @@ assert.equal(
   }),
   'C:\\Program Files\\Meeting Notetaker\\resources\\audio\\notetaker-audio-endpoints.exe'
 )
+
+// Missing helper binary (dev before cargo build, or a broken install):
+// warn once, never spawn, never schedule a restart.
+{
+  const missingWarnings: string[] = []
+  const missingService = new AudioEndpointService({
+    helperPath: 'Z:\\nonexistent\\notetaker-audio-endpoints.exe',
+    existsFn: () => false,
+    spawnHelper: () => {
+      throw new Error('spawnHelper must not be called for a missing helper')
+    },
+    onSnapshot: () => undefined,
+    log: {
+      info: () => undefined,
+      warn: (message) => missingWarnings.push(message),
+      error: (message) => missingWarnings.push(message)
+    }
+  })
+  missingService.start()
+  assert.equal(missingWarnings.length, 1, 'exactly one warning for a missing helper')
+  assert.match(missingWarnings[0], /helper binary not found/)
+  missingService.stop()
+}
 
 console.log('audio endpoint service verification passed')
