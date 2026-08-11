@@ -29,6 +29,14 @@ extraResources:
     to: tray-icon-light.ico
   - from: resources/tray-icon-dark.ico
     to: tray-icon-dark.ico
+  # Native Core Audio observer. Kept outside ASAR so Electron can spawn it.
+  # Staged directory copy: electron-builder 26 bypasses its Windows signing
+  # transformer for single-file extraResources mappings, and a directory
+  # mapping must not point into the cargo target/ tree (installer bloat).
+  - from: native/audio-endpoint-monitor/dist
+    to: audio
+    filter:
+      - notetaker-audio-endpoints.exe
 extraMetadata:
   SliceVersion: 1.0.0
 win:

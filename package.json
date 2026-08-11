@@ -31,9 +31,10 @@
     "verify:tray-icon": "esbuild scripts/verify-tray-icon.ts --bundle --platform=node --format=cjs --outfile=out/verify-tray-icon.cjs --log-level=error --external:electron && node out/verify-tray-icon.cjs",
     "verify:storage-cutover": "esbuild scripts/verify-storage-cutover.ts --bundle --platform=node --format=cjs --outfile=out/verify-storage-cutover.cjs --log-level=error && node out/verify-storage-cutover.cjs",
     "verify:voiceprint-admin": "esbuild scripts/verify-voiceprint-admin.tsx --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-voiceprint-admin.cjs --log-level=error --external:electron && node out/verify-voiceprint-admin.cjs",
-    "package": "electron-vite build && electron-builder",
-    "package:dir": "electron-vite build && electron-builder --dir",
-    "package:win": "node scripts/prepackage.cjs && electron-vite build && electron-builder --win"
+    "build:audio-helper": "cargo build --release --manifest-path native/audio-endpoint-monitor/Cargo.toml && node scripts/stage-audio-helper.cjs",
+    "package": "npm run build:audio-helper && electron-vite build && electron-builder",
+    "package:dir": "npm run build:audio-helper && electron-vite build && electron-builder --dir",
+    "package:win": "node scripts/prepackage.cjs && npm run build:audio-helper && electron-vite build && electron-builder --win"
   },
   "dependencies": {
     "@azure/msal-node": "^2.16.3",
