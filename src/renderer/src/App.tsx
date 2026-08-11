@@ -24,6 +24,7 @@ import {
   type SystemAudioSegmentUpload
 } from './lib/api'
 import { capture, type CaptureStatus, type SystemSegment } from './lib/capture'
+import { resolveDryRunMatch, formatDryRunLog } from './lib/audioRoutingDryRun'
 import { emailFailureMessage } from './lib/deliveryNotice'
 import notificationChimeUrl from './assets/notification.wav'
 import { loadPrefs } from './lib/prefs'
@@ -173,6 +174,39 @@ function App(): JSX.Element {
     stop: () => {}
   })
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null)
+  // Mirror for mount-once subscriptions (the endpoint-change listener) so they
+  // read current recording state instead of a stale closure.
+  const captureStatusRef = useRef<CaptureStatus | null>(null)
+  useEffect(() => {
+    captureStatusRef.current = captureStatus
+  }, [captureStatus])
+
+  // v2.0.24 dry-run routing telemetry: log what active routing (v2.0.25) WOULD
+  // do, without touching capture. Must never break recording — swallow errors.
+  const logDryRun = useCallback(async (event: 'recording-start' | 'endpoint-change') => {
+    try {
+      if (typeof window.api?.getAudioEndpointSnapshot !== 'function') return
+      const [snapshot, devices] = await Promise.all([
+        window.api.getAudioEndpointSnapshot(),
+        navigator.mediaDevices.enumerateDevices()
+      ])
+      const match = resolveDryRunMatch(snapshot, devices)
+      // CaptureStatus carries no mic label yet; activeMic stays null in v2.0.24.
+      window.api.debugLog('audio-routing dry-run', {
+        line: formatDryRunLog(event, snapshot, match, null)
+      })
+    } catch {
+      // Telemetry only.
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window.api?.onAudioEndpointChanged !== 'function') return
+    const unsubscribe = window.api.onAudioEndpointChanged(() => {
+      if (captureStatusRef.current?.recording) void logDryRun('endpoint-change')
+    })
+    return unsubscribe
+  }, [logDryRun])
   const [autoRecordingState, setAutoRecordingState] = useState<'idle' | 'recording' | 'processing'>('idle')
   const [postCaptureNotice, setPostCaptureNotice] = useState<PostCaptureNotice>(null)
   const [blobDeliveryNotices, setBlobDeliveryNotices] = useState<
@@ -437,6 +471,7 @@ function App(): JSX.Element {
           graphMetadata
         })
         setCaptureStatus(status)
+        void logDryRun('recording-start')
         setRecording({
           meetingId: created?.id ?? null,
           title,
@@ -706,6 +741,7 @@ function App(): JSX.Element {
       graphMetadata: null
     })
     setCaptureStatus(status)
+    void logDryRun('recording-start')
     if (!status.recording) {
       window.api.debugLog('manual recording could not start', { title, status })
       return
