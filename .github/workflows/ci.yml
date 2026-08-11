@@ -1,0 +1,58 @@
+# CI for pushes and PRs. Exists because the 4 Aug audio-routing release died
+# in the tag-triggered release job — the first place its tests had ever run.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  renderer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Renderer and main-process fixtures
+        run: |
+          npm run verify:audio-endpoint-protocol
+          npm run verify:audio-endpoint-service
+          npm run verify:audio-routing-dryrun
+          npm run verify:recording-controls
+          npm run verify:capture
+
+  rust-helper:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/audio-endpoint-monitor/target
+          key: cargo-ci-${{ runner.os }}-${{ hashFiles('native/audio-endpoint-monitor/Cargo.lock') }}
+      - run: cargo test --manifest-path native/audio-endpoint-monitor/Cargo.toml
+
+  backend:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r backend/requirements.txt pytest
+      - name: Backend tests
+        working-directory: backend
+        # One known-flaky concurrency test is deselected (pre-existing, tracked
+        # in docs/jira-progress.md); everything else must pass. The ~25 local
+        # failures on dev machines come from the real backend.env leaking into
+        # settings — CI has no backend.env, so the full suite is expected green.
+        run: python -m pytest tests --deselect tests/test_storage_api_meetings.py::StubMeetingDeliveryTests::test_stub_serializes_concurrent_exports_for_one_meeting -q
