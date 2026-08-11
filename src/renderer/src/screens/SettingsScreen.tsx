@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
+  AlertTriangle,
   ArrowLeft,
   Check,
   ChevronRight,
@@ -17,6 +18,7 @@ import { Card } from '@renderer/components/ui/Card'
 import { SelectMenu, type SelectOption } from '@renderer/components/ui/SelectMenu'
 import { loadPrefs, savePrefs } from '@renderer/lib/prefs'
 import type { Theme } from '@renderer/lib/theme'
+import type { AudioEndpointSnapshot } from '../../../shared/audio-endpoints'
 
 interface Props {
   previewMode?: boolean
@@ -57,6 +59,7 @@ export function SettingsScreen({
   const [page, setPage] = useState<'main' | 'advanced'>('main')
   const [prefs, setPrefs] = useState(loadPrefs)
   const [devices, setDevices] = useState<{ id: string; label: string }[]>([])
+  const [nativeEndpoints, setNativeEndpoints] = useState<AudioEndpointSnapshot | null>(null)
   const [autoLaunch, setAutoLaunch] = useState<AutoLaunchStatus | null>(null)
   const [autoLaunchBusy, setAutoLaunchBusy] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
@@ -115,6 +118,35 @@ export function SettingsScreen({
       })
       .catch(() => setDevices([]))
   }, [])
+
+  // Read-only view of the native Windows endpoint observer (v2.0.24). Null on
+  // non-Windows machines or when the helper is unavailable.
+  useEffect(() => {
+    if (previewMode) return
+    let active = true
+    void window.api
+      ?.getAudioEndpointSnapshot?.()
+      .then((snapshot) => {
+        if (active) setNativeEndpoints(snapshot)
+      })
+      .catch(() => {
+        if (active) setNativeEndpoints(null)
+      })
+    const unsubscribe = window.api?.onAudioEndpointChanged?.((snapshot) => {
+      if (active) setNativeEndpoints(snapshot)
+    })
+    return () => {
+      active = false
+      unsubscribe?.()
+    }
+  }, [previewMode])
+
+  const renderMismatch = Boolean(
+    nativeEndpoints?.endpoints.renderConsole &&
+      nativeEndpoints.endpoints.renderCommunications &&
+      nativeEndpoints.endpoints.renderConsole.id !==
+        nativeEndpoints.endpoints.renderCommunications.id
+  )
 
   const microphoneOptions = useMemo<SelectOption<string>[]>(
     () => [
@@ -216,6 +248,35 @@ export function SettingsScreen({
                   Ready
                 </span>
               </SettingRow>
+              <SettingRow
+                label="Windows communications microphone"
+                hint="The input Teams calls use; future releases can follow it automatically"
+              >
+                <EndpointValue
+                  label={nativeEndpoints?.endpoints.captureCommunications?.label ?? null}
+                />
+              </SettingRow>
+              <SettingRow
+                label="Windows communications output"
+                hint="Teams and Windows default output should use this same device"
+              >
+                <EndpointValue
+                  label={nativeEndpoints?.endpoints.renderCommunications?.label ?? null}
+                />
+              </SettingRow>
+              {renderMismatch && (
+                <div className="flex items-start gap-2 border-t border-edge-tertiary py-2.5 text-[12px] text-content-warning">
+                  <AlertTriangle size={14} strokeWidth={1.75} className="mt-0.5 shrink-0" />
+                  <span>
+                    Windows default output differs from the communications output. Notetaker
+                    records the default output, so remote participants may be missed.
+                  </span>
+                </div>
+              )}
+              <div className="border-t border-edge-tertiary pt-2.5 text-[12px] text-content-tertiary">
+                In Teams, choose Computer audio and keep the microphone and speaker on system
+                default so Teams and Notetaker follow the same devices.
+              </div>
             </Card>
           </div>
 
@@ -639,5 +700,23 @@ function SettingRow({
       </div>
       <div className="shrink-0 max-[560px]:w-full max-[560px]:justify-self-start">{children}</div>
     </div>
+  )
+}
+
+function EndpointValue({ label }: { label: string | null }): JSX.Element {
+  return (
+    <span
+      title={label ?? 'Unavailable'}
+      className="flex max-w-[224px] items-center gap-1.5 text-[14px] text-content-secondary max-[560px]:max-w-full"
+    >
+      <CircleCheck
+        size={15}
+        className={
+          label ? 'shrink-0 text-[var(--color-status-ok)]' : 'shrink-0 text-content-tertiary'
+        }
+        aria-hidden="true"
+      />
+      <span className="truncate">{label ?? 'Routing unavailable'}</span>
+    </span>
   )
 }

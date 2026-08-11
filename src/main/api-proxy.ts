@@ -108,7 +108,10 @@ export function registerApiProxyIpc(): void {
         logger().warn('[api-proxy] backend returned non-ok response', {
           method: req.method,
           path,
-          status: res.status
+          status: res.status,
+          // Error details (e.g. FastAPI's {"detail": ...}) never reach main.log
+          // otherwise; report-problem only carries this log, so keep an excerpt.
+          body: text.slice(0, 500)
         })
       }
       return { ok: res.ok, status: res.status, body: parseBody(text) }

@@ -14,14 +14,26 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import tests.conftest_env  # noqa: F401 — isolate MN_DATA_DIR before app imports
+from fastapi import HTTPException
 from pydantic import ValidationError
 
+from app import store
 from app.routers import meetings
-from app.schemas import SystemAudioSegment, UploadAudioRequest
+from app.routers.meetings import upload_audio
+from app.schemas import (
+    AccessRole,
+    Meeting,
+    MeetingAccessEntry,
+    MeetingSource,
+    SystemAudioSegment,
+    UploadAudioRequest,
+)
 
 
 class BuildSegmentMergeFilterTests(unittest.TestCase):
@@ -45,6 +57,14 @@ class BuildSegmentMergeFilterTests(unittest.TestCase):
             meetings._build_segment_merge_filter([])
         with self.assertRaises(ValueError):
             meetings._build_segment_merge_filter([0, -5])
+
+    def test_segments_only_without_mic(self) -> None:
+        self.assertEqual(
+            meetings._build_segment_merge_filter([0, 130000], include_mic=False),
+            "[0:a]adelay=delays=0:all=1[s0];"
+            "[1:a]adelay=delays=130000:all=1[s1];"
+            "[s0][s1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[a]",
+        )
 
 
 class UploadSchemaSegmentTests(unittest.TestCase):
@@ -86,6 +106,91 @@ class DecodeSystemSegmentsTests(unittest.TestCase):
     def test_no_system_audio_returns_empty_list(self) -> None:
         body = UploadAudioRequest(audio_b64=self.B64)
         self.assertEqual(meetings._decode_system_segments(body), [])
+
+
+class MicTooSmallFallbackTests(unittest.IsolatedAsyncioTestCase):
+    """A dead mic capture must not reject an otherwise-healthy recording.
+
+    Observed in the field (11 Aug 2026): a mic MediaRecorder that died during
+    a device switch left a sub-1KB webm; every upload retry then 422'd even
+    though 12MB of system audio was saved locally.
+    """
+
+    TINY = base64.b64encode(b"m" * 200).decode()
+    HEALTHY_MIC = base64.b64encode(b"m" * 2_048).decode()
+    HEALTHY_SEGMENT = base64.b64encode(b"s" * 60_000).decode()
+
+    def setUp(self):
+        self.meeting = Meeting(
+            id=uuid4(),
+            title="Mic fallback",
+            source=MeetingSource.online,
+            owner_id="Gabby",
+            created_at=datetime.now(timezone.utc),
+        )
+        store.MEETINGS[self.meeting.id] = self.meeting
+        store.ACCESS[self.meeting.id] = [
+            MeetingAccessEntry(user="Gabby", role=AccessRole.owner)
+        ]
+
+    def tearDown(self):
+        store.MEETINGS.pop(self.meeting.id, None)
+        store.ACCESS.pop(self.meeting.id, None)
+
+    async def _upload(self, body: UploadAudioRequest) -> None:
+        with patch(
+            "app.routers.meetings._prepare_uploaded_audio",
+            new=AsyncMock(return_value=Path("prepared.webm")),
+        ) as self.prepare, patch("app.routers.meetings.kick_pipeline"):
+            await upload_audio(self.meeting.id, body, actor="Gabby")
+
+    async def test_tiny_mic_with_segments_uploads_system_only(self) -> None:
+        await self._upload(
+            UploadAudioRequest(
+                audio_b64=self.TINY,
+                system_segments=[
+                    SystemAudioSegment(audio_b64=self.HEALTHY_SEGMENT, offset_ms=0),
+                    SystemAudioSegment(audio_b64=self.HEALTHY_SEGMENT, offset_ms=48_109),
+                ],
+            )
+        )
+        # Mic dropped: prepare receives None, and the meeting is flagged so the
+        # recorder knows their own voice is not in the recording.
+        self.assertIsNone(self.prepare.await_args.args[1])
+        self.assertTrue(store.MEETINGS[self.meeting.id].recorder_audio_missing)
+
+    async def test_tiny_mic_without_segments_still_rejected(self) -> None:
+        with self.assertRaises(HTTPException) as ctx:
+            await self._upload(UploadAudioRequest(audio_b64=self.TINY))
+        self.assertEqual(ctx.exception.status_code, 422)
+        self.assertEqual(ctx.exception.detail, "Audio is too short")
+
+    async def test_healthy_mic_keeps_current_behaviour(self) -> None:
+        await self._upload(
+            UploadAudioRequest(
+                audio_b64=self.HEALTHY_MIC,
+                system_segments=[
+                    SystemAudioSegment(audio_b64=self.HEALTHY_SEGMENT, offset_ms=0)
+                ],
+            )
+        )
+        self.assertEqual(self.prepare.await_args.args[1], b"m" * 2_048)
+        self.assertFalse(store.MEETINGS[self.meeting.id].recorder_audio_missing)
+
+
+class SystemOnlyMergeTests(unittest.TestCase):
+    def test_single_zero_offset_segment_written_directly_without_ffmpeg(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            meeting_id = uuid4()
+            segment = b"s" * 4_000
+            with patch.object(meetings, "audio_dir", return_value=tmp_path), patch.object(
+                meetings, "find_ffmpeg", return_value=None
+            ):
+                merged = meetings._merge_mic_and_system_audio(
+                    meeting_id, None, [(segment, 0)]
+                )
+            self.assertEqual(merged.read_bytes(), segment)
 
 
 @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg not on PATH")
@@ -133,6 +238,24 @@ class SegmentMergeFfmpegIntegrationTests(unittest.TestCase):
                     expected_seconds=10,
                 )
                 # Segment at 8s offset + 2s length → merged file ≈ 10s.
+                self.assertAlmostEqual(self._duration(merged), 10.0, delta=0.5)
+
+    def test_system_only_merge_spans_last_segment_offset_plus_length(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            seg0 = self._tone(tmp_path / "s0.webm", 2.0, 600)
+            seg1 = self._tone(tmp_path / "s1.webm", 2.0, 900)
+
+            from unittest.mock import patch
+
+            meeting_id = uuid4()
+            with patch.object(meetings, "audio_dir", return_value=tmp_path):
+                merged = meetings._merge_mic_and_system_audio(
+                    meeting_id,
+                    None,
+                    [(seg0, 0), (seg1, 8_000)],
+                    expected_seconds=10,
+                )
                 self.assertAlmostEqual(self._duration(merged), 10.0, delta=0.5)
 
 

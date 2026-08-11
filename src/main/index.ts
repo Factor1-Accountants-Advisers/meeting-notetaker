@@ -39,11 +39,30 @@ import {
 } from './updater'
 import { startBackendSupervisor, stopBackendSupervisor } from './backend-supervisor'
 import { createWindow, registerWindowSizingIpc } from './window'
+import { AudioEndpointService, resolveAudioEndpointHelperPath } from './audio-endpoint-service'
 import type { GraphEventDecision } from './graph/types'
 
 loadPublicEnv()
 initLogger()
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
+// Windows-only: the helper observes Core Audio endpoints; other platforms
+// (and dev before a cargo build, via the service's exists guard) run without.
+const audioEndpointService =
+  process.platform === 'win32'
+    ? new AudioEndpointService({
+        helperPath: resolveAudioEndpointHelperPath({
+          isPackaged: app.isPackaged,
+          resourcesPath: process.resourcesPath,
+          appPath: app.getAppPath()
+        }),
+        onSnapshot: (snapshot) => {
+          for (const window of BrowserWindow.getAllWindows()) {
+            window.webContents.send('audio-endpoints:changed', snapshot)
+          }
+        },
+        log: logger()
+      })
+    : null
 
 if (!gotSingleInstanceLock) {
   app.quit()
@@ -55,6 +74,7 @@ registerRecordingStorageIpc()
 registerUpdaterIpc()
 registerStartupIpc()
 registerWindowSizingIpc()
+ipcMain.handle('audio-endpoints:get', () => audioEndpointService?.getSnapshot() ?? null)
 
 function registerRecordingIpcHandlers(): void {
   ipcMain.on('renderer:debug-log', (_event, message: string, details?: unknown) => {
@@ -167,6 +187,7 @@ app.whenReady().then(() => {
   // (observed as a window flash when a toast protocol launch raced the lock).
   if (!gotSingleInstanceLock) return
   electronApp.setAppUserModelId('com.factor1.notetaker')
+  audioEndpointService?.start()
   // IN-483: toast action buttons activate via the notetaker:// protocol.
   // The installer registers the scheme (electron-builder `protocols`); this
   // call self-heals the registration on packaged launches. Deliberately NOT
@@ -309,6 +330,7 @@ app.on('window-all-closed', () => {
 let quitFailsafeArmed = false
 app.on('before-quit', () => {
   cleanupRecordingIpc()
+  audioEndpointService?.stop()
   stopBackendSupervisor()
   stopUpdaterTimers()
   destroyTray()

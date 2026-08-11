@@ -177,12 +177,16 @@ async def revoke_access(
     return entries
 
 
-def _decode_audio_b64(value: str, label: str) -> bytes:
+# Below this, a webm holds little more than container headers — no usable audio.
+MIN_AUDIO_BYTES = 1_000
+
+
+def _decode_audio_b64(value: str, label: str, min_bytes: int = MIN_AUDIO_BYTES) -> bytes:
     try:
         audio = base64.b64decode(value, validate=True)
     except (binascii.Error, ValueError):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{label} is not valid base64")
-    if len(audio) < 1_000:
+    if len(audio) < min_bytes:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{label} is too short")
     return audio
 
@@ -228,26 +232,30 @@ def _validate_merged_duration(
     )
 
 
-def _build_segment_merge_filter(offsets_ms: list[int]) -> str:
+def _build_segment_merge_filter(offsets_ms: list[int], *, include_mic: bool = True) -> str:
     """amix filtergraph placing each system segment at its timeline offset.
 
-    Input 0 is the mic track; inputs 1..N are system segments. Each segment is
-    shifted with adelay so a device-switch restart (IN-468) cannot collapse
-    later audio onto the start of the mix.
+    With a mic, input 0 is the mic track and inputs 1..N are system segments;
+    without one (mic capture died — the segments are the whole recording),
+    inputs 0..N-1 are the segments. Each segment is shifted with adelay so a
+    device-switch restart (IN-468) cannot collapse later audio onto the start
+    of the mix.
     """
     if not offsets_ms:
         raise ValueError("At least one system segment is required")
     if any(offset < 0 for offset in offsets_ms):
         raise ValueError("Segment offsets must be non-negative")
 
+    base = 1 if include_mic else 0
     delays = "".join(
-        f"[{i + 1}:a]adelay=delays={offset}:all=1[s{i}];"
+        f"[{i + base}:a]adelay=delays={offset}:all=1[s{i}];"
         for i, offset in enumerate(offsets_ms)
     )
     labels = "".join(f"[s{i}]" for i in range(len(offsets_ms)))
+    mic_input = "[0:a]" if include_mic else ""
     return (
-        f"{delays}[0:a]{labels}"
-        f"amix=inputs={len(offsets_ms) + 1}:duration=longest:dropout_transition=0:normalize=0[a]"
+        f"{delays}{mic_input}{labels}"
+        f"amix=inputs={len(offsets_ms) + base}:duration=longest:dropout_transition=0:normalize=0[a]"
     )
 
 
@@ -270,10 +278,30 @@ def _decode_system_segments(body: "UploadAudioRequest") -> list[tuple[bytes, int
 
 def _merge_mic_and_system_audio(
     meeting_id: UUID,
-    mic_audio: bytes,
+    mic_audio: bytes | None,
     system_segments: list[tuple[bytes, int]],
     expected_seconds: int | None = None,
 ) -> Path:
+    merged_path = audio_dir() / f"{meeting_id}.webm"
+
+    # A stale mic track from an earlier upload of this meeting would make the
+    # pipeline's silence probe overwrite the dropped-mic flag — remove it.
+    if mic_audio is None:
+        mic_track_path(meeting_id).unlink(missing_ok=True)
+
+    # Dead-mic upload with one uninterrupted system capture: the segment IS the
+    # recording — store it as-is, no ffmpeg required.
+    if mic_audio is None and len(system_segments) == 1 and system_segments[0][1] == 0:
+        merged_path.write_bytes(system_segments[0][0])
+        logger.info(
+            "Stored system-only recording without merge",
+            extra={
+                "meeting_id": str(meeting_id),
+                "system_bytes": len(system_segments[0][0]),
+            },
+        )
+        return merged_path
+
     ffmpeg = find_ffmpeg()
     if ffmpeg is None:
         raise HTTPException(
@@ -282,8 +310,8 @@ def _merge_mic_and_system_audio(
         )
 
     mic_path = mic_track_path(meeting_id)
-    merged_path = audio_dir() / f"{meeting_id}.webm"
-    mic_path.write_bytes(mic_audio)
+    if mic_audio is not None:
+        mic_path.write_bytes(mic_audio)
 
     segment_paths: list[Path] = []
     offsets: list[int] = []
@@ -294,12 +322,14 @@ def _merge_mic_and_system_audio(
         segment_paths.append(segment_path)
         offsets.append(offset_ms)
 
-    cmd = [ffmpeg, "-y", "-i", str(mic_path)]
+    cmd = [ffmpeg, "-y"]
+    if mic_audio is not None:
+        cmd += ["-i", str(mic_path)]
     for segment_path in segment_paths:
         cmd += ["-i", str(segment_path)]
     cmd += [
         "-filter_complex",
-        _build_segment_merge_filter(offsets),
+        _build_segment_merge_filter(offsets, include_mic=mic_audio is not None),
         "-map",
         "[a]",
         "-c:a",
@@ -346,7 +376,7 @@ def _merge_mic_and_system_audio(
         "Merged mic + system audio",
         extra={
             "meeting_id": str(meeting_id),
-            "mic_bytes": len(mic_audio),
+            "mic_bytes": len(mic_audio) if mic_audio is not None else 0,
             "system_bytes": sum(len(audio) for audio, _ in system_segments),
             "system_segments": len(system_segments),
             "segment_offsets_ms": [offset for _, offset in system_segments],
@@ -361,7 +391,7 @@ def _merge_mic_and_system_audio(
 
 async def _prepare_uploaded_audio(
     meeting_id: UUID,
-    audio: bytes,
+    audio: bytes | None,
     system_segments: list[tuple[bytes, int]],
     mime_type: str,
     expected_seconds: int | None,
@@ -375,6 +405,8 @@ async def _prepare_uploaded_audio(
             system_segments,
             expected_seconds,
         )
+    if audio is None:  # unreachable: a mic-less upload requires system segments
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Audio is too short")
     path = audio_path_for(meeting_id, mime_type)
     await asyncio.to_thread(path.write_bytes, audio)
     return path
@@ -399,8 +431,19 @@ async def upload_audio(
     if meeting.pipeline_status in (PipelineStatus.queued, PipelineStatus.processing):
         raise HTTPException(status.HTTP_409_CONFLICT, "Audio is already being processed")
 
-    audio = _decode_audio_b64(body.audio_b64, "Audio")
     system_segments = _decode_system_segments(body)
+    audio: bytes | None = _decode_audio_b64(body.audio_b64, "Audio", min_bytes=0)
+    if len(audio) < MIN_AUDIO_BYTES:
+        if not system_segments:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Audio is too short")
+        # A mic recorder that died (device switch, exclusive-mode contention)
+        # leaves a header-only webm. The system capture still holds the whole
+        # meeting — proceed without the mic rather than rejecting the upload.
+        logger.warning(
+            "Mic track has no usable audio; continuing with system audio only",
+            extra={"meeting_id": str(meeting_id), "mic_bytes": len(audio)},
+        )
+        audio = None
 
     path = await _prepare_uploaded_audio(
         meeting_id,
@@ -412,8 +455,9 @@ async def upload_audio(
 
     # Fresh audio invalidates any earlier silence verdict; the pipeline
     # re-measures in the background (full-file decode is too slow for this
-    # request path).
-    updates: dict[str, object] = {"recorder_audio_missing": False}
+    # request path). A dropped mic is flagged immediately — with no mic track
+    # on disk the pipeline probe skips online meetings, so this stamp sticks.
+    updates: dict[str, object] = {"recorder_audio_missing": audio is None}
     if body.duration_seconds:
         updates["duration_seconds"] = body.duration_seconds
     if body.graph_metadata:

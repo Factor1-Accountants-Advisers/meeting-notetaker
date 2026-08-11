@@ -7,6 +7,15 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
 
 ## Current implementation evidence
 
+- [x] v2.0.24 — Dead-mic upload safety net + audio endpoint observer re-land (11 Aug 2026)
+  - Spec: `docs/superpowers/specs/2026-08-11-audio-routing-staged-reland-design.md`; plan: `docs/superpowers/plans/2026-08-11-audio-routing-observe-reland.md`. Staged retry of the reverted 4 Aug audio-routing work: this release observes, nothing acts.
+  - Backend: a mic track under 1KB with healthy system segments no longer 422s the upload — system audio is stored/merged alone, `recorder_audio_missing` stamped at upload, stale mic track unlinked (field incident: Gabby's 11 Aug recording stuck in a retry loop on `Audio is too short`). Five new tests in `backend/tests/test_system_segment_merge.py` including a real-ffmpeg mic-less merge. `api-proxy` now logs non-ok response bodies so report-problem emails carry error detail.
+  - Observer foundation restored verbatim from tag `v2.0.17` (Rust helper, protocol validator, supervisor service) with two adaptations: win32-only start, and a missing helper binary degrades with one warning (fixture-covered). Wired behind `audio-endpoints:get`/`audio-endpoints:changed` IPC; the 10 Aug quit-teardown failsafe in `index.ts` is preserved.
+  - New dry-run matcher (`src/renderer/src/lib/audioRoutingDryRun.ts`, fixture `verify:audio-routing-dryrun`): pseudo-device exclusion, blank-label detection, groupId corroboration. Logs one `audio-routing dry-run` JSON line at recording start and per endpoint change while recording — fleet telemetry that validates the v2.0.25 active-routing matcher before it ever controls a stream. Capture behavior untouched; prefs untouched.
+  - Settings gains a read-only Windows endpoint section (communications mic/output, mismatch warning, Teams computer-audio guidance). Routing controls stay deferred to v2.0.25.
+  - Packaging: helper staged into `native/audio-endpoint-monitor/dist/` (electron-builder no longer walks the cargo target tree — the 4 Aug 213MB installer), release asserts signatures on installer + app + backend + helper outputs (replaces v2.0.17's YAML-regex checker) and guards installer size ≤175MB. New `ci.yml` runs typechecks, fixtures, cargo tests, and the backend pytest suite (one pre-existing flaky concurrency test deselected) on every push/PR — the release job is no longer the first executor of anything.
+  - Verified locally: all audio fixtures green, cargo 3/3, packaged helper emits a real four-endpoint snapshot from `dist/win-unpacked/resources/audio/`, backend suites green. Outstanding for release: CI green on push, live Bluetooth smoke on a signed build (spec acceptance §4), tag + FIC ritual + feed verification.
+
 - [x] Phase 1 — Durable backend pipeline stage model
   - Added backend-owned `pipeline_stage`, user-safe stage messages, stage timestamps, processing attempt/error fields, and independent `delivery_status`/`delivery_error_message`.
   - Pipeline now persists stage transitions for queued, transcribing/diarizing, identifying speakers, extracting notes, ready, and failed states.

@@ -15,6 +15,17 @@ files:
   - '!recordings/**'
   - '!dist/**'
   - '!*.tsbuildinfo'
+  # Rust sources + cargo target tree; the built helper ships via extraResources.
+  # Without this the release runner's cargo build lands ~300MB in app.asar.
+  - '!native/**'
+  # Stale git worktrees (superpowers tooling) — a full repo copy that was
+  # silently inflating installers since July.
+  - '!.worktrees/**'
+  # Repo-root credentials file. The app reads resources/backend/backend.env
+  # (extraResources) or the ProgramData override — the asar copy was an
+  # unread, rotation-proof duplicate of live keys in every installer.
+  - '!backend.env*'
+  - '!{.ruff_cache,.claude}/**'
 # seed-data (bundled voiceprint preload) removed 31 Jul 2026: obsolete since
 # the central voiceprint store + enrolment gate (Slice 2), and it shipped a
 # real employee's biometric embedding in every installer (30 Jul security
@@ -29,6 +40,14 @@ extraResources:
     to: tray-icon-light.ico
   - from: resources/tray-icon-dark.ico
     to: tray-icon-dark.ico
+  # Native Core Audio observer. Kept outside ASAR so Electron can spawn it.
+  # Staged directory copy: electron-builder 26 bypasses its Windows signing
+  # transformer for single-file extraResources mappings, and a directory
+  # mapping must not point into the cargo target/ tree (installer bloat).
+  - from: native/audio-endpoint-monitor/dist
+    to: audio
+    filter:
+      - notetaker-audio-endpoints.exe
 extraMetadata:
   SliceVersion: 1.0.0
 win:

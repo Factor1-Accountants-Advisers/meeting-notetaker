@@ -1,6 +1,6 @@
 {
   "name": "meeting-notetaker",
-  "version": "2.0.23",
+  "version": "2.0.24",
   "description": "Meeting recording, transcription, speaker identification, and transcript delivery",
   "main": "./out/main/index.js",
   "author": "Factor1",
@@ -16,6 +16,9 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "verify:graph": "esbuild scripts/verify-graph-fixtures.ts --bundle --platform=node --format=cjs --outfile=out/verify-graph-fixtures.cjs --log-level=error --external:electron && node out/verify-graph-fixtures.cjs",
+    "verify:audio-endpoint-protocol": "esbuild scripts/verify-audio-endpoint-protocol.ts --bundle --platform=node --format=cjs --outfile=out/verify-audio-endpoint-protocol.cjs --log-level=error && node out/verify-audio-endpoint-protocol.cjs",
+    "verify:audio-endpoint-service": "esbuild scripts/verify-audio-endpoint-service.ts --bundle --platform=node --format=cjs --outfile=out/verify-audio-endpoint-service.cjs --log-level=error && node out/verify-audio-endpoint-service.cjs",
+    "verify:audio-routing-dryrun": "esbuild scripts/verify-audio-routing-dryrun.ts --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-audio-routing-dryrun.cjs --log-level=error && node out/verify-audio-routing-dryrun.cjs",
     "verify:recording-controls": "esbuild scripts/verify-recording-controls.tsx --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-recording-controls.cjs --log-level=error && node out/verify-recording-controls.cjs",
     "verify:failure-chips": "esbuild scripts/verify-failure-chips.tsx --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-failure-chips.cjs --log-level=error && node out/verify-failure-chips.cjs",
     "verify:ad-hoc-attendees": "esbuild scripts/verify-ad-hoc-attendees.tsx --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-ad-hoc-attendees.cjs --log-level=error && node out/verify-ad-hoc-attendees.cjs",
@@ -28,9 +31,10 @@
     "verify:tray-icon": "esbuild scripts/verify-tray-icon.ts --bundle --platform=node --format=cjs --outfile=out/verify-tray-icon.cjs --log-level=error --external:electron && node out/verify-tray-icon.cjs",
     "verify:storage-cutover": "esbuild scripts/verify-storage-cutover.ts --bundle --platform=node --format=cjs --outfile=out/verify-storage-cutover.cjs --log-level=error && node out/verify-storage-cutover.cjs",
     "verify:voiceprint-admin": "esbuild scripts/verify-voiceprint-admin.tsx --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-voiceprint-admin.cjs --log-level=error --external:electron && node out/verify-voiceprint-admin.cjs",
-    "package": "electron-vite build && electron-builder",
-    "package:dir": "electron-vite build && electron-builder --dir",
-    "package:win": "node scripts/prepackage.cjs && electron-vite build && electron-builder --win"
+    "build:audio-helper": "cargo build --release --manifest-path native/audio-endpoint-monitor/Cargo.toml && node scripts/stage-audio-helper.cjs",
+    "package": "npm run build:audio-helper && electron-vite build && electron-builder",
+    "package:dir": "npm run build:audio-helper && electron-vite build && electron-builder --dir",
+    "package:win": "node scripts/prepackage.cjs && npm run build:audio-helper && electron-vite build && electron-builder --win"
   },
   "dependencies": {
     "@azure/msal-node": "^2.16.3",
