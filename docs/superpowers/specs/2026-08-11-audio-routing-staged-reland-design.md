@@ -1,4 +1,4 @@
-# Staged re-land of Windows audio routing — v2.0.21 "observe + safety net"
+# Staged re-land of Windows audio routing — v2.0.24 "observe + safety net"
 
 **Date:** 2026-08-11
 **Status:** Approved (design), pending implementation
@@ -52,13 +52,13 @@ monotonic re-stamped generations, one-shot restart policy).
 
 Re-land in two releases (approach approved 11 Aug):
 
-- **v2.0.21 (this spec):** everything that observes; nothing that acts.
+- **v2.0.24 (this spec):** everything that observes; nothing that acts.
   Ships the dead-mic upload safety net, the observer foundation, dry-run
   telemetry, a read-only endpoint display, CI, and a redesigned signing step.
-- **v2.0.22 (own spec later):** active mic routing, redesigned using v2.0.21
+- **v2.0.25 (own spec later):** active mic routing, redesigned using v2.0.24
   fleet telemetry plus a live eight-scenario hardware acceptance pass.
 
-## v2.0.21 scope
+## v2.0.24 scope
 
 ### 1. Dead-mic upload safety net (already implemented, uncommitted)
 
@@ -72,7 +72,7 @@ Re-land in two releases (approach approved 11 Aug):
   A tiny mic with no system segments still 422s ("Audio is too short").
 - `src/main/api-proxy.ts`: non-OK backend responses log a 500-char excerpt of
   the response body, so report-problem emails carry error details.
-- Covered by five new tests in `tests/test_system_segment_merge.py`, including
+- Covered by five new tests in `backend/tests/test_system_segment_merge.py`, including
   a real-ffmpeg mic-less two-segment merge.
 
 ### 2. Observer foundation (restored from tag v2.0.17)
@@ -92,7 +92,7 @@ Two adaptations:
 
 ### 3. Dry-run telemetry (new)
 
-Purpose: validate v2.0.22's matcher logic against the fleet before any of it
+Purpose: validate v2.0.25's matcher logic against the fleet before any of it
 controls capture.
 
 - A new renderer module `src/renderer/src/lib/audioRoutingDryRun.ts` contains
@@ -103,7 +103,11 @@ controls capture.
   (`matched` / `labels_blank` / `no_match` / `ambiguous` / `no_snapshot`).
 - On recording start and on each `audio-endpoints:changed` event while a
   recording is active, it logs one structured line via the existing
-  `window.api.debugLog` (lands in main.log): endpoint snapshot labels/ids,
+  `window.api.debugLog` (lands in main.log). "Recording is active" comes from
+  the capture module's existing `CaptureStatus.recording` flag (the singleton
+  already surfaces it to App.tsx); the dry-run module takes it as an input
+  rather than subscribing to capture internals. Each line carries: endpoint
+  snapshot labels/ids,
   whether Chromium labels were populated, the would-be match and outcome
   classification, and the active capture's current mic label for comparison.
 - Capture behavior is untouched: `capture.start()` keeps its current
@@ -116,7 +120,7 @@ From v2.0.17's SettingsScreen: the `EndpointValue` rows showing communications
 mic/output and console defaults, the console-vs-communications mismatch note,
 and the Teams "Computer audio" guidance. Explicitly not restored in this
 release: the routing-mode radio, the pinned-mic picker, prefs `version: 2`
-migration, and the RecordingScreen routing banners — all deferred to v2.0.22.
+migration, and the RecordingScreen routing banners — all deferred to v2.0.25.
 
 ### 5. Packaging and signing (redesigned)
 
@@ -150,7 +154,7 @@ migration, and the RecordingScreen routing banners — all deferred to v2.0.22.
 The release workflow keeps its build and signature gates but is no longer the
 first executor of any test.
 
-## Acceptance criteria (v2.0.21)
+## Acceptance criteria (v2.0.24)
 
 1. CI green: typechecks, fixtures, `cargo test`, backend suite per §6.
 2. A local packaged build contains `resources/audio/notetaker-audio-endpoints.exe`;
@@ -166,13 +170,13 @@ first executor of any test.
 6. Non-Windows/dev environments: app runs with no helper binary present, one
    log line, no restart spam.
 
-## Out of scope (deferred to the v2.0.22 spec)
+## Out of scope (deferred to the v2.0.25 spec)
 
 Active mic routing; prefs schema v2 and migration policy (existing pins stay
 active); reacquisition triggered by endpoint-generation changes; the rule that
 RMS silence warns but never tears down; the rule that `renderCommunications`
 changes never touch loopback; RecordingScreen banners; the full eight-scenario
-hardware acceptance matrix (it gates v2.0.22, not v2.0.21).
+hardware acceptance matrix (it gates v2.0.25, not v2.0.24).
 
 ## Risks
 
