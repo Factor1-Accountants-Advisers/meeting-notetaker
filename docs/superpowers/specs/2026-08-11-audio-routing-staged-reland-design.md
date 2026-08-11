@@ -186,7 +186,7 @@ hardware acceptance matrix (it gates v2.0.25, not v2.0.24).
 - **Installer size**: the helper added ~1 MB in v2.0.17's unpacked resources;
   the 162→213 MB bloat came from walking the Cargo target tree, which the
   staging directory eliminates. Assert installer size is within ~5 MB of
-  v2.0.20's in the release checklist.
+  v2.0.23's in the release checklist.
 - **Cert-less machines** (e.g. Gabby's) silently ignore feed updates; her
   retry depends on this release reaching her. Coordinate with DV on the Intune
   root-cert profile or a manual over-the-top install.
