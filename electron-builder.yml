@@ -15,6 +15,12 @@ files:
   - '!recordings/**'
   - '!dist/**'
   - '!*.tsbuildinfo'
+  # Rust sources + cargo target tree; the built helper ships via extraResources.
+  # Without this the release runner's cargo build lands ~300MB in app.asar.
+  - '!native/**'
+  # Stale git worktrees (superpowers tooling) — a full repo copy that was
+  # silently inflating installers since July.
+  - '!.worktrees/**'
 # seed-data (bundled voiceprint preload) removed 31 Jul 2026: obsolete since
 # the central voiceprint store + enrolment gate (Slice 2), and it shipped a
 # real employee's biometric embedding in every installer (30 Jul security
