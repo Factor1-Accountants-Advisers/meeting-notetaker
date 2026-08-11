@@ -21,6 +21,11 @@ files:
   # Stale git worktrees (superpowers tooling) — a full repo copy that was
   # silently inflating installers since July.
   - '!.worktrees/**'
+  # Repo-root credentials file. The app reads resources/backend/backend.env
+  # (extraResources) or the ProgramData override — the asar copy was an
+  # unread, rotation-proof duplicate of live keys in every installer.
+  - '!backend.env*'
+  - '!{.ruff_cache,.claude}/**'
 # seed-data (bundled voiceprint preload) removed 31 Jul 2026: obsolete since
 # the central voiceprint store + enrolment gate (Slice 2), and it shipped a
 # real employee's biometric embedding in every installer (30 Jul security
