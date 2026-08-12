@@ -244,10 +244,13 @@ Per D7, every failure path leaves today's behaviour intact. Specifics:
   semantics; cursor pagination; auth-invariant test updated for the single
   webhook exception; feature-flag 503s.
 - **Local backend (pytest):** relay forwards token/headers; stub no-ops.
-- **Desktop (vitest):** poller state machine as a pure unit (signal
-  sequences → control calls), grace timing, rejoin/manual-resume
-  cancellation, signal-initiated-pause-only auto-resume, duplicate signal
-  idempotency; `toastActionFromArgv` new verbs; toast XML shape.
+- **Desktop (verify scripts):** the repo's convention is esbuild-bundled
+  `verify:*` Node harnesses in `scripts/` (no vitest). A new
+  `verify:call-signals` script exercises the poller state machine as a pure
+  unit (signal sequences → control calls), grace timing, rejoin/manual-
+  resume cancellation, signal-initiated-pause-only auto-resume, duplicate
+  signal idempotency; the existing `verify:toast-xml` gains the new verbs
+  and toast shape.
 - **Live smoke before ship:** repeat the spike runbook once against the
   deployed webhook with a real test meeting on a packaged build: leave →
   pause+toast; rejoin → resume; leave + wait 60 s → auto-stop + pipeline;
