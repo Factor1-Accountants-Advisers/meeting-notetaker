@@ -138,6 +138,12 @@ stdlib urllib, subscription create on /beta, delete on v1.0) and
 `app/services/call_notifications.py` (JWT validation, decrypt, PascalCase-
 insensitive parse, signal reduction).
 
+The Graph subscription resource is keyed **directly on the join URL** — no
+onlineMeeting-id lookup exists or is needed:
+`communications/onlineMeetings(joinWebUrl='{url-encoded joinWebUrl}')/meetingCallEvents`,
+`changeType: updated`, created on /beta. Transcribe the exact request shape
+from the spike's `spikes/meeting-call-events/subscribe.py` (`create()`).
+
 Routes:
 
 - `POST /api/v1/call-watches` (require_scoped_user)
@@ -145,8 +151,12 @@ Routes:
   `{watch_id, subscription_expires_utc}`. Replaces any existing watch for
   the caller's OID. Graph failure → 502 `graph_error` (desktop treats as
   registration failure, D7).
-- `GET /api/v1/call-watches/current/signals?after={seq}`
-  (require_scoped_user) → `{signals: [{seq, type, event_utc, received_utc}]}`.
+- `GET /api/v1/call-watches/current/signals` (require_scoped_user) →
+  `{signals: [{seq, type, event_utc, received_utc}]}` — **all** signals for
+  the current watch (a handful per meeting, bounded by D2's replace
+  semantics). No server-side cursor: the desktop dedupes by `seq` against
+  its seen-set, which sidesteps any cross-instance clock-skew ordering
+  hazard in `seq` generation.
 - `DELETE /api/v1/call-watches/current` (require_scoped_user) → 204; deletes
   the Graph subscription (best effort) and blobs.
 - `POST /graph/call-notifications` — D4 webhook.
@@ -181,11 +191,16 @@ DELETE watch, best effort).
 
 Poller: every 10 s, GET signals through the local backend (same fetch +
 `storageIdentityHeaders` + `getStorageApiAccessToken` pattern as
-`api-proxy.ts`, honoring `isStorageApiEnabled`). State machine:
+`api-proxy.ts`, honoring `isStorageApiEnabled`), deduping by `seq` against
+an in-memory seen-set that resets when the poller re-arms. State machine:
 
 - `recorder_left` (and not already in grace): if not paused →
   `sendTrayRecordingControl('pause')`, mark pause signal-initiated. Start
-  60 s grace timer. Show sticky toast (below) + chime.
+  60 s grace timer **anchored on desktop receipt time** (not `event_utc`) —
+  deterministic locally; the effective window from the actual leave is
+  60 s + delivery latency (~2 s) + up to one poll interval (10 s), which is
+  acceptable and documented for the live-smoke expectations. Show sticky
+  toast (below) + chime.
 - `recorder_rejoined` during grace: cancel grace; if pause was
   signal-initiated → `sendTrayRecordingControl('resume')`; close toast.
 - `call_ended`: cancel grace, `sendAutoStopRequest()`.
