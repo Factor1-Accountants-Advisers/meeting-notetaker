@@ -241,8 +241,9 @@ Per D7, every failure path leaves today's behaviour intact. Specifics:
   fixture generator (port of the spike's `selftest.py`); handshake echo
   content-type; clientState and JWT rejections; PascalCase and camelCase
   payloads; signal reduction to the watch owner only; watch replace
-  semantics; cursor pagination; auth-invariant test updated for the single
-  webhook exception; feature-flag 503s.
+  semantics; signal listing (return-all + client seen-set dedupe, no
+  server cursor); auth-invariant test updated for the single webhook
+  exception; feature-flag 503s on watch routes (webhook still 202s dark).
 - **Local backend (pytest):** relay forwards token/headers; stub no-ops.
 - **Desktop (verify scripts):** the repo's convention is esbuild-bundled
   `verify:*` Node harnesses in `scripts/` (no vitest). A new

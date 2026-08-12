@@ -238,7 +238,7 @@ Add a `call_watch_settings` fixture in `tests/conftest.py` that monkeypatches `g
   - `delete_watch(oid)` removes watch + signals, returns the watch (or None).
   - `find_watch_by_subscription(subscription_id)` / or by `client_state` lookup used by the webhook to route notifications → decide: store `subscription_id` in watch.json and look up by scanning `callwatches/*/watch.json` (`list_json_prefix("callwatches/")` filtered to `/watch.json`). Fleet size makes the scan cheap.
 - [ ] **Step 2: Run → FAIL.**
-- [ ] **Step 3: Implement.** `seq = f"{received:%Y%m%dT%H%M%S%f}-{notification_id[:8]}"`. Blob helpers follow `blob.py`'s existing error mapping (`StorageUnavailable`).
+- [ ] **Step 3: Implement.** `seq = f"{received:%Y%m%dT%H%M%S%f}-{suffix}"` where `suffix` is the notification's `id`[:8] if present, else `uuid4().hex[:8]` (Graph marks the item `id` optional). Blob helpers follow `blob.py`'s existing error mapping (`StorageUnavailable`).
 - [ ] **Step 4: Run → PASS.**
 - [ ] **Step 5: Commit** — `git commit -am "feat: call-watch blob store (one watch per oid, write-once signals)"`
 
@@ -276,6 +276,9 @@ Add a `call_watch_settings` fixture in `tests/conftest.py` that monkeypatches `g
   - Handshake: `POST /graph/call-notifications?validationToken=abc` → 200, body `abc`, content-type starts `text/plain`.
   - Valid encrypted notification (built with `tests/graph_fixtures.encrypt_like_graph`, `clientState` matching settings, `validationTokens` validation monkeypatched to pass) → 202 and a signal blob written for the watch's oid.
   - Wrong `clientState` → 202 but **no** signal written.
+  - `call_watches_enabled=False` → still 202 (D8: the webhook must keep
+    acking while the feature is dark so Graph doesn't disable the
+    subscription; never guard this route with the feature flag).
   - JWT validation failure → 202, no signal (drop + log; never 4xx/5xx to Graph).
   - Decrypt failure → 202, no signal.
   - Unknown subscription id → 202, no signal.
@@ -353,7 +356,10 @@ export interface CallSignalActions {
   pause(): void            // -> sendTrayRecordingControl('pause')
   resume(): void           // -> sendTrayRecordingControl('resume')
   stop(): void             // -> sendAutoStopRequest()
-  showPausedToast(): void
+  showPausedToast(): void  // sticky toast AND the renderer chime — send the
+                           // 'notification:chime' IPC exactly like
+                           // notifyMeetingEndingSoon does (toasts are silent
+                           // by repo convention; the renderer owns the wav)
   closePausedToast(): void
   isPaused(): boolean      // -> isRecordingPaused()
 }
