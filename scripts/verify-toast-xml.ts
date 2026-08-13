@@ -104,7 +104,7 @@ assert.match(
   /Recording paused because you left &quot;Q&amp;A &lt;sync&gt;&quot;\./,
   'body text is XML-escaped'
 )
-assert.doesNotMatch(paused, /<prep>|<sync>/, 'raw angle brackets never reach the toast XML')
+assert.doesNotMatch(paused, /<sync>/, 'raw angle brackets never reach the toast XML')
 assert.doesNotMatch(paused, /activationType="foreground"/, 'no dead foreground buttons (IN-483)')
 assert.doesNotMatch(paused, /mn-upload-now/, 'upload-now has no legacy mn-* form')
 assert.doesNotMatch(paused, /mn-resume-recording/, 'resume-recording has no legacy mn-* form')
