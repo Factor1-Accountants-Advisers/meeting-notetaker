@@ -8,21 +8,22 @@ the ``X-MN-Storage-Token`` header (the same alias pattern as
 through to the Storage API client (real or stub, per
 ``get_storage_api_client()``).
 
-Error mapping reuses ``voiceprint_admin._raise_storage_error`` verbatim
-rather than re-deriving it (established precedent): a ``StorageApiRejected``
-with a genuine 4xx status forwards that status as-is (a real 422 from the
-Storage API must still look like a 422 to the desktop, not get flattened to
-502); ``StorageApiUnavailable`` becomes 503; everything else — an odd/5xx
-``StorageApiRejected`` status, or a ``StorageApiContractError`` — falls back
-to 502. Downstream (spec D7) treats every failure here as "feature dormant
-this recording", so faithful status forwarding is what actually matters.
+Error mapping uses the shared ``app.routers._storage_errors`` helper (also
+used by ``voiceprint_admin``, its origin) rather than re-deriving it: a
+``StorageApiRejected`` with a genuine 4xx status forwards that status as-is
+(a real 422 from the Storage API must still look like a 422 to the desktop,
+not get flattened to 502); ``StorageApiUnavailable`` becomes 503; everything
+else — an odd/5xx ``StorageApiRejected`` status, or a
+``StorageApiContractError`` — falls back to 502. Downstream (spec D7) treats
+every failure here as "feature dormant this recording", so faithful status
+forwarding is what actually matters.
 """
 
 from typing import Annotated
 
 from fastapi import APIRouter, Header, status
 
-from app.routers.voiceprint_admin import _raise_storage_error
+from app.routers._storage_errors import raise_storage_error as _raise_storage_error
 from app.schemas import CallSignalsResponse, CallWatchReceipt, CallWatchRegistration
 from app.services.storage_api import StorageApiError, get_storage_api_client
 
@@ -31,6 +32,9 @@ router = APIRouter(prefix="/call-watch", tags=["call watch"])
 StorageToken = Annotated[str | None, Header(alias="X-MN-Storage-Token")]
 
 
+# Trivial one-liner (no branching, nothing to drift) — kept duplicated per
+# router rather than shared, unlike the error-mapping logic above, which has
+# multi-branch status-code decisions that are easy to accidentally diverge.
 def _token(value: str | None) -> str | None:
     return (value or "").strip() or None
 
