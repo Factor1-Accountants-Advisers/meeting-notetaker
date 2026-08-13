@@ -425,8 +425,8 @@ class CallWatchRegistration(BaseModel):
     ``.0000000Z`` suffix is not real sub-second precision to round-trip.
     """
 
-    join_web_url: str
-    scheduled_end_utc: str
+    join_web_url: str = Field(min_length=1)
+    scheduled_end_utc: str = Field(min_length=1)
 
 
 class CallWatchReceipt(BaseModel):

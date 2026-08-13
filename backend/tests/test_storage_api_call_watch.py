@@ -112,6 +112,24 @@ class RestCallWatchTests(unittest.TestCase):
         result = client.get_call_signals("token-value")
         self.assertEqual(result.signals, [])
 
+    def test_get_call_signals_round_trips_a_null_event_utc(self):
+        # event_utc is the only nullable field in the DTO surface (Graph's own
+        # eventDateTime is optional) — pin that None survives the round trip
+        # rather than being coerced to a string or rejected.
+        payload = {
+            "signals": [
+                {
+                    "seq": "20260812T023004123456-a1b2c3d4",
+                    "type": "recorder_left",
+                    "event_utc": None,
+                    "received_utc": "2026-08-12T02:30:05.987654+00:00",
+                }
+            ]
+        }
+        client = self._client(payload)
+        result = client.get_call_signals("token-value")
+        self.assertIsNone(result.signals[0].event_utc)
+
     def test_get_call_signals_rejects_malformed_shapes(self):
         with self.assertRaises(StorageApiContractError):
             self._client({"signals": [{"seq": "1", "type": "not_a_real_type", "received_utc": "x"}]}).get_call_signals(
