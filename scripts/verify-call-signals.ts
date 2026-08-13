@@ -836,6 +836,56 @@ function scenarioReentrantActions(): void {
   assert.equal(reentries, 1, 'the replayed seq must be deduped before it can re-query the state')
 }
 
+/**
+ * The sibling of the `call_ended`-from-`isPaused()` case: a SECOND
+ * `recorder_left` (different seq) re-entered from inside the pause query,
+ * while the first leave is still uncommitted. Dedupe cannot help — the seqs
+ * differ — so only the post-query state check stops the outer transition from
+ * arming a second grace timer over the live one and pausing twice. A guard
+ * weakened to `state === 'done'` passes every other scenario and fails here.
+ */
+function scenarioReentrantLeaveFromIsPaused(): void {
+  const clock = createFakeClock()
+  const recorder = createRecorder()
+  let machine: Machine | null = null
+  let reentries = 0
+  const reentrantLeave: CallSignalActions = {
+    ...recorder.actions,
+    isPaused(): boolean {
+      reentries += 1
+      // Depth-capped so a regression fails an assertion instead of hanging.
+      if (reentries < 5) machine?.ingest([signal('002', 'recorder_left')])
+      return false
+    }
+  }
+  machine = createCallSignalMachine(reentrantLeave, CALL_SIGNAL_GRACE_MS, clock.timers)
+  machine.ingest([signal('001', 'recorder_left')])
+
+  assert.equal(
+    clock.pendingCount(),
+    1,
+    'a leave re-entered from isPaused() must leave exactly one grace timer armed'
+  )
+  assert.deepEqual(
+    recorder.calls,
+    ['pause', 'showPausedToast'],
+    'the superseded outer leave must not pause or toast a second time'
+  )
+  assert.equal(machine.getState(), 'grace', 'the inner transition owns the state')
+  assert.equal(machine.getActionErrorCount(), 0, 'no action threw in this path')
+  assert.equal(reentries, 2, 'the inner leave queries the pause state once more, then settles')
+
+  // The single armed timer must still produce exactly one stop.
+  recorder.reset()
+  clock.tick(CALL_SIGNAL_GRACE_MS)
+  assert.deepEqual(
+    recorder.calls,
+    ['closePausedToast', 'stop'],
+    'the one surviving grace timer stops exactly once'
+  )
+  assert.equal(clock.pendingCount(), 0, 'no orphaned second timer may remain')
+}
+
 function scenarioParseCallSignals(): void {
   const parsed = parseCallSignals({
     signals: [
@@ -1345,6 +1395,7 @@ async function main(): Promise<void> {
   // Robustness: injected actions are untrusted (may throw, may re-enter).
   scenarioThrowingActions()
   scenarioReentrantActions()
+  scenarioReentrantLeaveFromIsPaused()
 
   // Wire translation + arm gating (pure).
   scenarioParseCallSignals()

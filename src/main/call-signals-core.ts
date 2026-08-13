@@ -202,6 +202,21 @@ export function createCallSignalMachine(
     runEffects(committed, steps)
   }
 
+  /** Enter the grace window. `shouldPause` is false when the user had already
+   *  paused by hand; `trusted` is false when the pause query threw, in which
+   *  case we pause but decline ownership (D6). */
+  const enterGrace = (shouldPause: boolean, trusted: boolean): void => {
+    signalInitiatedPause = shouldPause && trusted
+    state = 'grace'
+    graceTimer = timers.setTimeout(onGraceExpired, graceMs)
+    toastVisible = true
+    const committed = ++generation
+    const steps: Array<() => void> = []
+    if (shouldPause) steps.push(() => actions.pause())
+    steps.push(() => actions.showPausedToast())
+    runEffects(committed, steps)
+  }
+
   const onGraceExpired = (): void => {
     graceTimer = null
     if (state !== 'grace') return
@@ -218,22 +233,13 @@ export function createCallSignalMachine(
         const paused = queryIsPaused()
         // The one action that must run BEFORE the commit — it decides D6
         // ownership. So it is also the one place a re-entrant signal can land
-        // while this transition is still uncommitted: if the machine moved
-        // underneath us (a `call_ended` from inside `isPaused()`), the newer
-        // transition owns the outcome and this one stands down rather than
-        // resurrecting a finished machine into grace with a live timer.
+        // while this transition is still uncommitted. Anything but `watching`
+        // means the machine moved underneath us (a `call_ended` finished it, or
+        // another `recorder_left` already entered grace), and the newer
+        // transition owns the outcome: stand down rather than resurrect a
+        // finished machine or arm a second grace timer over a live one.
         if (state !== 'watching') return
-        const shouldPause = !paused.paused
-        // Commit everything before any action runs.
-        signalInitiatedPause = shouldPause && paused.trusted
-        state = 'grace'
-        graceTimer = timers.setTimeout(onGraceExpired, graceMs)
-        toastVisible = true
-        const committed = ++generation
-        const steps: Array<() => void> = []
-        if (shouldPause) steps.push(() => actions.pause())
-        steps.push(() => actions.showPausedToast())
-        runEffects(committed, steps)
+        enterGrace(!paused.paused, paused.trusted)
         return
       }
       case 'recorder_rejoined': {

@@ -72,6 +72,11 @@ export interface CallSignalRuntimeDeps {
 }
 
 let runtimeDeps: CallSignalRuntimeDeps | null = null
+// Exactly one poller can be live, mirroring the recording state machine: it
+// permits a single active recording at a time (`recording-state.ts`), and
+// `armCallSignals` disarms any predecessor before creating the next one — so a
+// second arm can never leave two pollers racing over the same watch (the
+// Storage API keeps one watch per user OID anyway, spec D2).
 let activePoller: CallSignalPoller | null = null
 
 const defaultLog: CallSignalLog = (level, message, context) => {
@@ -124,6 +129,12 @@ function createIdentityHeaderProvider(scope: string): () => Promise<Record<strin
 /**
  * Register the real control actions (and any overrides). Task 13 calls this
  * once during main-process startup, before any recording can start.
+ *
+ * Passing `null` clears the configuration: an already-armed poller keeps
+ * running (disarm it explicitly), but every later `armCallSignals` declines
+ * with `reason: 'not_configured'` and the feature stays dormant. That is the
+ * teardown/test path, not a kill switch — use `MN_CALL_SIGNALS_ENABLED=false`
+ * for that (D8).
  */
 export function configureCallSignals(deps: CallSignalRuntimeDeps | null): void {
   runtimeDeps = deps
