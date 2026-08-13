@@ -1,7 +1,8 @@
 import { BrowserWindow, Notification, powerSaveBlocker } from 'electron'
 import { createRecordingStateMachine, type ActiveRecording, type RecordingStateMachine } from './recording-state'
 import { logger } from './logger'
-import { buildEndingSoonToastXml } from './toast-xml'
+import { buildEndingSoonToastXml, buildRecordingPausedToastXml } from './toast-xml'
+import { armCallSignals, disarmCallSignals } from './call-signals'
 
 // IN-129: while recording, hold the system awake so an idle timeout can't
 // sleep the machine mid-meeting. (Lid-close sleep is OS power policy and
@@ -220,6 +221,7 @@ export function handleRendererRecordingStarted(): void {
     sm.startAutoRecording(recording)
     blockSleepWhileRecording()
     scheduleAutoStop(recording)
+    armCallSignals(recording)
     notifyAutoRecordingStarted(recording)
   }
   logger().info('[recording] renderer confirmed recording started', {
@@ -251,6 +253,8 @@ export function registerManualRecording(recording: ActiveRecording & { title?: s
 }
 
 export function handleRendererRecordingStopped(): void {
+  closePausedToastAndDisarm()
+
   recordingPaused = false
   resetAutoStopState()
   unblockSleep()
@@ -269,6 +273,8 @@ export function handleRendererRecordingStopped(): void {
 }
 
 export function handleRendererRecordingError(message: string): void {
+  closePausedToastAndDisarm()
+
   recordingPaused = false
   resetAutoStopState()
   unblockSleep()
@@ -456,6 +462,78 @@ function notifyMeetingEndingSoon(recording: ActiveRecording): void {
   }
 }
 
+// Kept module-level so closeRecordingPausedToast() can .close() the toast the
+// call-signal machine asked us to show (call-signals.ts's disarmCallSignals
+// doc comment, obligation 1: a visible toast must be closed before disarm).
+let pausedToastNotification: Notification | null = null
+
+/**
+ * "Recording paused — you left the meeting" toast (meeting-call-events,
+ * Task 13). Driven by the call-signal machine's `showPausedToast` action, not
+ * called directly elsewhere. Same win32-toast / other-platforms-notification
+ * split as notifyMeetingEndingSoon; unlike that one, the instance is kept so
+ * closeRecordingPausedToast() can dismiss it early.
+ */
+export function showRecordingPausedToast(): void {
+  if (!Notification?.isSupported?.()) {
+    logger().warn('[recording] paused-toast notification unsupported by Electron')
+    return
+  }
+  // Clear/replace any toast already on screen before showing the new one.
+  closeRecordingPausedToast()
+  const body = 'Looks like you left the meeting — recording paused. Upload now, or keep recording?'
+  try {
+    if (process.platform === 'win32') {
+      // Sticky reminder toast with Upload now/Keep recording buttons, same
+      // protocol-activation convention as the ending-soon toast above.
+      pausedToastNotification = new Notification({ toastXml: buildRecordingPausedToastXml(body) })
+      logger().info('[recording] paused Windows toast requested')
+    } else {
+      // Silent: the renderer plays the Notetaker chime instead (IN-477).
+      pausedToastNotification = new Notification({ title: 'Meeting Notetaker', body, silent: true })
+      logger().info('[recording] paused notification requested')
+    }
+    pausedToastNotification.show()
+    playNotificationChime()
+  } catch (err) {
+    pausedToastNotification = null
+    logger().warn('[recording] could not show paused-recording notification', {
+      message: err instanceof Error ? err.message : String(err)
+    })
+  }
+}
+
+/** Close the paused-recording toast if one is showing. Safe to call when none
+ *  is showing — the call-signal machine closes defensively on every terminal
+ *  transition, and this is the disarm-path guard too. */
+export function closeRecordingPausedToast(): void {
+  if (!pausedToastNotification) return
+  const notification = pausedToastNotification
+  pausedToastNotification = null
+  try {
+    notification.close()
+  } catch (err) {
+    logger().warn('[recording] could not close paused-recording notification', {
+      message: err instanceof Error ? err.message : String(err)
+    })
+  }
+}
+
+/**
+ * Close a visible paused toast, then disarm the call-signal poller. Every
+ * recording-teardown path (stopped, error, cleanup) shares this exact
+ * ordering: call-signals.ts's disarmCallSignals doc comment requires the
+ * toast closed FIRST, because `dispose()` fires no actions and a sticky
+ * toast would otherwise outlive the recording — and disarming is never the
+ * stop itself (this module's own teardown in each caller is the real stop
+ * path). closeRecordingPausedToast() is already a safe no-op when nothing is
+ * showing, so callers need no visibility check of their own.
+ */
+function closePausedToastAndDisarm(): void {
+  closeRecordingPausedToast()
+  disarmCallSignals()
+}
+
 /** True while an auto-recording with a scheduled end is active (extendable). */
 export function hasExtendableRecording(): boolean {
   return getRecordingStateMachine().getState() === 'recording' && autoStopEndMs !== null
@@ -495,6 +573,7 @@ function resetAutoStopState(): void {
 }
 
 export function cleanupRecordingIpc(): void {
+  closePausedToastAndDisarm()
   resetAutoStopState()
   unblockSleep()
   clearAutoStartAckTimer()

@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 
 from app.config import get_settings
 from app.paths import central_meetings_dir, central_voiceprint_path
+from app.schemas import CallSignalsResponse, CallWatchReceipt, CallWatchRegistration
 
 
 class StorageApiError(RuntimeError):
@@ -213,6 +214,11 @@ class StorageApiClient(Protocol):
         access_token: str | None,
     ) -> AudioUploadGrant: ...
     def upload_audio_to_grant(self, grant: AudioUploadGrant, audio_path: Path) -> None: ...
+    def register_call_watch(
+        self, registration: CallWatchRegistration, access_token: str | None
+    ) -> CallWatchReceipt: ...
+    def get_call_signals(self, access_token: str | None) -> CallSignalsResponse: ...
+    def delete_call_watch(self, access_token: str | None) -> None: ...
 
 
 def central_enrolment_required() -> bool:
@@ -530,6 +536,24 @@ class StubStorageApiClient:
                     raise
             except OSError as exc:
                 raise StorageApiUnavailable("stub audio upload could not read the recording") from exc
+
+    def register_call_watch(
+        self, registration: CallWatchRegistration, access_token: str | None
+    ) -> CallWatchReceipt:
+        # Ships dark (spec D7/D8): with no central storage configured this
+        # feature is silently inert, so no dev/stub artifact is written.
+        self._fail_if_injected(self)
+        return CallWatchReceipt(
+            watch_id="stub-watch",
+            subscription_expires_utc="2099-12-31T23:59:59.0000000Z",
+        )
+
+    def get_call_signals(self, access_token: str | None) -> CallSignalsResponse:
+        return CallSignalsResponse(signals=[])
+
+    def delete_call_watch(self, access_token: str | None) -> None:
+        self._fail_if_injected(self)
+        return None
 
 
 class RestStorageApiClient:
@@ -850,6 +874,42 @@ class RestStorageApiClient:
                     connection.close()
                 except (OSError, http.client.HTTPException):
                     pass
+
+    def register_call_watch(
+        self, registration: CallWatchRegistration, access_token: str | None
+    ) -> CallWatchReceipt:
+        raw = self._request(
+            "POST",
+            "/api/v1/call-watches",
+            access_token,
+            registration.model_dump(mode="json"),
+        )
+        try:
+            return CallWatchReceipt.model_validate(raw)
+        except pydantic.ValidationError as exc:
+            raise StorageApiContractError(
+                "storage API returned a malformed call watch receipt"
+            ) from exc
+
+    def get_call_signals(self, access_token: str | None) -> CallSignalsResponse:
+        raw = self._request("GET", "/api/v1/call-watches/current/signals", access_token)
+        try:
+            return CallSignalsResponse.model_validate(raw)
+        except pydantic.ValidationError as exc:
+            raise StorageApiContractError(
+                "storage API returned malformed call signals"
+            ) from exc
+
+    def delete_call_watch(self, access_token: str | None) -> None:
+        # 404 is tolerated as success — delete is idempotent (contract §9.4:
+        # "always 204, whether or not a watch existed").
+        self._request(
+            "DELETE",
+            "/api/v1/call-watches/current",
+            access_token,
+            allow_not_found=True,
+        )
+        return None
 
 
 _STUB = StubStorageApiClient()

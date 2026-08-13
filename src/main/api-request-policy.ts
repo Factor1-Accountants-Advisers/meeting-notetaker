@@ -40,6 +40,14 @@ export function isStorageRoute(req: Pick<ApiRequest, 'method' | 'path'>): boolea
     // Central people directory merge (5 Aug 2026): the people list consults
     // the central voiceprint store when a storage identity rides along.
     (req.method === 'GET' && path === '/api/v1/people') ||
-    (req.method === 'POST' && /^\/api\/v1\/people\/[^/]+\/enroll$/.test(path))
+    (req.method === 'POST' && /^\/api\/v1\/people\/[^/]+\/enroll$/.test(path)) ||
+    // meeting-call-events: main's call-signal poller (call-signals.ts) mints
+    // its own storage identity headers directly and never goes through this
+    // proxy, so these three entries are never actually matched at runtime —
+    // they exist so this file stays the single source of truth for which
+    // routes are storage-backed.
+    (req.method === 'POST' && path === '/api/v1/call-watch') ||
+    (req.method === 'GET' && path === '/api/v1/call-watch/signals') ||
+    (req.method === 'DELETE' && path === '/api/v1/call-watch')
   )
 }

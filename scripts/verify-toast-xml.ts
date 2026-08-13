@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import {
   buildEndingSoonToastXml,
+  buildRecordingPausedToastXml,
   buildUpdateCountdownToastXml,
   buildUpdateReadyToastXml,
   toastActionFromArgv,
@@ -78,5 +79,46 @@ assert.equal(toastActionFromArgv(['exe', 'mn-update-defer']), 'update-defer')
 assert.equal(toastActionFromArgv(['exe', 'mn-open']), 'open')
 assert.equal(toastActionFromArgv(['exe', '--background']), null)
 assert.equal(toastActionFromArgv([]), null)
+
+// "Recording paused because you left the meeting" toast (meeting-call-events,
+// Task 11, spec 2026-08-12). Same protocol-activation / reminder-scenario /
+// silent-audio contract as the toasts above. upload-now and resume-recording
+// are new verbs introduced after the IN-483 fix, so — unlike extend/open/
+// update-restart/update-defer — they have NO legacy mn-* form to accept.
+const paused = buildRecordingPausedToastXml('Recording paused because you left "Q&A <sync>".')
+assert.match(paused, /<toast[^>]*scenario="reminder"/, 'paused toast stays on screen until acted on')
+assert.match(paused, /launch="notetaker:\/\/open"/, 'clicking the toast body still opens the app')
+assert.match(paused, /<audio silent="true"\/>/, 'toast is silent — chime comes from the renderer')
+assert.match(
+  paused,
+  /<action content="Upload now" activationType="protocol" arguments="notetaker:\/\/upload-now"\/>/,
+  'Upload now button activates via protocol'
+)
+assert.match(
+  paused,
+  /<action content="Keep recording" activationType="protocol" arguments="notetaker:\/\/resume-recording"\/>/,
+  'Keep recording button activates via protocol'
+)
+assert.match(
+  paused,
+  /Recording paused because you left &quot;Q&amp;A &lt;sync&gt;&quot;\./,
+  'body text is XML-escaped'
+)
+assert.doesNotMatch(paused, /<sync>/, 'raw angle brackets never reach the toast XML')
+assert.doesNotMatch(paused, /activationType="foreground"/, 'no dead foreground buttons (IN-483)')
+assert.doesNotMatch(paused, /mn-upload-now/, 'upload-now has no legacy mn-* form')
+assert.doesNotMatch(paused, /mn-resume-recording/, 'resume-recording has no legacy mn-* form')
+
+assert.equal(toastActionFromArgv(['exe', toastUri('upload-now')]), 'upload-now')
+assert.equal(toastActionFromArgv(['exe', 'notetaker://upload-now/']), 'upload-now')
+assert.equal(toastActionFromArgv(['exe', toastUri('resume-recording')]), 'resume-recording')
+assert.equal(toastActionFromArgv(['exe', 'notetaker://resume-recording/']), 'resume-recording')
+assert.equal(toastActionFromArgv(['exe', 'mn-upload-now']), null, 'no legacy mn-* form for upload-now')
+assert.equal(
+  toastActionFromArgv(['exe', 'mn-resume-recording']),
+  null,
+  'no legacy mn-* form for resume-recording'
+)
+assert.equal(toastActionFromArgv(['exe', '--background']), null, 'unrelated argv still yields null')
 
 console.log('Toast XML verification passed')

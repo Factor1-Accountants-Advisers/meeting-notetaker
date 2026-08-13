@@ -8,13 +8,12 @@ the delegated Storage API token to these local routes, and the central API's
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Callable
 
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Header
 
 from app import store
+from app.routers._storage_errors import raise_storage_error as _raise_storage_error
 from app.services.storage_api import (
     StorageApiError,
-    StorageApiRejected,
-    StorageApiUnavailable,
     VoiceprintAdminActionResponse,
     VoiceprintAdminListResponse,
     VoiceprintAuditEventPage,
@@ -27,24 +26,11 @@ Actor = Header("Unknown user", alias="X-MN-User")
 StorageToken = Annotated[str | None, Header(alias="X-MN-Storage-Token")]
 
 
+# Trivial one-liner (no branching, nothing to drift) — kept duplicated per
+# router rather than shared, unlike the error-mapping logic below, which has
+# multi-branch status-code decisions that are easy to accidentally diverge.
 def _token(value: str | None) -> str | None:
     return (value or "").strip() or None
-
-
-def _raise_storage_error(exc: StorageApiError) -> None:
-    if isinstance(exc, StorageApiRejected):
-        code = exc.status_code
-        if code is not None and 400 <= code < 500:
-            raise HTTPException(code, "Storage API rejected the administrator request") from exc
-    if isinstance(exc, StorageApiUnavailable):
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Voiceprint administration is temporarily unavailable",
-        ) from exc
-    raise HTTPException(
-        status.HTTP_502_BAD_GATEWAY,
-        "Voiceprint administration returned an invalid response",
-    ) from exc
 
 
 @router.get("", response_model=VoiceprintAdminListResponse)

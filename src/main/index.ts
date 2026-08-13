@@ -3,6 +3,7 @@ import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { join } from 'path'
 import { registerApiProxyIpc } from './api-proxy'
 import { getCurrentUser, getCurrentUserEmail, getGraphAccessToken, onMsalSignedIn, registerAuthSessionIpc } from './auth-session'
+import { callSignalsManualResume, callSignalsToastAction, configureCallSignals } from './call-signals'
 import { startGraphDetectionRuntime } from './graph/runtime'
 import { loadPublicEnv } from './env'
 import { evaluateHostGate, hostGateLogContext } from './graph/host-gate'
@@ -10,6 +11,7 @@ import { initLogger, logger } from './logger'
 import { registerMediaPermissions } from './media-permissions'
 import {
   cleanupRecordingIpc,
+  closeRecordingPausedToast,
   extendActiveRecordingFromMain,
   extendAutoStop,
   getRecordingStateMachine,
@@ -18,9 +20,13 @@ import {
   handleRendererRecordingStarted,
   handleRendererRecordingStopped,
   hasPendingAutoStart,
+  isRecordingPaused,
   registerManualRecording,
   sendAutoStartRequest,
-  setRecordingPaused
+  sendAutoStopRequest,
+  sendTrayRecordingControl,
+  setRecordingPaused,
+  showRecordingPausedToast
 } from './recording-ipc'
 import { registerRecordingStorageIpc } from './recording-storage'
 import { ensureDefaultAutoLaunchEnabled, isBackgroundLaunch, registerStartupIpc } from './startup'
@@ -102,12 +108,32 @@ function registerRecordingIpcHandlers(): void {
   })
   ipcMain.handle('recording:extend', () => extendAutoStop())
   ipcMain.on('recording:paused-changed', (_event, paused: boolean) => {
-    setRecordingPaused(Boolean(paused))
+    const isPaused = Boolean(paused)
+    setRecordingPaused(isPaused)
+    // meeting-call-events (D6): a manual resume must reach the call-signal
+    // machine after isRecordingPaused() already reflects it — the machine's
+    // contract requires that ordering.
+    if (!isPaused) callSignalsManualResume()
     updateTrayMenu()
   })
 }
 
 registerRecordingIpcHandlers()
+
+// meeting-call-events (Task 13): register the real control surfaces once at
+// startup, before any recording can arm the poller. Does not need a window —
+// the actions it wires (sendTrayRecordingControl, sendAutoStopRequest) each
+// guard a missing window on their own.
+configureCallSignals({
+  actions: {
+    pause: () => sendTrayRecordingControl('pause'),
+    resume: () => sendTrayRecordingControl('resume'),
+    stop: () => sendAutoStopRequest(),
+    showPausedToast: showRecordingPausedToast,
+    closePausedToast: closeRecordingPausedToast,
+    isPaused: isRecordingPaused
+  }
+})
 
 // IN-469: earliest known auto-record-eligible meeting start (UTC ms) for the
 // update gate. Intentionally never reset to null — the graph runtime only
@@ -160,6 +186,20 @@ app.on('second-instance', (_event, argv) => {
     // IN-124: extend in place without stealing focus to the window.
     logger().info('[app] extend requested from toast notification')
     extendActiveRecordingFromMain()
+    return
+  }
+  if (toastAction === 'upload-now') {
+    // meeting-call-events: route the paused-recording toast button to the
+    // call-signal machine in place, without stealing focus (same rationale
+    // as extend above).
+    logger().info('[app] upload-now requested from toast notification')
+    callSignalsToastAction('upload-now')
+    return
+  }
+  if (toastAction === 'resume-recording') {
+    // Same no-focus-steal rationale as extend/upload-now above.
+    logger().info('[app] resume-recording requested from toast notification')
+    callSignalsToastAction('resume-recording')
     return
   }
   if (toastAction === 'update-restart') {

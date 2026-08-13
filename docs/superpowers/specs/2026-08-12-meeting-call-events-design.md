@@ -216,6 +216,11 @@ the `ToastAction` union, `toastActionFromArgv`, and the `second-instance`
 switch in `index.ts`. Stale clicks (recording already stopped) are no-ops
 via state-machine checks, same as `mn-extend`.
 
+> Shipped copy (Task 13, implemented 13 Aug 2026): the body appends "Upload
+> now, or keep recording?", restating the two buttons by name. Deliberate —
+> confirmed better UX during Task 13's quality review — not a drift from this
+> spec.
+
 Renderer: no required changes. The paused state already renders in
 `RecordingScreen` and the tray label via `recording:paused-changed`.
 
@@ -279,7 +284,9 @@ Per D7, every failure path leaves today's behaviour intact. Specifics:
    the app → Delete (this revokes its secret and consent with it); delete
    `spikes/meeting-call-events/.env` and the local cert/key files once the
    test fixtures are ported. The spike folder's README and `events.jsonl`
-   stay as evidence.
+   stay as evidence **locally only** — `spikes/` is gitignored (13 Aug):
+   `events.jsonl` carries real join URLs and ~40 participants' display
+   names (PII) and must never enter git history.
 
 ## Open items
 

@@ -22,3 +22,8 @@ backend/third_party/ffmpeg/
 native/**/target/
 # Staged helper exe for electron-builder (scripts/stage-audio-helper.cjs)
 native/audio-endpoint-monitor/dist/
+
+# Spike scaffolding (12 Aug 2026 meeting-call-events spike): holds live secrets
+# (.env already ignored above), a private key, and events.jsonl with real join
+# URLs + participant names (PII). Evidence stays local only - never commit.
+spikes/
