@@ -24,6 +24,7 @@
     "verify:ad-hoc-attendees": "esbuild scripts/verify-ad-hoc-attendees.tsx --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-ad-hoc-attendees.cjs --log-level=error && node out/verify-ad-hoc-attendees.cjs",
     "verify:capture": "esbuild scripts/verify-capture-segments.tsx --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-capture-segments.cjs --log-level=error && node out/verify-capture-segments.cjs",
     "verify:email-notice": "esbuild scripts/verify-email-notice.ts --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-email-notice.cjs --log-level=error && node out/verify-email-notice.cjs",
+    "verify:call-signals": "esbuild scripts/verify-call-signals.ts --bundle --platform=node --format=cjs --outfile=out/verify-call-signals.cjs --log-level=error --external:electron && node out/verify-call-signals.cjs",
     "verify:toast-xml": "esbuild scripts/verify-toast-xml.ts --bundle --platform=node --format=cjs --outfile=out/verify-toast-xml.cjs --log-level=error && node out/verify-toast-xml.cjs",
     "verify:backend-supervisor": "esbuild scripts/verify-backend-supervisor.ts --bundle --platform=node --format=cjs --outfile=out/verify-backend-supervisor.cjs --log-level=error && node out/verify-backend-supervisor.cjs",
     "verify:update-gate": "esbuild scripts/verify-update-gate.ts --bundle --platform=node --format=cjs --outfile=out/verify-update-gate.cjs --log-level=error && node out/verify-update-gate.cjs",
