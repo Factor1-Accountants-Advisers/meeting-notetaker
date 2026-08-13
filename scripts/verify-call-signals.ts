@@ -10,6 +10,10 @@
  * the 60s grace window is asserted at the millisecond, not slept through.
  */
 import assert from 'node:assert/strict'
+import { existsSync, readFileSync } from 'node:fs'
+// Imports the PURE CORE only. `call-signals.ts` (the runtime half) pulls in
+// auth-msal/electron-log, which `require("electron")` at module scope; the
+// bundle-purity check at the foot of this file fails if that ever creeps back.
 import {
   CALL_SIGNAL_GRACE_MS,
   CALL_SIGNAL_POLL_INTERVAL_MS,
@@ -23,7 +27,7 @@ import {
   type CallSignalActions,
   type CallSignalHttpResponse,
   type CallSignalTimers
-} from '../src/main/call-signals'
+} from '../src/main/call-signals-core'
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -250,6 +254,7 @@ function scenarioLeaveThenGraceExpiry(): void {
   assert.equal(machine.getState(), 'done', 'grace expiry ends the machine')
   assert.equal(clock.pendingCount(), 0, 'no timer may survive the grace expiry')
   assert.equal(machine.isPausedToastVisible(), false, 'the toast flag must clear on expiry')
+  assert.equal(machine.getActionErrorCount(), 0, 'a healthy run must swallow nothing')
 }
 
 function scenarioRejoinDuringGrace(): void {
@@ -552,6 +557,193 @@ function scenarioNullEventUtc(): void {
     ['pause', 'showPausedToast', 'closePausedToast', 'stop'],
     'a null event_utc must not disturb grace timing'
   )
+}
+
+type Machine = ReturnType<typeof createCallSignalMachine>
+
+function scenarioThrowingActions(): void {
+  // (a) pause() throws: the grace must still be armed and the toast requested,
+  // and the rest of the cycle must keep working.
+  const clock = createFakeClock()
+  const recorder = createRecorder()
+  const throwingPause: CallSignalActions = {
+    ...recorder.actions,
+    pause(): void {
+      recorder.actions.pause()
+      throw new Error('window destroyed')
+    }
+  }
+  const machine = createCallSignalMachine(throwingPause, CALL_SIGNAL_GRACE_MS, clock.timers)
+  machine.ingest([signal('001', 'recorder_left')])
+  assert.deepEqual(
+    recorder.calls,
+    ['pause', 'showPausedToast'],
+    'a throwing pause must not swallow the rest of the transition'
+  )
+  assert.equal(machine.getState(), 'grace', 'a throwing action must not corrupt the state')
+  assert.equal(clock.pendingCount(), 1, 'the grace timer must be armed despite the throw')
+  assert.equal(machine.getActionErrorCount(), 1, 'the throw must be counted')
+
+  recorder.reset()
+  machine.ingest([signal('002', 'recorder_rejoined')])
+  assert.deepEqual(
+    recorder.calls,
+    ['closePausedToast', 'resume'],
+    'the cycle must keep working after a throwing action'
+  )
+
+  // A throwing toast must not cost us the auto-stop.
+  const clockB = createFakeClock()
+  const recorderB = createRecorder()
+  const throwingToast: CallSignalActions = {
+    ...recorderB.actions,
+    showPausedToast(): void {
+      recorderB.actions.showPausedToast()
+      throw new Error('notification failed')
+    },
+    closePausedToast(): void {
+      recorderB.actions.closePausedToast()
+      throw new Error('notification failed')
+    }
+  }
+  const machineB = createCallSignalMachine(throwingToast, CALL_SIGNAL_GRACE_MS, clockB.timers)
+  machineB.ingest([signal('001', 'recorder_left')])
+  recorderB.reset()
+  clockB.tick(CALL_SIGNAL_GRACE_MS)
+  assert.deepEqual(
+    recorderB.calls,
+    ['closePausedToast', 'stop'],
+    'a throwing toast must never cost the auto-stop'
+  )
+  assert.equal(machineB.getState(), 'done', 'the terminal state holds through throwing actions')
+  assert.equal(machineB.getActionErrorCount(), 2, 'both toast throws are counted')
+
+  // A throwing stop() still leaves the machine terminal (no repeat stops).
+  const clockC = createFakeClock()
+  const recorderC = createRecorder()
+  const throwingStop: CallSignalActions = {
+    ...recorderC.actions,
+    stop(): void {
+      recorderC.actions.stop()
+      throw new Error('no window')
+    }
+  }
+  const machineC = createCallSignalMachine(throwingStop, CALL_SIGNAL_GRACE_MS, clockC.timers)
+  machineC.ingest([signal('001', 'call_ended')])
+  assert.equal(machineC.getState(), 'done', 'a throwing stop must still leave the machine done')
+  recorderC.reset()
+  machineC.ingest([signal('002', 'call_ended')])
+  assert.deepEqual(recorderC.calls, [], 'a throwing stop must not re-open the machine')
+
+  // A throwing isPaused() must not claim pause ownership (D6): pausing is the
+  // safe best effort, but auto-resuming a pause we cannot vouch for is not.
+  const clockD = createFakeClock()
+  const recorderD = createRecorder()
+  const throwingQuery: CallSignalActions = {
+    ...recorderD.actions,
+    isPaused(): boolean {
+      throw new Error('ipc gone')
+    }
+  }
+  const machineD = createCallSignalMachine(throwingQuery, CALL_SIGNAL_GRACE_MS, clockD.timers)
+  machineD.ingest([signal('001', 'recorder_left')])
+  assert.deepEqual(
+    recorderD.calls,
+    ['pause', 'showPausedToast'],
+    'an untrustworthy pause query still pauses (best effort)'
+  )
+  recorderD.reset()
+  machineD.ingest([signal('002', 'recorder_rejoined')])
+  assert.deepEqual(
+    recorderD.calls,
+    ['closePausedToast'],
+    'an untrustworthy pause query must not claim ownership, so no auto-resume'
+  )
+}
+
+function scenarioReentrantActions(): void {
+  // (b) closePausedToast() re-enters with call_ended, then throws: exactly one
+  // stop. State-first ordering is what makes the re-entrant call see `done`.
+  const clock = createFakeClock()
+  const recorder = createRecorder()
+  let machine: Machine | null = null
+  const reentrant: CallSignalActions = {
+    ...recorder.actions,
+    closePausedToast(): void {
+      recorder.actions.closePausedToast()
+      machine?.ingest([signal('009', 'call_ended')])
+      throw new Error('toast handle gone')
+    }
+  }
+  machine = createCallSignalMachine(reentrant, CALL_SIGNAL_GRACE_MS, clock.timers)
+  machine.ingest([signal('001', 'recorder_left')])
+  recorder.reset()
+  machine.ingest([signal('002', 'call_ended')])
+  assert.deepEqual(
+    recorder.calls,
+    ['closePausedToast', 'stop'],
+    'a re-entrant call_ended inside closePausedToast must produce exactly one stop'
+  )
+  assert.equal(
+    recorder.calls.filter((call) => call === 'stop').length,
+    1,
+    'stop must fire exactly once under re-entrancy'
+  )
+  assert.equal(machine.getState(), 'done', 're-entrancy must not disturb the terminal state')
+  assert.equal(clock.pendingCount(), 0, 're-entrancy must not leave a timer behind')
+
+  // A re-entrant leave during a rejoin's toast close must win: the outer
+  // transition's resume is abandoned rather than fighting the newer state.
+  const clock2 = createFakeClock()
+  const recorder2 = createRecorder()
+  let machine2: Machine | null = null
+  let reentered = false
+  const reentrantLeave: CallSignalActions = {
+    ...recorder2.actions,
+    closePausedToast(): void {
+      recorder2.actions.closePausedToast()
+      if (reentered) return
+      reentered = true
+      machine2?.ingest([signal('050', 'recorder_left')])
+    }
+  }
+  machine2 = createCallSignalMachine(reentrantLeave, CALL_SIGNAL_GRACE_MS, clock2.timers)
+  machine2.ingest([signal('001', 'recorder_left')])
+  recorder2.reset()
+  machine2.ingest([signal('002', 'recorder_rejoined')])
+  assert.deepEqual(
+    recorder2.calls,
+    ['closePausedToast', 'showPausedToast'],
+    'the stale resume must stand down once a re-entrant leave has taken over'
+  )
+  assert.equal(machine2.getState(), 'grace', 'the re-entrant transition owns the final state')
+  assert.equal(clock2.pendingCount(), 1, 'the re-entrant leave armed its own grace timer')
+
+  // A re-entrant call_ended from inside pause() must not be overwritten by the
+  // rest of the leave transition: a machine that reached `done` may never be
+  // resurrected into `grace` with a live timer (that would stop twice).
+  const clock3 = createFakeClock()
+  const recorder3 = createRecorder()
+  let machine3: Machine | null = null
+  const reentrantEnd: CallSignalActions = {
+    ...recorder3.actions,
+    pause(): void {
+      recorder3.actions.pause()
+      machine3?.ingest([signal('077', 'call_ended')])
+    }
+  }
+  machine3 = createCallSignalMachine(reentrantEnd, CALL_SIGNAL_GRACE_MS, clock3.timers)
+  machine3.ingest([signal('001', 'recorder_left')])
+  assert.equal(machine3.getState(), 'done', 'a re-entrant call_ended must survive the transition')
+  assert.equal(clock3.pendingCount(), 0, 'a finished machine must hold no grace timer')
+  assert.deepEqual(
+    recorder3.calls,
+    ['pause', 'closePausedToast', 'stop'],
+    'the superseded toast must stand down and the stop must fire once'
+  )
+  recorder3.reset()
+  clock3.tick(CALL_SIGNAL_GRACE_MS * 2)
+  assert.deepEqual(recorder3.calls, [], 'no resurrected grace timer may fire a second stop')
 }
 
 function scenarioParseCallSignals(): void {
@@ -945,6 +1137,64 @@ async function scenarioPollerFailuresAreSkips(): Promise<void> {
   assertNoPii(logs.entries, 'poll failures after stop')
 }
 
+async function scenarioPollerSurvivesThrowingActions(): Promise<void> {
+  // (c) An action that throws inside a poll tick must not kill the poll loop.
+  const clock = createFakeClock()
+  const recorder = createRecorder()
+  const logs = createFakeLog()
+  const leave = signal('001', 'recorder_left')
+  const http = createFakeHttp((call) =>
+    call.method === 'GET' ? jsonResponse(200, { signals: [leave] }) : jsonResponse(200, { watch_id: 'w1' })
+  )
+  const throwing: CallSignalActions = {
+    ...recorder.actions,
+    pause(): void {
+      recorder.actions.pause()
+      throw new Error('renderer gone')
+    },
+    showPausedToast(): void {
+      recorder.actions.showPausedToast()
+      throw new Error('notification failed')
+    }
+  }
+  const poller = createCallSignalPoller({
+    ...pollerDeps(clock, http, logs, recorder),
+    actions: throwing
+  })
+  await poller.start()
+
+  clock.tick(CALL_SIGNAL_POLL_INTERVAL_MS)
+  await flush()
+  assert.deepEqual(
+    recorder.calls,
+    ['pause', 'showPausedToast'],
+    'both actions are attempted even though the first throws'
+  )
+  assert.equal(poller.machine.getActionErrorCount(), 2, 'both throws are counted')
+  assert.equal(poller.getStatus(), 'polling', 'a throwing action must not stop the poller')
+
+  const getsAfterFirstTick = http.calls.filter((call) => call.method === 'GET').length
+  clock.tick(CALL_SIGNAL_POLL_INTERVAL_MS)
+  await flush()
+  assert.equal(
+    http.calls.filter((call) => call.method === 'GET').length,
+    getsAfterFirstTick + 1,
+    'the next poll tick must still be scheduled after a throwing action'
+  )
+
+  // And the grace armed on that tick still expires into a stop.
+  recorder.reset()
+  clock.tick(CALL_SIGNAL_GRACE_MS)
+  await flush()
+  assert.ok(
+    recorder.calls.includes('stop'),
+    'the grace armed during a throwing tick must still auto-stop'
+  )
+  assertNoPii(logs.entries, 'throwing actions')
+  poller.stop()
+  await flush()
+}
+
 async function scenarioNoPiiInLogs(): Promise<void> {
   const clock = createFakeClock()
   const recorder = createRecorder()
@@ -961,6 +1211,35 @@ async function scenarioNoPiiInLogs(): Promise<void> {
   assertNoPii(logs.entries, 'error bodies')
 }
 
+/**
+ * The harness must bundle the pure core ONLY. `call-signals.ts` reaches
+ * auth-msal / the log module, both of which require the Electron runtime at
+ * module scope — bundling them here works only by accident of their having no
+ * top-level side effects, which is exactly the kind of accident that breaks
+ * cryptically later. Needles are assembled at runtime so this check cannot
+ * match its own source text.
+ */
+function assertBundleIsRuntimeFree(): void {
+  const bundlePath = process.argv[1]
+  assert.ok(
+    bundlePath && existsSync(bundlePath) && bundlePath.endsWith('.cjs'),
+    'run this through `npm run verify:call-signals` so the built bundle can be inspected'
+  )
+  const bundle = readFileSync(bundlePath, 'utf8')
+  const runtimeNeedles = [
+    `require(${JSON.stringify('electron')})`,
+    ['electron', 'log'].join('-'),
+    ['@azure', 'msal-node'].join('/'),
+    ['getStorageApi', 'AccessToken'].join('')
+  ]
+  for (const needle of runtimeNeedles) {
+    assert.ok(
+      !bundle.includes(needle),
+      `the harness bundle must not contain "${needle}" — import the pure core, not the runtime layer`
+    )
+  }
+}
+
 async function main(): Promise<void> {
   // 1-9: the pure machine (spec D5/D6/D9).
   scenarioLeaveThenGraceExpiry()
@@ -973,6 +1252,10 @@ async function main(): Promise<void> {
   scenarioToastActions()
   scenarioNullEventUtc()
 
+  // Robustness: injected actions are untrusted (may throw, may re-enter).
+  scenarioThrowingActions()
+  scenarioReentrantActions()
+
   // Wire translation + arm gating (pure).
   scenarioParseCallSignals()
   scenarioArmGate()
@@ -981,7 +1264,10 @@ async function main(): Promise<void> {
   await scenarioPollerHappyPath()
   await scenarioPollerRegistrationRetry()
   await scenarioPollerFailuresAreSkips()
+  await scenarioPollerSurvivesThrowingActions()
   await scenarioNoPiiInLogs()
+
+  assertBundleIsRuntimeFree()
 
   // Pin the constants the live-smoke expectations are written against.
   assert.equal(CALL_SIGNAL_GRACE_MS, 60_000, 'the grace window must stay pinned at 60s')
