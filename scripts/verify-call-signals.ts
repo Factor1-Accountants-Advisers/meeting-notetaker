@@ -744,6 +744,96 @@ function scenarioReentrantActions(): void {
   recorder3.reset()
   clock3.tick(CALL_SIGNAL_GRACE_MS * 2)
   assert.deepEqual(recorder3.calls, [], 'no resurrected grace timer may fire a second stop')
+
+  // isPaused() is the one action that runs before the commit (it decides D6
+  // ownership), so it is the one place a re-entrant signal can land while the
+  // leave transition is still uncommitted. The outer transition must stand
+  // down rather than resurrect the finished machine.
+  const clock4 = createFakeClock()
+  const recorder4 = createRecorder()
+  let machine4: Machine | null = null
+  const reentrantQuery: CallSignalActions = {
+    ...recorder4.actions,
+    isPaused(): boolean {
+      machine4?.ingest([signal('077', 'call_ended')])
+      return false
+    }
+  }
+  machine4 = createCallSignalMachine(reentrantQuery, CALL_SIGNAL_GRACE_MS, clock4.timers)
+  machine4.ingest([signal('001', 'recorder_left')])
+  assert.equal(
+    machine4.getState(),
+    'done',
+    'a call_ended re-entered from inside isPaused() must own the outcome'
+  )
+  assert.deepEqual(
+    recorder4.calls,
+    ['closePausedToast', 'stop'],
+    'the superseded leave must not pause or raise a toast after the machine finished'
+  )
+  assert.equal(
+    recorder4.calls.filter((call) => call === 'stop').length,
+    1,
+    'exactly one stop under re-entrancy from the pause query'
+  )
+  assert.equal(clock4.pendingCount(), 0, 'no orphan grace timer may survive the stand-down')
+  recorder4.reset()
+  clock4.tick(CALL_SIGNAL_GRACE_MS * 2)
+  assert.deepEqual(recorder4.calls, [], 'no timer may fire a second stop afterwards')
+
+  // dispose() re-entered mid-finish stands the remaining effects down: the
+  // stop may never be issued. Task 13 must not read "disarmed" as "stopped".
+  const clock5 = createFakeClock()
+  const recorder5 = createRecorder()
+  let machine5: Machine | null = null
+  const reentrantDispose: CallSignalActions = {
+    ...recorder5.actions,
+    closePausedToast(): void {
+      recorder5.actions.closePausedToast()
+      machine5?.dispose()
+    }
+  }
+  machine5 = createCallSignalMachine(reentrantDispose, CALL_SIGNAL_GRACE_MS, clock5.timers)
+  machine5.ingest([signal('001', 'recorder_left')])
+  recorder5.reset()
+  machine5.ingest([signal('002', 'call_ended')])
+  assert.deepEqual(
+    recorder5.calls,
+    ['closePausedToast'],
+    'a dispose() during the terminal transition stands the pending stop down'
+  )
+  assert.equal(machine5.getState(), 'done', 'the machine is still terminal after dispose')
+  assert.equal(clock5.pendingCount(), 0, 'dispose leaves no timer behind')
+
+  // A re-entrant ingest carrying the SAME seq as the in-flight signal must be
+  // deduped, not replayed — this pins `seen.add` running BEFORE the transition.
+  // The re-entry point is `isPaused()` deliberately: it is the earliest hook,
+  // so an ordering that marked the seq as seen only after the transition would
+  // recurse into itself here instead of deduping.
+  const clock6 = createFakeClock()
+  const recorder6 = createRecorder()
+  let machine6: Machine | null = null
+  let reentries = 0
+  const reentrantSameSeq: CallSignalActions = {
+    ...recorder6.actions,
+    isPaused(): boolean {
+      reentries += 1
+      // Depth-capped so a regression fails an assertion instead of hanging.
+      if (reentries < 5) machine6?.ingest([signal('001', 'recorder_left')])
+      return false
+    }
+  }
+  machine6 = createCallSignalMachine(reentrantSameSeq, CALL_SIGNAL_GRACE_MS, clock6.timers)
+  machine6.ingest([signal('001', 'recorder_left')])
+  assert.deepEqual(
+    recorder6.calls,
+    ['pause', 'showPausedToast'],
+    'a re-entrant replay of the in-flight seq must pause exactly once'
+  )
+  assert.equal(clock6.pendingCount(), 1, 'a re-entrant replay must not arm a second grace timer')
+  assert.equal(machine6.getState(), 'grace', 'the replay leaves the transition intact')
+  assert.equal(machine6.getActionErrorCount(), 0, 'no action threw in the replay case')
+  assert.equal(reentries, 1, 'the replayed seq must be deduped before it can re-query the state')
 }
 
 function scenarioParseCallSignals(): void {

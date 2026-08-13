@@ -91,7 +91,14 @@ export interface CallSignalMachine {
   onManualResume(): void
   /** A click on the paused toast. No-op outside grace (stale clicks). */
   onToastAction(action: CallSignalToastAction): void
-  /** Teardown: cancel the grace timer, fire nothing. */
+  /** Teardown: cancel the grace timer, fire nothing.
+   *
+   *  Disposing DURING a terminal transition (e.g. from inside a re-entrant
+   *  `closePausedToast()`) stands the rest of that transition down, so a
+   *  pending `stop()` may never fire. That is the correct precedence — a
+   *  teardown means nobody is listening any more — but it means a caller must
+   *  never treat `dispose()` as "the stop has been issued". Task 13 disarms
+   *  from `recording-ipc`'s own stop path, which is the real guard. */
   dispose(): void
   getState(): CallSignalState
   /** True while the machine believes its paused toast is on screen.
@@ -209,6 +216,13 @@ export function createCallSignalMachine(
       case 'recorder_left': {
         if (state !== 'watching') return
         const paused = queryIsPaused()
+        // The one action that must run BEFORE the commit — it decides D6
+        // ownership. So it is also the one place a re-entrant signal can land
+        // while this transition is still uncommitted: if the machine moved
+        // underneath us (a `call_ended` from inside `isPaused()`), the newer
+        // transition owns the outcome and this one stands down rather than
+        // resurrecting a finished machine into grace with a live timer.
+        if (state !== 'watching') return
         const shouldPause = !paused.paused
         // Commit everything before any action runs.
         signalInitiatedPause = shouldPause && paused.trusted

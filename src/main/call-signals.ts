@@ -174,10 +174,17 @@ export function armCallSignals(
 /** Stop polling, dispose the machine, and best-effort delete the watch.
  *  Safe when never armed.
  *
- *  Task 13: if the recording is stopping during a grace window, close the
- *  paused toast first — `getActiveCallSignalMachine()?.isPausedToastVisible()`
- *  — because `dispose()` fires no actions and the sticky toast would survive
- *  the recording otherwise. */
+ *  Task 13, two things to know:
+ *
+ *  1. If the recording is stopping during a grace window, close the paused
+ *     toast FIRST — `getActiveCallSignalMachine()?.isPausedToastVisible()` —
+ *     because `dispose()` fires no actions and the sticky toast would survive
+ *     the recording otherwise.
+ *  2. Disarming while a terminal transition is mid-flight (only reachable if
+ *     an injected action re-enters synchronously) stands that transition's
+ *     remaining effects down, so a `stop()` may never be issued. Never treat
+ *     "I disarmed" as "the recording was stopped": recording-ipc's own stop
+ *     path is the guard, and this module only ever adds an earlier stop. */
 export function disarmCallSignals(): void {
   if (!activePoller) return
   activePoller.stop()
