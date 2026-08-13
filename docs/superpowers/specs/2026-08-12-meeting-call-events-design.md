@@ -284,7 +284,9 @@ Per D7, every failure path leaves today's behaviour intact. Specifics:
    the app → Delete (this revokes its secret and consent with it); delete
    `spikes/meeting-call-events/.env` and the local cert/key files once the
    test fixtures are ported. The spike folder's README and `events.jsonl`
-   stay as evidence.
+   stay as evidence **locally only** — `spikes/` is gitignored (13 Aug):
+   `events.jsonl` carries real join URLs and ~40 participants' display
+   names (PII) and must never enter git history.
 
 ## Open items
 
