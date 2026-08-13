@@ -16,6 +16,7 @@ import { existsSync, readFileSync } from 'node:fs'
 // bundle-purity check at the foot of this file fails if that ever creeps back.
 import {
   CALL_SIGNAL_GRACE_MS,
+  CALL_SIGNAL_MUTATION_TIMEOUT_MS,
   CALL_SIGNAL_POLL_INTERVAL_MS,
   CALL_SIGNAL_REGISTRATION_RETRY_MS,
   createCallSignalMachine,
@@ -132,13 +133,14 @@ interface HttpCall {
   url: string
   headers: Record<string, string>
   body?: string
+  timeoutMs?: number
 }
 
 interface FakeHttp {
   calls: HttpCall[]
   send: (
     url: string,
-    init: { method: string; headers: Record<string, string>; body?: string }
+    init: { method: string; headers: Record<string, string>; body?: string; timeoutMs?: number }
   ) => Promise<CallSignalHttpResponse>
 }
 
@@ -157,7 +159,8 @@ function createFakeHttp(handler: HttpHandler): FakeHttp {
         method: init.method,
         url,
         headers: init.headers,
-        body: init.body
+        body: init.body,
+        timeoutMs: init.timeoutMs
       }
       calls.push(call)
       const result = handler(call, calls.length - 1)
@@ -1055,9 +1058,22 @@ async function scenarioPollerHappyPath(): Promise<void> {
     'application/json',
     'the registration body needs a content-type'
   )
+  assert.equal(
+    http.calls[0].timeoutMs,
+    CALL_SIGNAL_MUTATION_TIMEOUT_MS,
+    'registration must carry the long mutation budget — the live smoke of 13 Aug ' +
+      'showed the register chain legitimately exceeding the 8s poll budget'
+  )
   assert.equal(poller.getStatus(), 'polling', 'a successful registration starts polling')
   poller.stop()
   await flush()
+  const deleteCall = http.calls.find((call) => call.method === 'DELETE')
+  assert.ok(deleteCall, 'stop() must fire the best-effort DELETE')
+  assert.equal(
+    deleteCall?.timeoutMs,
+    CALL_SIGNAL_MUTATION_TIMEOUT_MS,
+    'the watch DELETE also traverses Graph and needs the long budget'
+  )
 
   // First poll tick delivers a leave signal; later ticks replay the whole
   // signal list (the relay has no cursor) and add the rejoin.
@@ -1085,6 +1101,11 @@ async function scenarioPollerHappyPath(): Promise<void> {
     getCalls[0].headers['X-MN-Storage-Token'],
     STORAGE_TOKEN,
     'each poll carries fresh identity headers'
+  )
+  assert.equal(
+    getCalls[0].timeoutMs,
+    undefined,
+    'polls must stay on the short default budget so ticks can never stack'
   )
   assert.deepEqual(
     recorder.calls,

@@ -47,7 +47,12 @@ import {
 export * from './call-signals-core'
 
 const DEFAULT_API_BASE = 'http://127.0.0.1:8787'
-/** Kept under the poll interval so ticks can never stack up. */
+/**
+ * Default (poll) budget — kept under the poll interval so ticks can never
+ * stack up. Mutating requests (register/delete) override this via
+ * `init.timeoutMs` (CALL_SIGNAL_MUTATION_TIMEOUT_MS in the core): live smoke
+ * 13 Aug 2026 showed registration legitimately taking >8 s end to end.
+ */
 const CALL_SIGNAL_REQUEST_TIMEOUT_MS = 8_000
 /**
  * `getStorageApiAccessToken` forces a refresh on every call (deliberate, for
@@ -86,7 +91,10 @@ const defaultLog: CallSignalLog = (level, message, context) => {
 
 const defaultHttp: CallSignalHttp = async (url, init) => {
   const controller = new AbortController()
-  const deadline = setTimeout(() => controller.abort(), CALL_SIGNAL_REQUEST_TIMEOUT_MS)
+  const deadline = setTimeout(
+    () => controller.abort(),
+    init.timeoutMs ?? CALL_SIGNAL_REQUEST_TIMEOUT_MS
+  )
   try {
     const response = await fetch(url, {
       method: init.method,

@@ -42,6 +42,16 @@ export const CALL_SIGNAL_GRACE_MS = 60_000
 export const CALL_SIGNAL_POLL_INTERVAL_MS = 10_000
 /** Single registration retry (D7: one retry, then dormant for this recording). */
 export const CALL_SIGNAL_REGISTRATION_RETRY_MS = 30_000
+/**
+ * Watch registration/deletion traverse relay → storage-api → AAD token →
+ * Graph subscription create → Graph's synchronous validation callback to our
+ * webhook (which may cold-start the Function App). Live smoke 13 Aug 2026:
+ * that chain exceeded the 8 s poll timeout and made the poller go dormant
+ * even though the server side succeeded — so mutating requests carry their
+ * own, much longer budget. Polls stay on the short default so ticks can
+ * never stack.
+ */
+export const CALL_SIGNAL_MUTATION_TIMEOUT_MS = 30_000
 
 export type CallSignalType = 'recorder_left' | 'recorder_rejoined' | 'call_ended'
 
@@ -389,7 +399,13 @@ export interface CallSignalHttpResponse {
 
 export type CallSignalHttp = (
   url: string,
-  init: { method: string; headers: Record<string, string>; body?: string }
+  init: {
+    method: string
+    headers: Record<string, string>
+    body?: string
+    /** Per-request budget; absent = the transport's short poll default. */
+    timeoutMs?: number
+  }
 ) => Promise<CallSignalHttpResponse>
 
 export type CallSignalLog = (
@@ -463,12 +479,13 @@ export function createCallSignalPoller(deps: CallSignalPollerDeps): CallSignalPo
   const request = async (
     method: string,
     url: string,
-    body?: string
+    body?: string,
+    timeoutMs?: number
   ): Promise<CallSignalHttpResponse | null> => {
     try {
       const headers: Record<string, string> = { ...(await deps.identityHeaders()) }
       if (body !== undefined) headers['content-type'] = 'application/json'
-      return await deps.http(url, { method, headers, body })
+      return await deps.http(url, { method, headers, body, timeoutMs })
     } catch {
       return null
     }
@@ -526,7 +543,8 @@ export function createCallSignalPoller(deps: CallSignalPollerDeps): CallSignalPo
     const response = await request(
       'POST',
       watchUrl,
-      JSON.stringify({ join_web_url: deps.joinWebUrl, scheduled_end_utc: deps.scheduledEndUtc })
+      JSON.stringify({ join_web_url: deps.joinWebUrl, scheduled_end_utc: deps.scheduledEndUtc }),
+      CALL_SIGNAL_MUTATION_TIMEOUT_MS
     )
     if (status !== 'registering') return // stopped while the request was in flight
     if (response && response.ok) {
@@ -570,7 +588,7 @@ export function createCallSignalPoller(deps: CallSignalPollerDeps): CallSignalPo
       machine.dispose()
       if (!mayHaveWatch) return
       void (async () => {
-        const response = await request('DELETE', watchUrl)
+        const response = await request('DELETE', watchUrl, undefined, CALL_SIGNAL_MUTATION_TIMEOUT_MS)
         if (!response || !response.ok) {
           deps.log('warn', '[call-signals] call watch delete failed', {
             status: response?.status ?? 0
