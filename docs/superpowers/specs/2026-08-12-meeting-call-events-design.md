@@ -216,6 +216,11 @@ the `ToastAction` union, `toastActionFromArgv`, and the `second-instance`
 switch in `index.ts`. Stale clicks (recording already stopped) are no-ops
 via state-machine checks, same as `mn-extend`.
 
+> Shipped copy (Task 13, implemented 13 Aug 2026): the body appends "Upload
+> now, or keep recording?", restating the two buttons by name. Deliberate —
+> confirmed better UX during Task 13's quality review — not a drift from this
+> spec.
+
 Renderer: no required changes. The paused state already renders in
 `RecordingScreen` and the tray label via `recording:paused-changed`.
 

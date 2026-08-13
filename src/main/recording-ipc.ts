@@ -2,7 +2,7 @@ import { BrowserWindow, Notification, powerSaveBlocker } from 'electron'
 import { createRecordingStateMachine, type ActiveRecording, type RecordingStateMachine } from './recording-state'
 import { logger } from './logger'
 import { buildEndingSoonToastXml, buildRecordingPausedToastXml } from './toast-xml'
-import { armCallSignals, disarmCallSignals, getActiveCallSignalMachine } from './call-signals'
+import { armCallSignals, disarmCallSignals } from './call-signals'
 
 // IN-129: while recording, hold the system awake so an idle timeout can't
 // sleep the machine mid-meeting. (Lid-close sleep is OS power policy and
@@ -253,12 +253,7 @@ export function registerManualRecording(recording: ActiveRecording & { title?: s
 }
 
 export function handleRendererRecordingStopped(): void {
-  // Obligations from call-signals.ts's disarmCallSignals doc comment: close a
-  // visible paused toast BEFORE disarming (dispose() fires no actions), and
-  // never treat disarm as the stop — this function's own teardown below is
-  // the actual stop path.
-  if (getActiveCallSignalMachine()?.isPausedToastVisible()) closeRecordingPausedToast()
-  disarmCallSignals()
+  closePausedToastAndDisarm()
 
   recordingPaused = false
   resetAutoStopState()
@@ -278,9 +273,7 @@ export function handleRendererRecordingStopped(): void {
 }
 
 export function handleRendererRecordingError(message: string): void {
-  // Same two obligations as handleRendererRecordingStopped above.
-  if (getActiveCallSignalMachine()?.isPausedToastVisible()) closeRecordingPausedToast()
-  disarmCallSignals()
+  closePausedToastAndDisarm()
 
   recordingPaused = false
   resetAutoStopState()
@@ -526,6 +519,21 @@ export function closeRecordingPausedToast(): void {
   }
 }
 
+/**
+ * Close a visible paused toast, then disarm the call-signal poller. Every
+ * recording-teardown path (stopped, error, cleanup) shares this exact
+ * ordering: call-signals.ts's disarmCallSignals doc comment requires the
+ * toast closed FIRST, because `dispose()` fires no actions and a sticky
+ * toast would otherwise outlive the recording — and disarming is never the
+ * stop itself (this module's own teardown in each caller is the real stop
+ * path). closeRecordingPausedToast() is already a safe no-op when nothing is
+ * showing, so callers need no visibility check of their own.
+ */
+function closePausedToastAndDisarm(): void {
+  closeRecordingPausedToast()
+  disarmCallSignals()
+}
+
 /** True while an auto-recording with a scheduled end is active (extendable). */
 export function hasExtendableRecording(): boolean {
   return getRecordingStateMachine().getState() === 'recording' && autoStopEndMs !== null
@@ -565,10 +573,7 @@ function resetAutoStopState(): void {
 }
 
 export function cleanupRecordingIpc(): void {
-  // Idempotent by contract (both functions guard a null/no-op state) — safe
-  // to call unconditionally on every teardown path, toast before disarm.
-  closeRecordingPausedToast()
-  disarmCallSignals()
+  closePausedToastAndDisarm()
   resetAutoStopState()
   unblockSleep()
   clearAutoStartAckTimer()
