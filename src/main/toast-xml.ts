@@ -17,7 +17,13 @@
 
 export const TOAST_PROTOCOL_SCHEME = 'notetaker'
 
-export type ToastAction = 'open' | 'extend' | 'update-restart' | 'update-defer'
+export type ToastAction =
+  | 'open'
+  | 'extend'
+  | 'update-restart'
+  | 'update-defer'
+  | 'upload-now'
+  | 'resume-recording'
 
 export function toastUri(action: ToastAction): string {
   return `${TOAST_PROTOCOL_SCHEME}://${action}`
@@ -27,7 +33,8 @@ export function toastUri(action: ToastAction): string {
  * Extract the toast action from a process argv. Understands the current
  * `notetaker://<action>` URIs and the legacy `mn-*` foreground arguments
  * (still emitted by toasts shown by app versions before the IN-483 fix,
- * which can outlive the update that fixes them).
+ * which can outlive the update that fixes them). `upload-now` and
+ * `resume-recording` postdate that fix, so they have no legacy `mn-*` form.
  */
 export function toastActionFromArgv(argv: readonly string[]): ToastAction | null {
   for (const raw of argv) {
@@ -36,6 +43,8 @@ export function toastActionFromArgv(argv: readonly string[]): ToastAction | null
     if (arg === toastUri('update-restart') || arg === 'mn-update-restart') return 'update-restart'
     if (arg === toastUri('update-defer') || arg === 'mn-update-defer') return 'update-defer'
     if (arg === toastUri('open') || arg === 'mn-open') return 'open'
+    if (arg === toastUri('upload-now')) return 'upload-now'
+    if (arg === toastUri('resume-recording')) return 'resume-recording'
   }
   return null
 }
@@ -89,6 +98,28 @@ export function buildUpdateReadyToastXml(version: string): string {
     '<actions>' +
     `<action content="Restart now" activationType="protocol" arguments="${toastUri('update-restart')}"/>` +
     `<action content="Later" activationType="protocol" arguments="${toastUri('update-defer')}"/>` +
+    '</actions>' +
+    '</toast>'
+  )
+}
+
+/**
+ * "Recording paused because you left the meeting" prompt (meeting-call-events,
+ * spec 2026-08-12). scenario="reminder" pins it on screen until the user acts,
+ * same rationale as buildEndingSoonToastXml. Silent audio: the renderer plays
+ * the chime via the notification:chime IPC (see notifyMeetingEndingSoon).
+ */
+export function buildRecordingPausedToastXml(body: string): string {
+  return (
+    `<toast scenario="reminder" activationType="protocol" launch="${toastUri('open')}">` +
+    '<visual><binding template="ToastGeneric">' +
+    '<text>Meeting Notetaker</text>' +
+    `<text>${xmlEscape(body)}</text>` +
+    '</binding></visual>' +
+    '<audio silent="true"/>' +
+    '<actions>' +
+    `<action content="Upload now" activationType="protocol" arguments="${toastUri('upload-now')}"/>` +
+    `<action content="Keep recording" activationType="protocol" arguments="${toastUri('resume-recording')}"/>` +
     '</actions>' +
     '</toast>'
   )
