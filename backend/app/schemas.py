@@ -414,3 +414,34 @@ class EnrollRequest(BaseModel):
     sample_sources: list[Literal["recorded", "uploaded"]] | None = Field(
         default=None, min_length=3, max_length=3
     )
+
+
+class CallWatchRegistration(BaseModel):
+    """Request to watch the caller's own Teams call (storage-api contract §9.2).
+
+    join_web_url and scheduled_end_utc are relayed to the Storage API
+    verbatim as opaque strings — never parsed/reformatted locally, matching
+    the contract's insistence that subscription_expires_utc's literal
+    ``.0000000Z`` suffix is not real sub-second precision to round-trip.
+    """
+
+    join_web_url: str
+    scheduled_end_utc: str
+
+
+class CallWatchReceipt(BaseModel):
+    watch_id: str
+    subscription_expires_utc: str
+
+
+class CallSignal(BaseModel):
+    """One reduced Graph meetingCallEvents signal (contract §9.3)."""
+
+    seq: str
+    type: Literal["recorder_left", "recorder_rejoined", "call_ended"]
+    event_utc: str | None = None  # Graph's own eventDateTime is optional
+    received_utc: str
+
+
+class CallSignalsResponse(BaseModel):
+    signals: list[CallSignal]
