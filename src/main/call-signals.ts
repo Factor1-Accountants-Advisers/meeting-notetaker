@@ -20,10 +20,19 @@
  * stop/error, and routes the toast verbs and manual-resume hook back in
  * through `callSignalsToastAction` / `callSignalsManualResume`.
  *
+ * `joinUrlHash` and `createCallWatchTransport` are this module's other two
+ * exports, consumed outside Task 13: the calendar-driven registrar (Task 9)
+ * uses them to park a watch ahead of recording. `armCallSignals` composes its
+ * own poller's transport FROM `createCallWatchTransport` too — one
+ * apiBase/http/identityHeaders assembly with one owner, so the registrar and
+ * the poller can never disagree on how to reach the relay or how a meeting's
+ * watch key is derived.
+ *
  * Privacy: desktop logs carry status codes and state only — never join URLs,
  * tokens, emails, OIDs, or response bodies (same rule as `hostGateLogContext`).
  */
 
+import { createHash } from 'node:crypto'
 import type { ActiveRecording } from './recording-state'
 import { storageIdentityHeaders } from './storage-api-identity'
 import { getCurrentUserEmail, getCurrentUserOid, getStorageApiAccessToken } from './auth-session'
@@ -31,6 +40,7 @@ import { logger } from './logger'
 import {
   CALL_SIGNAL_GRACE_MS,
   CALL_SIGNAL_POLL_INTERVAL_MS,
+  callSignalsEnvGate,
   createCallSignalPoller,
   shouldArmCallSignals,
   type CallSignalActions,
@@ -38,6 +48,7 @@ import {
   type CallSignalLog,
   type CallSignalMachine,
   type CallSignalPoller,
+  type CallSignalPollerMode,
   type CallSignalTimers,
   type CallSignalToastAction
 } from './call-signals-core'
@@ -80,8 +91,9 @@ let runtimeDeps: CallSignalRuntimeDeps | null = null
 // Exactly one poller can be live, mirroring the recording state machine: it
 // permits a single active recording at a time (`recording-state.ts`), and
 // `armCallSignals` disarms any predecessor before creating the next one — so a
-// second arm can never leave two pollers racing over the same watch (the
-// Storage API keeps one watch per user OID anyway, spec D2).
+// second arm can never leave two pollers racing over recording controls. The
+// Storage API may park several per-meeting watches (spec E2), but only this
+// poller is attached to the active recording's join-URL hash.
 let activePoller: CallSignalPoller | null = null
 
 const defaultLog: CallSignalLog = (level, message, context) => {
@@ -135,6 +147,18 @@ function createIdentityHeaderProvider(scope: string): () => Promise<Record<strin
 }
 
 /**
+ * The per-meeting watch key (spec E2): sha256 hex of the join URL. MUST equal
+ * Python's `hashlib.sha256(url.encode()).hexdigest()` — both sides default to
+ * UTF-8, so desktop and the storage API always derive the same hash for the
+ * same URL. This is the key everywhere a watch is addressed: the poller's
+ * per-meeting signals GET / watch DELETE (`call-signals-core.ts`) and the
+ * registrar's POST (Task 9).
+ */
+export function joinUrlHash(joinWebUrl: string): string {
+  return createHash('sha256').update(joinWebUrl).digest('hex')
+}
+
+/**
  * Register the real control actions (and any overrides). Task 13 calls this
  * once during main-process startup, before any recording can start.
  *
@@ -152,10 +176,18 @@ export function configureCallSignals(deps: CallSignalRuntimeDeps | null): void {
  * Arm the call-signal poller for an auto-recording. Safe to call for every
  * recording: the gate (`shouldArmCallSignals`) silently declines manual
  * recordings, recordings without a join URL, and both kill switches.
+ *
+ * `hasActiveWatch` (Task 10) reports whether the registrar already parked a
+ * watch for this meeting's hash at calendar discovery — if so the poller
+ * attaches instead of registering (spec E5: attach mode skips registration
+ * and baseline-drains any signals the watch collected before recording
+ * started). Omitted, as every caller does today, it always registers —
+ * today's behaviour, unchanged.
  */
 export function armCallSignals(
   recording: ActiveRecording,
-  deps: CallSignalRuntimeDeps | null = runtimeDeps
+  deps: CallSignalRuntimeDeps | null = runtimeDeps,
+  hasActiveWatch?: (hash: string) => boolean
 ): void {
   disarmCallSignals()
   const log = deps?.log ?? defaultLog
@@ -169,25 +201,85 @@ export function armCallSignals(
     log('info', '[call-signals] not armed', { reason: decision.reason })
     return
   }
-  const scope = (env.MN_STORAGE_API_SCOPE ?? '').trim()
+  const hash = joinUrlHash(decision.joinWebUrl)
+  const mode: CallSignalPollerMode = hasActiveWatch?.(hash) ? 'attach' : 'register'
+  // The poller's transport is composed from the registrar's factory — one
+  // apiBase/http/identity assembly with one owner, never two copies to drift.
+  const transport = createCallWatchTransport(deps)
+  if (!transport) {
+    // Unreachable in practice: `shouldArmCallSignals` just returned `arm`,
+    // and its env checks are a superset of `callSignalsEnvGate`'s. Defensive
+    // decline (in D7's silent style) rather than a crash if that ever changes.
+    log('warn', '[call-signals] not armed', { reason: 'transport_unavailable' })
+    return
+  }
   activePoller = createCallSignalPoller({
     actions: deps.actions,
+    mode,
+    joinUrlHash: hash,
     joinWebUrl: decision.joinWebUrl,
     scheduledEndUtc: recording.endTimeUtc,
-    apiBase: deps.apiBase ?? env.MN_API_BASE ?? DEFAULT_API_BASE,
-    http: deps.http ?? defaultHttp,
-    identityHeaders: deps.identityHeaders ?? createIdentityHeaderProvider(scope),
+    apiBase: transport.apiBase,
+    http: transport.http,
+    identityHeaders: transport.identityHeaders,
     timers: deps.timers ?? { setTimeout, clearTimeout },
     log
   })
   log('info', '[call-signals] arming call-signal poller', {
     eventId: recording.eventId,
+    mode,
     graceMs: CALL_SIGNAL_GRACE_MS,
     pollIntervalMs: CALL_SIGNAL_POLL_INTERVAL_MS
   })
   void activePoller.start().catch(() => {
     log('warn', '[call-signals] poller start failed', { status: 0 })
   })
+}
+
+/** The transport pieces the call-watch registrar (Task 9) needs to talk to
+ *  the local relay: everything `armCallSignals` assembles for its poller
+ *  except the poller-specific fields (mode, joinWebUrl, scheduledEndUtc). */
+export interface CallWatchTransport {
+  apiBase: string
+  http: CallSignalHttp
+  identityHeaders: () => Promise<Record<string, string>>
+}
+
+/**
+ * Assemble the shared transport for the call-watch registrar (Task 9).
+ * `armCallSignals` composes its own poller's transport from this function as
+ * well, so the registrar and the poller can never disagree on where the relay
+ * lives or how a request is authenticated — there is exactly one place that
+ * resolves the apiBase/http/identity trio. Each resolution builds a FRESH
+ * identity-header provider (absent an injected override), so the 5-minute
+ * header cache never spans registrar syncs — one forced token refresh per
+ * working sync pass, deliberate at the current 5-minute sync cadence.
+ *
+ * Returns null under exactly the env conditions that would make
+ * `armCallSignals` decline to arm: not configured (`configureCallSignals`
+ * never called, or cleared), the desktop kill switch
+ * (`MN_CALL_SIGNALS_ENABLED=false`), the storage-API kill switch, or no
+ * storage scope. The recording-specific gates in `shouldArmCallSignals`
+ * (auto source, a join URL) don't apply here — the registrar runs at
+ * calendar discovery, before any recording exists.
+ *
+ * A null deliberately carries no reason. A caller that has to log WHY it is
+ * going dormant — the registrar's `[call-watch-registrar] dormant` line —
+ * should ask `callSignalsEnvGate` directly; it is exported for exactly that
+ * (`not_configured` remains the one cause the env gate cannot see).
+ */
+export function createCallWatchTransport(
+  deps: CallSignalRuntimeDeps | null = runtimeDeps
+): CallWatchTransport | null {
+  if (!deps) return null
+  const env = deps.env ?? process.env
+  if (!callSignalsEnvGate(env).ok) return null
+  const scope = (env.MN_STORAGE_API_SCOPE ?? '').trim()
+  return {
+    apiBase: deps.apiBase ?? env.MN_API_BASE ?? DEFAULT_API_BASE,
+    http: deps.http ?? defaultHttp,
+    identityHeaders: deps.identityHeaders ?? createIdentityHeaderProvider(scope)
+  }
 }
 
 /** Stop polling, dispose the machine, and best-effort delete the watch.

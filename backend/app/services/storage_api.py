@@ -17,6 +17,7 @@ import os
 import shutil
 import tempfile
 import threading
+import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -217,8 +218,8 @@ class StorageApiClient(Protocol):
     def register_call_watch(
         self, registration: CallWatchRegistration, access_token: str | None
     ) -> CallWatchReceipt: ...
-    def get_call_signals(self, access_token: str | None) -> CallSignalsResponse: ...
-    def delete_call_watch(self, access_token: str | None) -> None: ...
+    def get_call_signals(self, join_url_hash: str, access_token: str | None) -> CallSignalsResponse: ...
+    def delete_call_watch(self, join_url_hash: str, access_token: str | None) -> None: ...
 
 
 def central_enrolment_required() -> bool:
@@ -463,7 +464,14 @@ class StubStorageApiClient:
             try:
                 if current.exists():
                     revision = "updated"
-                    history_name = now.strftime("%Y%m%dT%H%M%S%fZ") + ".json"
+                    # Timestamp alone collides when two exports land in the
+                    # same coarse Windows clock tick (the long-flaky
+                    # test_stub_serializes_concurrent_exports_for_one_meeting
+                    # was this: same-name history files overwriting each
+                    # other). A random suffix makes every revision distinct.
+                    history_name = (
+                        now.strftime("%Y%m%dT%H%M%S%f") + f"-{uuid.uuid4().hex[:8]}Z.json"
+                    )
                     history = meeting_dir / "history" / history_name
                     history.parent.mkdir(parents=True, exist_ok=True)
                     descriptor, temporary_name = tempfile.mkstemp(
@@ -548,10 +556,10 @@ class StubStorageApiClient:
             subscription_expires_utc="2099-12-31T23:59:59.0000000Z",
         )
 
-    def get_call_signals(self, access_token: str | None) -> CallSignalsResponse:
+    def get_call_signals(self, join_url_hash: str, access_token: str | None) -> CallSignalsResponse:
         return CallSignalsResponse(signals=[])
 
-    def delete_call_watch(self, access_token: str | None) -> None:
+    def delete_call_watch(self, join_url_hash: str, access_token: str | None) -> None:
         self._fail_if_injected(self)
         return None
 
@@ -891,8 +899,10 @@ class RestStorageApiClient:
                 "storage API returned a malformed call watch receipt"
             ) from exc
 
-    def get_call_signals(self, access_token: str | None) -> CallSignalsResponse:
-        raw = self._request("GET", "/api/v1/call-watches/current/signals", access_token)
+    def get_call_signals(self, join_url_hash: str, access_token: str | None) -> CallSignalsResponse:
+        raw = self._request(
+            "GET", f"/api/v1/call-watches/{join_url_hash}/signals", access_token
+        )
         try:
             return CallSignalsResponse.model_validate(raw)
         except pydantic.ValidationError as exc:
@@ -900,12 +910,12 @@ class RestStorageApiClient:
                 "storage API returned malformed call signals"
             ) from exc
 
-    def delete_call_watch(self, access_token: str | None) -> None:
+    def delete_call_watch(self, join_url_hash: str, access_token: str | None) -> None:
         # 404 is tolerated as success — delete is idempotent (contract §9.4:
         # "always 204, whether or not a watch existed").
         self._request(
             "DELETE",
-            "/api/v1/call-watches/current",
+            f"/api/v1/call-watches/{join_url_hash}",
             access_token,
             allow_not_found=True,
         )

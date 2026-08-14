@@ -47,7 +47,7 @@ export function isStorageRoute(req: Pick<ApiRequest, 'method' | 'path'>): boolea
     // they exist so this file stays the single source of truth for which
     // routes are storage-backed.
     (req.method === 'POST' && path === '/api/v1/call-watch') ||
-    (req.method === 'GET' && path === '/api/v1/call-watch/signals') ||
-    (req.method === 'DELETE' && path === '/api/v1/call-watch')
+    (req.method === 'GET' && /^\/api\/v1\/call-watch\/[0-9a-f]{64}\/signals$/.test(path)) ||
+    (req.method === 'DELETE' && /^\/api\/v1\/call-watch\/[0-9a-f]{64}$/.test(path))
   )
 }

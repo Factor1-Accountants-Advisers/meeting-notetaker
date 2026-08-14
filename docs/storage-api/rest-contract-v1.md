@@ -10,8 +10,17 @@ below are implemented on their feature branch and are not deployed. The
 additive section 5 staff directory operation (5 Aug 2026) is implemented on
 its feature branch and is not yet deployed. The section 7
 meeting JSON/audio delivery endpoints were ratified and implemented under
-IN-386 on their feature branch and are not yet deployed. Sections marked
-"reserved" describe future work only.
+IN-386 on their feature branch and are not yet deployed. The section 9 call
+watches — the base feature (create/replace, read signals, delete, plus the
+unauthenticated Graph webhook) per the 12 Aug 2026 meeting-call-events design
+(decisions D1–D9) — are merged to `main`, dark behind
+`NSA_CALL_WATCHES_ENABLED`, and not yet deployed. The section 9 per-meeting
+redesign (decisions E1–E6, 14 Aug 2026 call-watch-per-meeting design) —
+per-meeting create/replace with a 5-watch cap, the `{join_url_hash}`-scoped
+signals/delete routes, and the deprecated `current/*` legacy aliases — is
+implemented on the `feature/call-watch-per-meeting` branch, not yet merged,
+and ships behind the same flag. Sections marked "reserved" describe future
+work only.
 
 Mirrored copy: `meeting-notetaker-2/docs/storage-api/rest-contract-v1.md`
 (kept in sync by hand; this repo is the source of truth).
@@ -69,6 +78,9 @@ exactly this envelope:
 | `forbidden` | 403 | Token is valid but the caller lacks permission for the operation — e.g. acting on another person's record without `StorageApi.Admin`, or calling an admin-only endpoint without that role. | No. |
 | `auth_unavailable` | 503 | The Entra JWKS (signing-key) endpoint could not be reached while validating the token. Distinct from `unauthenticated` so clients don't treat a transient Entra/network outage as an invalid-credential re-auth loop. | **Yes** — retry with backoff. |
 | `storage_unavailable` | 503 | Azure Blob Storage returned a non-404 failure (throttling, transient network error, service outage). | **Yes** — retry with backoff. |
+| `feature_disabled` | 503 | Call-watch routes only (section 9): `NSA_CALL_WATCHES_ENABLED` is off, or `NSA_GRAPH_NOTIFICATION_URL` is unset or not an `https://` URL. Both configurations collapse to this one code — the desktop backs off identically either way. | No — retrying does not help until an administrator changes configuration. |
+| `graph_error` | 502 | `POST /api/v1/call-watches` only (section 9): Microsoft Graph itself rejected or failed the subscription-create call. `message` is a fixed static string; Graph's own response text (which can echo the join URL back) is never relayed to the client and is logged only as a status code, never as text. A malformed `scheduled_end_utc` is caught earlier, at the request model, and surfaces as `422 validation_error` instead — see section 9.2. | **Yes** — retry with backoff; a transient Graph failure may succeed on retry. |
+| `watch_limit` | 409 | `POST /api/v1/call-watches` only (section 9): the caller already holds `5` non-expired watches for **other** meetings. Replacing an existing meeting's own watch is exempt and never returns this code — see section 9.2. | No — delete an existing watch first, or wait for one to expire. |
 | `validation_error` | 422 | The request body failed schema validation. | No (fix the request). |
 | `payload_too_large` | 413 | A request document exceeds a documented size cap — currently only the section 7 meeting export document (50 MiB). | No (reduce the document). |
 | `http_error` | 404 / 405 / other | Generic HTTP-level failures that aren't one of the above — e.g. unmatched route (404), disallowed method (405). The `message` field carries the underlying HTTP reason where available. | Depends on status. |
@@ -81,10 +93,11 @@ Notes:
   deliberate leak-safe default. A sanitized field-list may be **added**
   later (e.g. `error.details.fields`) — that would be an additive change,
   compatible with v1 clients that ignore unknown fields.
-- **409 is produced only for invalid voiceprint lifecycle transitions** (for
-  example trying to enable a deleted tombstone or enable a record that is not
-  disabled). It remains reserved for future optimistic-concurrency control on
-  other resources.
+- **409 has two producers today:** invalid voiceprint lifecycle transitions
+  (`conflict` — for example trying to enable a deleted tombstone or enable a
+  record that is not disabled) and the section 9 call-watch cap (`watch_limit`
+  — see the table above). It remains reserved for future optimistic-concurrency
+  control on other resources.
 - 401 is always raised before any storage code runs — the FastAPI auth
   dependency (`require_user`) is attached at router-include time for every
   non-health router, so an unauthenticated or unauthorized request never
@@ -408,6 +421,9 @@ New events use these exact underscore-separated action names:
 | Admin delete | `voiceprint_deleted` | Target person OID | `status`, `previous_status` |
 | A section 7 export PUT stores meeting JSON | `meeting_json_written` | Current meeting JSON blob path | `meeting_id`, `schema_version`, `revision` |
 | A section 7 audio upload SAS is issued | `meeting_audio_sas_issued` | Audio blob path | `meeting_id` |
+| A section 9 `POST /call-watches` creates or replaces a per-meeting watch | `call_watch_created` | `callwatches/{oid}/{join_url_hash}` | `subscription_id`, `join_web_url_hash` |
+| A section 9 `DELETE /call-watches/{join_url_hash}` (or the deprecated `DELETE /call-watches/current` alias, once per watch it deletes) removes an existing watch | `call_watch_deleted` | `callwatches/{oid}/{join_url_hash}` | `subscription_id` |
+| A section 9 `POST /call-watches` lazily reaps an expired watch it found while checking the 5-watch cap | `call_watch_expired_cleanup` | `callwatches/{oid}/{join_url_hash}` | `subscription_id` |
 
 The validated caller's `oid` and `name` claims are always the event's
 `actor_oid` and `actor_name`. This identifies the responsible actor for
@@ -672,3 +688,396 @@ returned in the response body only.
 - Any breaking change (removed/renamed field, changed status-code meaning,
   narrowed acceptance) requires a new `/api/v2` base path. v1 and v2 may run
   concurrently during a migration window.
+
+## 9. Call watches — meeting call events
+
+**Status: implemented.** The base feature (create/replace, read signals,
+delete, plus the unauthenticated Graph webhook) per the 12 Aug 2026
+meeting-call-events design
+(`meeting-notetaker-2/docs/superpowers/specs/2026-08-12-meeting-call-events-design.md`,
+decisions D1–D9) is merged to `main`, dark. The per-meeting redesign
+described in this section — per-meeting create/replace with a 5-watch cap,
+the `{join_url_hash}`-scoped signals/delete routes, and the deprecated
+`current/*` legacy aliases — is per the 14 Aug 2026 call-watch-per-meeting
+design
+(`meeting-notetaker-2/docs/superpowers/specs/2026-08-14-call-watch-per-meeting-design.md`,
+decisions E1–E6), implemented on the `feature/call-watch-per-meeting` branch,
+not yet merged. Neither has been deployed. This section is appended after
+section 8 rather than inserted earlier so that existing `contract §8`
+references elsewhere in this repo (e.g. `app/models.py`'s
+additive-only-posture docstrings) keep pointing at Versioning. Ships dark:
+every authenticated route below 503s until an administrator sets
+`NSA_CALL_WATCHES_ENABLED=true` and a valid `NSA_GRAPH_NOTIFICATION_URL` —
+see `docs/runbook.md`'s "Call watches" section for configuration,
+certificate generation, and triage.
+
+**Recorded deviation from the base D1–D9 design (E2/E3/E6, 14 Aug 2026):**
+the base design gave each caller exactly one watch at a time, keyed only by
+`oid`, with `GET .../current/signals` and `DELETE .../current` as its only
+read/delete routes. Live use (the desktop auto-recording unlimited
+back-to-back meetings) needed a watch per meeting, not per user, so the store
+is now keyed by `(oid, join_url_hash)` and those two routes are reinterpreted
+as legacy aliases (9.5) rather than removed outright. This is the one
+documented breaking-shape change in this section: a hypothetical caller that
+depended on `current/*` meaning "my one watch" now gets union/delete-all
+semantics instead — harmless for the only fleet that has ever called these
+routes (pre-v2.1.0, one watch at a time, see 9.5), but a genuine behavioural
+change from the D1–D9 shape, not a pure addition. Because the base shape was
+never deployed to a live client before this redesign landed, it ships as a
+contract revision within this section rather than a new `/api/v2` base path
+(section 8) — the additive-only posture applies to *deployed* v1 behaviour,
+and none of the D1–D9 shape reached that state.
+
+### 9.1 What this is
+
+While a desktop client is auto-recording a Teams meeting it organizes, it can
+ask this API to watch that meeting's Microsoft Graph `meetingCallEvents`
+change-notification feed on its behalf, then poll back a small, per-meeting
+reduction of what Graph delivers: at most three signal types —
+`recorder_left`, `recorder_rejoined`, `call_ended` — scoped to the recording
+user's own OID and to one specific meeting. The desktop never receives raw
+Graph payloads, other participants' identities, roster contents, or the
+meeting join URL back from this API. A caller may hold **up to five**
+concurrent watches, one per meeting, each identified by the sha256 hex digest
+of that meeting's `joinWebUrl` — computed server-side from the raw URL
+supplied to `POST` (9.2), and computed independently client-side to address
+the `GET`/`DELETE` routes in 9.3/9.4, since those carry no request body for
+the server to hash; the raw URL itself never leaves the `POST` request body
+— see 9.8. The routes in 9.2–9.4 (all
+authenticated) are the current desktop-facing surface; 9.5 lists two
+deprecated legacy aliases kept for a fleet still transitioning off the
+one-watch-per-user shape; `POST /graph/call-notifications` (9.7) is the
+unauthenticated half Microsoft Graph itself calls into.
+
+`NSA_CALL_WATCHES_ENABLED` and a configured `NSA_GRAPH_NOTIFICATION_URL` gate
+every authenticated route in this section (9.2–9.5) — the webhook always
+answers `202` regardless of the flag (see 9.7's "always 202" note).
+
+### 9.2 `POST /api/v1/call-watches`
+
+Create a watch for one meeting, or replace the caller's existing watch for
+that same meeting.
+
+- **Auth:** `require_scoped_user` — a delegated token carrying the exact
+  `access_as_user` scope, or an app-role token carrying `StorageApi.Admin`.
+- Request body:
+
+  ```json
+  {
+    "join_web_url": "https://teams.microsoft.com/l/meetup-join/...",
+    "scheduled_end_utc": "2026-08-12T11:00:00Z"
+  }
+  ```
+
+  - `join_web_url` — required, must start with `https://`. Used to build the
+    Graph subscription resource and to compute a sha256 hex digest,
+    `join_web_url_hash` — the key this section's routes and storage layout
+    use to identify the watch (see 9.8); the raw value is never stored,
+    logged, or returned. Empty or non-`https://` → `422 validation_error`.
+  - `scheduled_end_utc` — required, non-blank string, and must parse as an
+    ISO-8601 timestamp (the model applies the same trailing-`Z` normalisation
+    `graph_subscriptions._expiration_iso` does before parsing). An empty or
+    unparseable value → `422 validation_error`, matching section 7's
+    `time_basis_utc` precedent — malformed *input* is a 422 regardless of
+    which route it's on. `502 graph_error` is reserved for Graph itself
+    rejecting or failing the subscription-create call once a well-formed
+    `scheduled_end_utc` has already been accepted.
+  - Unknown fields are ignored (v1 additive tolerance).
+- **200** —
+
+  ```json
+  {
+    "watch_id": "8f5203eb-2398-40ce-8567-646ba28e7d27",
+    "subscription_expires_utc": "2026-08-12T23:00:00.0000000Z"
+  }
+  ```
+
+  `watch_id` is always the caller's own `oid`, taken from the validated
+  token — the request body has no field that could pick a different watch to
+  write. Unlike the pre-per-meeting shape, `watch_id` no longer identifies
+  "the" watch by itself: it is the same value on every `POST` a caller makes,
+  regardless of which meeting; `join_web_url_hash` (computed server-side from
+  the request body, never client-supplied) is what actually selects which
+  meeting's watch is created or replaced, and it is also the path segment the
+  9.3/9.4 routes key off. `subscription_expires_utc` is Graph's own
+  `expirationDateTime` for the created subscription, always formatted with a
+  literal `.0000000Z` suffix (seven zero digits, not real sub-second
+  precision) — that is the exact string this API asks Graph to accept, and it
+  is reused verbatim in the response. It equals
+  `min(scheduled_end_utc + 12h, now + 70h)` — see `docs/runbook.md`.
+- **Per-meeting replace semantics:** a `POST` for a `join_web_url` that
+  hashes to a meeting the caller already has a watch for replaces that
+  meeting's watch outright and leaves every other meeting's watch for the
+  same `oid` untouched — there is still exactly one live watch per
+  `(oid, join_url_hash)` pair, just no longer exactly one per `oid`. The
+  prior Graph subscription for that meeting is deleted best-effort (a
+  Graph-side failure here — e.g. it already expired — is swallowed and never
+  fails the request). Every signal is generation-stamped with the
+  `subscription_id` of the watch it was delivered under; `GET .../signals`
+  (9.3) only ever serves signals stamped with that meeting's **current**
+  watch's `subscription_id`. A replacing `POST` therefore makes every
+  prior-generation signal for that meeting invisible immediately, even if a
+  late Graph notification for the old subscription is still in flight when
+  the new watch is created and gets appended after the fact.
+- **5-watch-per-user cap (spec E3):** a caller may hold at most **5**
+  concurrent watches across all their meetings. A `POST` for a *new* meeting
+  (one the caller has no live watch for) once already at the cap returns
+  `409 watch_limit` — checked, and Graph never touched, before any
+  subscription is created, so a refused create never leaves an orphaned
+  Graph subscription. **Replacing an existing meeting's own watch is exempt
+  from the cap** (see "Per-meeting replace semantics" above) — it does not
+  grow the caller's watch count, so it is never blocked even exactly at the
+  cap. Expired watches — any watch whose stored `subscription_expires_utc` is
+  at or before the current time — are excluded from the cap count and are
+  lazily deleted (Graph subscription deleted best-effort, blobs removed, one
+  `call_watch_expired_cleanup` audit event per watch removed — see 9.9) the
+  moment a `POST` checks the cap, before the new-or-replacing watch is
+  created. This exists because spec D3 has no watch renewal or background
+  expiry sweep (`docs/runbook.md`): without it, a caller whose machine lost
+  state and left 5 dead watches behind would be permanently locked out of
+  creating a new one. A watch with a missing, non-string, or unparseable
+  `subscription_expires_utc` is treated as **not** expired — it still counts
+  toward the cap and is never reaped — so malformed data fails toward
+  blocking a create, never toward silently discarding a watch record. The
+  cap check itself is advisory, not a lock: two concurrent `POST`s from the
+  same caller can both read the same pre-check count and both pass,
+  breaching the cap by one; this is accepted as benign (one desktop per
+  user) rather than serialising every create.
+- **Errors:**
+  - `422 validation_error` — empty/non-`https://` `join_web_url`, or an
+    empty/unparseable `scheduled_end_utc` (see above).
+  - `409 watch_limit` — the cap in the bullet above, for a new meeting only.
+  - `503 feature_disabled` — see the error code table (section 2).
+  - `502 graph_error` — see the error code table (section 2).
+  - `401` / `403` — standard (section 3).
+  - `503 storage_unavailable` — a Blob Storage failure while reading/writing
+    the watch record (the standard `StorageUnavailable` → 503 mapping,
+    section 2).
+
+### 9.3 `GET /api/v1/call-watches/{join_url_hash}/signals`
+
+Return every signal recorded for one meeting's current watch generation.
+
+- **Auth:** `require_scoped_user`.
+- **`join_url_hash`** — a path segment, not a query parameter: the sha256 hex
+  digest of that meeting's `joinWebUrl`, computed by the client exactly as
+  `POST /call-watches` (9.2) computes it server-side. Must be **64 lowercase
+  hex characters**; anything else (wrong length, uppercase, non-hex
+  characters, the literal string `current`, ...) → `422 validation_error`,
+  before storage is touched. (`current` specifically never reaches this
+  validation — see 9.5's routing note.)
+- **200** —
+
+  ```json
+  {
+    "signals": [
+      {
+        "seq": "20260812T023004123456-a1b2c3d4",
+        "type": "recorder_left",
+        "event_utc": "2026-08-12T02:30:04Z",
+        "received_utc": "2026-08-12T02:30:05.987654+00:00"
+      }
+    ]
+  }
+  ```
+
+  - `type` — `Literal["recorder_left", "recorder_rejoined", "call_ended"]`.
+  - `event_utc` — the timestamp Graph attached to the event; nullable
+    (Graph's own `eventDateTime` field is optional).
+  - `received_utc` — this API's own receipt clock; always present.
+  - `seq` — opaque and chronologically sortable; the desktop dedupes on it.
+    A retried delivery within the same webhook request collides on the same
+    `seq` (the notification-id suffix); a redelivery in a later request gets
+    a fresh receipt-time prefix and so a new `seq` — the desktop's seen-set
+    plus the state machine's terminal states make that duplicate harmless. **There is no pagination or
+    cursor** — every signal for this meeting's current watch generation is
+    returned on every call (bounded to a handful per meeting by the replace
+    semantics in 9.2); the desktop is expected to track which `seq` values it
+    has already acted on itself.
+  - No watch for that hash under the caller's own `oid` — whether because
+    none was ever created, it was deleted, or it belongs to a **different**
+    caller (identity comes from the token, never the path; a hash you don't
+    own resolves to "no watch," never someone else's data) — or a watch with
+    no signals yet, all return `{"signals": []}`, not an error.
+- **Errors:** `422 validation_error` (malformed hash, above),
+  `503 feature_disabled`, `401` / `403`, `503 storage_unavailable` — same
+  meanings as 9.2.
+
+### 9.4 `DELETE /api/v1/call-watches/{join_url_hash}`
+
+Delete one meeting's watch, if the caller has one.
+
+- **Auth:** `require_scoped_user`.
+- **`join_url_hash`** — same validation as 9.3: 64 lowercase hex characters
+  or `422 validation_error`.
+- **204** — always, whether or not a watch existed for that hash under the
+  caller's own `oid`. **Idempotent:** deleting an already-deleted, or
+  never-existing, meeting's watch is still a plain `204`, not a `404`. If a
+  watch did exist, its Graph subscription is deleted best-effort (failures
+  swallowed, same as the replace path in 9.2) and its watch/signal blobs are
+  removed; every other meeting's watch for the same `oid` is untouched.
+- **Errors:** `422 validation_error` (malformed hash), `503 feature_disabled`,
+  `401` / `403`, `503 storage_unavailable`.
+
+### 9.5 Deprecated legacy aliases
+
+**These two routes are deprecated.** They exist only for the pre-per-meeting
+(v2.0.25 and earlier) desktop fleet, which predates this section's per-meeting
+shape and only ever creates/holds **one** watch at a time. Both are declared
+in the router before the `{join_url_hash}` routes above, so the literal path
+segment `current` is always matched here first and never reaches 9.3/9.4's
+hash validation as a (malformed) `join_url_hash`.
+
+**Removal criterion:** once the fleet is confirmed at desktop version
+**≥ v2.1.0** (the first per-meeting-aware release) or later, these two routes
+may be removed from this contract in a subsequent revision. Until then they
+remain live and behave as documented below — not as a single-watch alias,
+but with real multi-watch semantics that happen to degrade correctly for a
+client that never has more than one watch open.
+
+#### `GET /api/v1/call-watches/current/signals` (deprecated)
+
+Returns the **union** of every one of the caller's current watches' signals
+— each watch's own signals are still generation-filtered exactly as 9.3
+filters them, this route just does not scope to one meeting — sorted by
+`seq` across all of them. A caller with no watches gets `{"signals": []}`.
+Correct (equivalent to 9.3 scoped to that one meeting) for a v2.0.25 client,
+which never holds more than one watch; for a caller with multiple concurrent
+watches, this route mixes signals from every one of them into a single list
+with no way to tell which meeting a given signal belongs to — exactly why
+9.3 exists. Deliberately does **not** reap expired watches the way 9.2's
+cap check does; reaping only ever happens at create time, so an expired
+watch's still-current-generation signals are intentionally still served here
+until something else deletes it (a `call_ended` fired moments before a
+subscription's own expiry must still reach an old client still polling this
+alias). Same auth, and the same `503 feature_disabled` /
+`503 storage_unavailable` / `401` / `403` errors, as 9.3.
+
+#### `DELETE /api/v1/call-watches/current` (deprecated)
+
+Deletes **all** of the caller's current watches — per-meeting delete (as
+9.4) plus best-effort Graph subscription delete plus one audit event, applied
+once per watch the caller had. A caller with no watches is a no-op `204`
+with no audit event, the same idempotent shape as 9.4. Correct
+(equivalent to 9.4 for that one meeting) for a v2.0.25 client, which never
+holds more than one watch; for a caller with multiple concurrent watches,
+this route deletes every meeting's watch, not just one — the behavioural
+change called out at the top of this section. Same auth and error shapes as
+9.4.
+
+### 9.6 Storage layout
+
+```
+callwatches/{oid}/{join_url_hash}/watch.json
+callwatches/{oid}/{join_url_hash}/signals/{seq}.json
+```
+
+in the `notetaker` container (`NSA_NOTETAKER_CONTAINER`) — one `watch.json`
+and one `signals/` prefix per `(oid, join_url_hash)` pair, so a caller's
+watches for different meetings never share a blob. Signal blobs are written
+one-per-blob with a conditional create (never appended to a shared document),
+so a redelivered Graph notification racing across two Function instances
+cannot duplicate a signal or corrupt a shared document. A replacing `POST`
+(9.2) deletes the meeting's prior signal blobs as tidy-up; this is not what
+makes reads race-safe (the `subscription_id` generation stamp in 9.2 is), it
+just keeps orphaned blobs from accumulating.
+
+### 9.7 `POST /graph/call-notifications` — the Graph webhook
+
+The receiving half of this feature. Microsoft Graph, not the desktop, calls
+this route.
+
+- **Path:** `/graph/call-notifications` — **no `/api/v1` prefix**, and not
+  under `/health` either; it is its own top-level path.
+- **Auth: deliberately unauthenticated** (spec D4). This is the *only* route
+  in the entire API mounted without the `require_user` dependency — pinned
+  exactly by `tests/test_auth_dependencies.py`'s
+  `test_unguarded_routes_are_exactly_health_and_the_graph_webhook`, which
+  fails if this set ever grows without a matching spec decision. Microsoft
+  Graph cannot present a delegated Entra user token for a webhook call, so
+  this route authenticates Graph's own way instead:
+  1. **Handshake:** a `?validationToken=...` query parameter (present only
+     at subscription-creation time) is echoed back verbatim as
+     `200 text/plain`, before any settings are read at all.
+  2. **`clientState` equality:** every notification item's `clientState`
+     field must constant-time-equal `NSA_GRAPH_CLIENT_STATE`. An unset
+     `NSA_GRAPH_CLIENT_STATE` fails closed — an item carrying an empty
+     `clientState` never matches an empty setting.
+  3. **`validationTokens` JWT validation:** every JWT in the body-level
+     `validationTokens` list (Microsoft's guidance: validate *all* of them,
+     not just one) must independently validate: correct signature (via the
+     same tenant JWKS machinery used for ordinary user tokens), audience =
+     `NSA_GRAPH_CLIENT_ID`, issuer = Entra's v1 or v2 form for
+     `NSA_TENANT_ID`, and `azp` (or `appid` on v1 tokens, only consulted when
+     `azp` is entirely absent) = the fixed Microsoft Graph change-tracking
+     service principal `0bf30f3b-4a52-48df-9a82-234910c4a086`.
+- **1 MB body cap:** the only unauthenticated body-reading route in the API,
+  so it bounds what an anonymous caller can make it buffer. When
+  `Content-Length` is present and parses to `0`–`1,000,000` bytes, that
+  declared value is trusted and the body is read normally; a declared value
+  outside that range is rejected on the header alone, without the body ever
+  being read. When `Content-Length` is **absent or unparseable**, the body
+  is read anyway and the cap is enforced on its actual length instead — the
+  Azure Functions ASGI adapter this route runs behind has no proven record
+  of always surfacing `Content-Length`, and failing closed on its absence
+  would risk silently dropping every real Graph notification if it doesn't.
+- **Always `202`** — never a `4xx`/`5xx` for any rejection (the handshake's
+  `200` is the only other status this route returns). Every validation
+  failure, malformed item, decrypt failure, unknown subscription, or even an
+  unexpected exception while processing an item (including a Blob Storage
+  outage) is dropped and logged, but still acknowledged with `202`. This is
+  deliberate: Graph disables a subscription after enough failure responses,
+  and a disabled subscription costs the feature entirely, whereas a dropped
+  signal costs at most one late auto-stop (the desktop's existing scheduled
+  auto-stop remains the fallback). For the same reason,
+  `NSA_CALL_WATCHES_ENABLED` does **not** gate this route — the webhook keeps
+  acking (and storing valid signals) while every authenticated route in this
+  section (9.2–9.5) is 503ing.
+- **Processing:** a valid item's `encryptedContent` is decrypted with
+  `NSA_GRAPH_ENC_KEY_PEM` (RSA-OAEP-SHA1 key unwrap, HMAC-SHA256 signature
+  check, AES-256-CBC), its `subscriptionId` is resolved to a current watch,
+  and the decrypted payload is reduced to at most one signal for that
+  watch's owner before being appended.
+- **Logging:** only ever a short static drop-reason string plus a count —
+  never payload contents, decrypted data, join URLs, subscription resource
+  strings, `validationTokens`, display names, or exception messages (class
+  names only, e.g. `unexpected_error:StorageUnavailable`). See
+  `docs/runbook.md`'s "Call watches" section for the full drop-reason
+  vocabulary and triage guidance.
+
+### 9.8 Privacy: join URLs are never stored, logged, or returned raw
+
+The raw `join_web_url` from the `POST /call-watches` request body (9.2)
+exists for exactly two purposes: building the Graph subscription resource
+string, and computing a sha256 hex digest, `join_web_url_hash`. Only that
+hash — 64 lowercase hex characters — crosses into the watch record, the
+audit event, any log line, or an HTTP path segment (the `join_url_hash` the
+9.3/9.4 routes take): including on the `502 graph_error` path, where Graph's
+own error text (which can echo the URL-encoded join URL back) is
+deliberately excluded from both the HTTP response and the server-side log
+line; only Graph's HTTP status code is logged there. The client computes the
+same hash independently when calling 9.3/9.4 — this API never returns a
+`join_web_url_hash` for the client to reuse, so it must derive it the same
+way (sha256 hex digest of the raw `joinWebUrl`) itself.
+
+### 9.9 Audit
+
+| Trigger | `action` | `target` | `details` |
+|---|---|---|---|
+| `POST /call-watches` (9.2) creates or replaces a meeting's watch | `call_watch_created` | `callwatches/{oid}/{join_url_hash}` | `subscription_id`, `join_web_url_hash` |
+| `DELETE /call-watches/{join_url_hash}` (9.4) removes a watch that existed | `call_watch_deleted` | `callwatches/{oid}/{join_url_hash}` | `subscription_id` |
+| The deprecated `DELETE /call-watches/current` alias (9.5) removes a watch that existed — one event per watch deleted | `call_watch_deleted` | `callwatches/{oid}/{join_url_hash}` | `subscription_id` |
+| `POST /call-watches` (9.2) lazily reaps an expired watch found while checking the 5-watch cap | `call_watch_expired_cleanup` | `callwatches/{oid}/{join_url_hash}` | `subscription_id` |
+
+`{join_url_hash}` in `target` is always the hash of the specific meeting
+acted on — never the caller's `oid` alone — even for events raised from the
+deprecated `current` aliases, since every underlying store operation is
+still per-meeting. A refused `POST` writes no audit event *for the refused
+create itself* -- but note a `409`/`502` POST may still have written
+`call_watch_expired_cleanup` events first, because the expired-watch reap
+(9.2) runs before the cap check and before Graph is called; only `422`
+(rejected before the handler) and `503` (flag check precedes the reap)
+guarantee zero audit writes. `GET .../signals` reads — both 9.3 and the
+deprecated 9.5 alias — are never audited (matches the read-only stance
+elsewhere in this contract). The webhook (9.7) never writes audit events —
+Graph is not an authenticated actor.

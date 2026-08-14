@@ -21,7 +21,7 @@ forwarding is what actually matters.
 
 from typing import Annotated
 
-from fastapi import APIRouter, Header, status
+from fastapi import APIRouter, Header, Path, status
 
 from app.routers._storage_errors import raise_storage_error as _raise_storage_error
 from app.schemas import CallSignalsResponse, CallWatchReceipt, CallWatchRegistration
@@ -30,6 +30,12 @@ from app.services.storage_api import StorageApiError, get_storage_api_client
 router = APIRouter(prefix="/call-watch", tags=["call watch"])
 
 StorageToken = Annotated[str | None, Header(alias="X-MN-Storage-Token")]
+
+# sha256 hex of the meeting's joinWebUrl (E2/E6, per-meeting call-watch
+# routes) — the pattern constraint means a malformed hash never reaches the
+# client/Storage API at all; FastAPI rejects it with a 422 before the route
+# body runs.
+JoinUrlHash = Annotated[str, Path(pattern=r"^[0-9a-f]{64}$")]
 
 
 # Trivial one-liner (no branching, nothing to drift) — kept duplicated per
@@ -51,23 +57,25 @@ def register_call_watch(
         raise AssertionError("unreachable")
 
 
-@router.get("/signals", response_model=CallSignalsResponse)
+@router.get("/{join_url_hash}/signals", response_model=CallSignalsResponse)
 def get_call_signals(
+    join_url_hash: JoinUrlHash,
     storage_token: StorageToken = None,
 ) -> CallSignalsResponse:
     try:
-        return get_storage_api_client().get_call_signals(_token(storage_token))
+        return get_storage_api_client().get_call_signals(join_url_hash, _token(storage_token))
     except StorageApiError as exc:
         _raise_storage_error(exc)
         raise AssertionError("unreachable")
 
 
-@router.delete("", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{join_url_hash}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_call_watch(
+    join_url_hash: JoinUrlHash,
     storage_token: StorageToken = None,
 ) -> None:
     try:
-        get_storage_api_client().delete_call_watch(_token(storage_token))
+        get_storage_api_client().delete_call_watch(join_url_hash, _token(storage_token))
     except StorageApiError as exc:
         _raise_storage_error(exc)
         raise AssertionError("unreachable")

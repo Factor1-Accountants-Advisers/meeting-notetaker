@@ -4,6 +4,7 @@ import { join } from 'path'
 import { registerApiProxyIpc } from './api-proxy'
 import { getCurrentUser, getCurrentUserEmail, getGraphAccessToken, onMsalSignedIn, registerAuthSessionIpc } from './auth-session'
 import { callSignalsManualResume, callSignalsToastAction, configureCallSignals } from './call-signals'
+import { createCallWatchRegistrar } from './call-watch-registrar'
 import { startGraphDetectionRuntime } from './graph/runtime'
 import { loadPublicEnv } from './env'
 import { evaluateHostGate, hostGateLogContext } from './graph/host-gate'
@@ -12,6 +13,7 @@ import { registerMediaPermissions } from './media-permissions'
 import {
   cleanupRecordingIpc,
   closeRecordingPausedToast,
+  configureCallWatchRegistrarHooks,
   extendActiveRecordingFromMain,
   extendAutoStop,
   getRecordingStateMachine,
@@ -312,12 +314,34 @@ app.whenReady().then(() => {
     }
   }
 
+  // Per-meeting call watches (call-watch-per-meeting spec): one registrar for
+  // the app's lifetime, created before the graph runtime so even the startup
+  // sync's decisions land on it. Its state file sits beside the graph
+  // scheduler state under userData; the synchronous read at creation makes
+  // hasActiveWatch truthful before the first sync completes.
+  const registrar = createCallWatchRegistrar({
+    statePath: join(app.getPath('userData'), 'call-watch-registrar.json')
+  })
+  callWatchRegistrar = registrar
+  // Same handover direction as configureCallSignals above: index.ts pushes
+  // the callbacks into recording-ipc so recording-ipc never imports us.
+  configureCallWatchRegistrarHooks({
+    hasActiveWatch: (hash) => registrar.hasActiveWatch(hash),
+    noteWatchDeleted: (hash) => registrar.noteWatchDeleted(hash)
+  })
+
   const graphRuntime = startGraphDetectionRuntime({
     statePath: join(app.getPath('userData'), 'graph', 'scheduler-state.json'),
     getAccessToken: getGraphAccessToken,
     getSignedInEmail: getCurrentUserEmail,
     logger: logger(),
-    onAutoRecordEligible: handleAutoRecordEligible
+    onAutoRecordEligible: handleAutoRecordEligible,
+    // Same signed-in-email source as getSignedInEmail above (the registrar's
+    // host gate must agree with the sync's own). handleSyncDecisions never
+    // rejects — the void marks it deliberately fire-and-forget.
+    onSyncCompleted: (decisions) => {
+      void registrar.handleSyncDecisions(decisions, getCurrentUserEmail())
+    }
   })
 
   onMsalSignedIn(() => {
@@ -367,9 +391,18 @@ app.on('window-all-closed', () => {
   // Keep running in tray on all platforms.
 })
 
+// Module-level so before-quit can flush its pending state writes; assigned
+// once inside whenReady (null until then, and flushState is null-safe there).
+let callWatchRegistrar: ReturnType<typeof createCallWatchRegistrar> | null = null
+
 let quitFailsafeArmed = false
 app.on('before-quit', () => {
   cleanupRecordingIpc()
+  // cleanupRecordingIpc's noteWatchDeleted persist is fire-and-forget; flush
+  // the registrar's write chain so a quit right after a recording stop can't
+  // lose it (stale hasActiveWatch on relaunch would attach to a deleted
+  // watch — self-healing, but avoidable for one line).
+  void callWatchRegistrar?.flushState()
   audioEndpointService?.stop()
   stopBackendSupervisor()
   stopUpdaterTimers()
