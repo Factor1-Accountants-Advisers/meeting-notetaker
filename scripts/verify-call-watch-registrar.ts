@@ -420,6 +420,42 @@ function scenarioRemovalFreesASlot(): void {
   )
 }
 
+function scenarioUnparseableStoredEndIsReaped(): void {
+  // A stored end that no longer parses can never become past on its own, so
+  // the planner must reap it even when the meeting is ABSENT from the sync's
+  // decisions — otherwise that entry would hold a cap slot forever.
+  const state = stateOf({
+    'garbage-end': watch('garbage-end', '2026-08-14T01:00:00Z', 'not-a-date'),
+    'still-live': watch('still-live', '2026-08-14T03:00:00Z', '2026-08-14T03:30:00Z')
+  })
+  const actions = plan(state, [])
+  assert.deepEqual(
+    actions.remove,
+    [{ key: 'garbage-end', joinUrlHash: sha(urlFor('garbage-end')) }],
+    'an unparseable stored scheduledEndUtc must be reaped even with the key absent from decisions'
+  )
+  assert.deepEqual(actions.register, [], 'the reap alone plans no registrations')
+
+  // And the reap genuinely frees a slot: at a full cap, a garbage-end entry's
+  // removal admits the soonest waiting candidate in the same pass.
+  const full = stateOf({
+    'g-1': watch('g-1', '2026-08-14T01:00:00Z', '2026-08-14T01:30:00Z'),
+    'g-2': watch('g-2', '2026-08-14T02:00:00Z', 'not-a-date'),
+    'g-3': watch('g-3', '2026-08-14T03:00:00Z', '2026-08-14T03:30:00Z'),
+    'g-4': watch('g-4', '2026-08-14T04:00:00Z', '2026-08-14T04:30:00Z'),
+    'g-5': watch('g-5', '2026-08-14T05:00:00Z', '2026-08-14T05:30:00Z')
+  })
+  const freed = plan(full, [
+    decision({ key: 'waiting', startUtc: '2026-08-14T06:00:00Z', endUtc: '2026-08-14T06:30:00Z' })
+  ])
+  assert.deepEqual(freed.remove.map((entry) => entry.key), ['g-2'])
+  assert.deepEqual(
+    freed.register.map((entry) => entry.key),
+    ['waiting'],
+    'the reaped slot admits a waiting candidate in the same pass'
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Engine scenarios (injected transport; real fs against a temp dir)
 // ---------------------------------------------------------------------------
@@ -607,6 +643,66 @@ async function scenarioDeleteFailureStillDrops(): Promise<void> {
   assert.deepEqual(readRegistrarStateSync(statePath).watches, {}, 'the drops persist')
 
   assertNoPii(logs.entries, 'delete failure', [sha(urlFor('doomed-500')), sha(urlFor('doomed-throw'))])
+}
+
+async function scenarioRescheduleExecutesDeleteBeforePost(): Promise<void> {
+  const statePath = newStatePath()
+  const logs = createFakeLog()
+  const joinWebUrl = urlFor('same-url-resched')
+  const hash = sha(joinWebUrl)
+  // Seed a tracked watch, then feed a same-key reschedule with the SAME join
+  // URL (endUtc moved +1h). Same URL means same hash means the SAME
+  // server-side watch address (E2) — so if the engine ever ran the batch's
+  // registers before its removes, the DELETE would land on the freshly
+  // replaced watch and destroy it. The executed order, not just the planned
+  // pair, is what this scenario pins.
+  await writeRegistrarState(
+    statePath,
+    stateOf({ 'same-url-resched': watch('same-url-resched', '2026-08-14T02:00:00Z', '2026-08-14T02:30:00Z') })
+  )
+  const http = createFakeHttp(() => jsonResponse(201, { watch_id: 'w5' }))
+  const engine = createCallWatchRegistrarEngine(engineDeps(statePath, http, logs))
+
+  await engine.handleSyncDecisions(
+    [
+      decision({
+        key: 'same-url-resched',
+        joinWebUrl,
+        startUtc: '2026-08-14T02:00:00Z',
+        endUtc: '2026-08-14T03:30:00Z'
+      })
+    ],
+    USER_EMAIL
+  )
+  assert.deepEqual(
+    http.calls.map((call) => call.method),
+    ['DELETE', 'POST'],
+    'a reschedule batch must execute its DELETE strictly before its POST'
+  )
+  assert.equal(
+    http.calls[0].url,
+    `${API_BASE}/api/v1/call-watch/${hash}`,
+    'the DELETE addresses the tracked watch by its (unchanged) hash'
+  )
+  assert.equal(
+    http.calls[1].url,
+    `${API_BASE}/api/v1/call-watch`,
+    'the replacement POST follows on the collection route'
+  )
+  assert.deepEqual(
+    JSON.parse(http.calls[1].body ?? '{}'),
+    { join_web_url: joinWebUrl, scheduled_end_utc: '2026-08-14T03:30:00Z' },
+    'the replacement carries the new scheduled end'
+  )
+  assert.equal(engine.hasActiveWatch(hash), true, 'the rescheduled watch is tracked again')
+  await engine.flushState()
+  assert.equal(
+    readRegistrarStateSync(statePath).watches['same-url-resched']?.scheduledEndUtc,
+    '2026-08-14T03:30:00Z',
+    'the persisted watch carries the new scheduled end'
+  )
+
+  assertNoPii(logs.entries, 'reschedule order', [hash])
 }
 
 async function scenarioOverlappingSyncIsNoOp(): Promise<void> {
@@ -803,11 +899,13 @@ async function main(): Promise<void> {
     scenarioAbsentFromDeltaIsNotRemoved()
     scenarioIneligibleCandidatesNeverRegister()
     scenarioRemovalFreesASlot()
+    scenarioUnparseableStoredEndIsReaped()
 
     // Engine (injected transport, real fs persistence).
     await scenarioEngineRegistersAndPersists()
     await scenario409NotStoredThenRetried()
     await scenarioDeleteFailureStillDrops()
+    await scenarioRescheduleExecutesDeleteBeforePost()
     await scenarioOverlappingSyncIsNoOp()
     await scenarioStateRoundTripAndCorruption()
     await scenarioDormantWhenTransportUnavailable()
