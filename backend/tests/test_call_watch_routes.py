@@ -1,4 +1,5 @@
-"""Desktop relay routes for call-watch (D7, meeting-call-events, Task 10).
+"""Desktop relay routes for call-watch (D7, meeting-call-events, Task 10;
+per-meeting routes, Task 6).
 
 Mirrors ``tests/test_voiceprint_admin.py``'s idiom: router functions are
 plain sync functions, called directly with ``get_storage_api_client``
@@ -6,14 +7,24 @@ patched at the router module — this repo's test suite has no HTTP client
 available (no ``httpx`` dependency, so ``fastapi.testclient.TestClient``
 cannot run here), so route wiring is exercised at the function level rather
 than through a live request cycle.
+
+The one exception is the malformed-``join_url_hash`` 422 tests: that
+rejection happens in FastAPI's own path-parameter validation, which runs
+*before* the route function is ever called, so it cannot be observed by
+calling the function directly. Those two tests instead drive the router
+through the raw ASGI protocol (hand-rolled scope/receive/send, no httpx)
+against a bare ``FastAPI()`` app containing only this router.
 """
 
+import asyncio
+import hashlib
 import unittest
 from unittest.mock import patch
 
 import pydantic
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 
+from app.routers import call_watch
 from app.routers.call_watch import delete_call_watch, get_call_signals, register_call_watch
 from app.schemas import CallSignal, CallSignalsResponse, CallWatchReceipt, CallWatchRegistration
 from app.services import storage_api
@@ -27,6 +38,8 @@ REGISTRATION = CallWatchRegistration(
     join_web_url="https://teams.microsoft.com/l/meetup-join/abc",
     scheduled_end_utc="2026-08-12T11:00:00Z",
 )
+
+JOIN_URL_HASH = hashlib.sha256(REGISTRATION.join_web_url.encode("utf-8")).hexdigest()
 
 
 def _receipt() -> CallWatchReceipt:
@@ -60,14 +73,14 @@ class _CapturingCallWatchClient:
             raise self.error
         return _receipt()
 
-    def get_call_signals(self, access_token):
-        self.calls.append(("signals", access_token))
+    def get_call_signals(self, join_url_hash, access_token):
+        self.calls.append(("signals", join_url_hash, access_token))
         if self.error:
             raise self.error
         return _signals()
 
-    def delete_call_watch(self, access_token):
-        self.calls.append(("delete", access_token))
+    def delete_call_watch(self, join_url_hash, access_token):
+        self.calls.append(("delete", join_url_hash, access_token))
         if self.error:
             raise self.error
         return None
@@ -75,9 +88,10 @@ class _CapturingCallWatchClient:
 
 class CallWatchRouterThreadingTests(unittest.TestCase):
     """Each route must call the right client method and thread the
-    ``X-MN-Storage-Token`` value through — stripped when present, None when
-    the header is absent (matches the ``StorageToken``/``_token`` pattern in
-    people.py and voiceprint_admin.py)."""
+    ``X-MN-Storage-Token`` value (stripped when present, None when the
+    header is absent — matches the ``StorageToken``/``_token`` pattern in
+    people.py and voiceprint_admin.py) alongside the path's
+    ``join_url_hash``."""
 
     def test_register_threads_the_storage_token_and_returns_the_receipt(self):
         client = _CapturingCallWatchClient()
@@ -92,31 +106,31 @@ class CallWatchRouterThreadingTests(unittest.TestCase):
             register_call_watch(REGISTRATION, storage_token=None)
         self.assertEqual(client.calls, [("register", REGISTRATION, None)])
 
-    def test_get_signals_threads_the_storage_token_and_returns_signals(self):
+    def test_get_signals_threads_the_hash_and_storage_token_and_returns_signals(self):
         client = _CapturingCallWatchClient()
         with patch("app.routers.call_watch.get_storage_api_client", return_value=client):
-            result = get_call_signals(storage_token="token-abc")
+            result = get_call_signals(JOIN_URL_HASH, storage_token="token-abc")
         self.assertEqual(result, _signals())
-        self.assertEqual(client.calls, [("signals", "token-abc")])
+        self.assertEqual(client.calls, [("signals", JOIN_URL_HASH, "token-abc")])
 
     def test_get_signals_with_absent_header_passes_none(self):
         client = _CapturingCallWatchClient()
         with patch("app.routers.call_watch.get_storage_api_client", return_value=client):
-            get_call_signals(storage_token=None)
-        self.assertEqual(client.calls, [("signals", None)])
+            get_call_signals(JOIN_URL_HASH, storage_token=None)
+        self.assertEqual(client.calls, [("signals", JOIN_URL_HASH, None)])
 
-    def test_delete_threads_the_storage_token_and_returns_no_content(self):
+    def test_delete_threads_the_hash_and_storage_token_and_returns_no_content(self):
         client = _CapturingCallWatchClient()
         with patch("app.routers.call_watch.get_storage_api_client", return_value=client):
-            result = delete_call_watch(storage_token="token-xyz")
+            result = delete_call_watch(JOIN_URL_HASH, storage_token="token-xyz")
         self.assertIsNone(result)
-        self.assertEqual(client.calls, [("delete", "token-xyz")])
+        self.assertEqual(client.calls, [("delete", JOIN_URL_HASH, "token-xyz")])
 
     def test_delete_with_absent_header_passes_none(self):
         client = _CapturingCallWatchClient()
         with patch("app.routers.call_watch.get_storage_api_client", return_value=client):
-            delete_call_watch(storage_token=None)
-        self.assertEqual(client.calls, [("delete", None)])
+            delete_call_watch(JOIN_URL_HASH, storage_token=None)
+        self.assertEqual(client.calls, [("delete", JOIN_URL_HASH, None)])
 
 
 class CallWatchErrorMappingTests(unittest.TestCase):
@@ -133,11 +147,11 @@ class CallWatchErrorMappingTests(unittest.TestCase):
             self.assertEqual(raised.exception.status_code, expected_status)
 
             with self.assertRaises(HTTPException) as raised:
-                get_call_signals(storage_token="token")
+                get_call_signals(JOIN_URL_HASH, storage_token="token")
             self.assertEqual(raised.exception.status_code, expected_status)
 
             with self.assertRaises(HTTPException) as raised:
-                delete_call_watch(storage_token="token")
+                delete_call_watch(JOIN_URL_HASH, storage_token="token")
             self.assertEqual(raised.exception.status_code, expected_status)
 
     def test_storage_api_unavailable_maps_to_503(self):
@@ -172,11 +186,11 @@ class CallWatchStubModeTests(unittest.TestCase):
         self.assertEqual(receipt.watch_id, "stub-watch")
 
     def test_get_signals_returns_empty(self):
-        result = get_call_signals(storage_token=None)
+        result = get_call_signals(JOIN_URL_HASH, storage_token=None)
         self.assertEqual(result, CallSignalsResponse(signals=[]))
 
     def test_delete_returns_no_content(self):
-        self.assertIsNone(delete_call_watch(storage_token=None))
+        self.assertIsNone(delete_call_watch(JOIN_URL_HASH, storage_token=None))
 
 
 class CallWatchRegistrationValidationTests(unittest.TestCase):
@@ -197,6 +211,76 @@ class CallWatchRegistrationValidationTests(unittest.TestCase):
                 join_web_url="https://teams.microsoft.com/l/meetup-join/abc",
                 scheduled_end_utc="",
             )
+
+
+def _asgi_status(method: str, path: str) -> int:
+    """Drive ``call_watch.router`` through the raw ASGI protocol (no
+    httpx/TestClient available in this venv) and return the response status
+    code. Used only for the malformed-hash 422 tests below, where the
+    rejection happens in FastAPI's path-parameter validation — a layer that
+    calling the route function directly bypasses entirely."""
+    app = FastAPI()
+    app.include_router(call_watch.router, prefix="/api/v1")
+
+    async def run() -> int:
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": method,
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode("utf-8"),
+            "query_string": b"",
+            "root_path": "",
+            "headers": [],
+            "client": ("testclient", 123),
+            "server": ("testserver", 80),
+        }
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        status_holder: dict[str, int] = {}
+
+        async def send(message):
+            if message["type"] == "http.response.start":
+                status_holder["status"] = message["status"]
+
+        await app(scope, receive, send)
+        return status_holder["status"]
+
+    return asyncio.run(run())
+
+
+class CallWatchMalformedHashTests(unittest.TestCase):
+    """A malformed ``join_url_hash`` segment must never reach the client —
+    it must fail FastAPI's own path validation with 422 before the handler
+    (and therefore ``get_storage_api_client``) is ever invoked."""
+
+    def test_get_signals_with_malformed_hash_is_rejected_with_422(self):
+        status_code = _asgi_status("GET", "/api/v1/call-watch/not-a-hash/signals")
+        self.assertEqual(status_code, 422)
+
+    def test_get_signals_with_uppercase_hash_is_rejected_with_422(self):
+        # Pattern is lowercase-hex only — an uppercase hash (still 64 chars,
+        # still hex digits) must not sneak through.
+        status_code = _asgi_status("GET", f"/api/v1/call-watch/{JOIN_URL_HASH.upper()}/signals")
+        self.assertEqual(status_code, 422)
+
+    def test_delete_with_malformed_hash_is_rejected_with_422(self):
+        status_code = _asgi_status("DELETE", "/api/v1/call-watch/not-a-hash")
+        self.assertEqual(status_code, 422)
+
+    def test_delete_with_short_hash_is_rejected_with_422(self):
+        status_code = _asgi_status("DELETE", "/api/v1/call-watch/abc123")
+        self.assertEqual(status_code, 422)
+
+    def test_get_signals_with_valid_hash_reaches_the_handler(self):
+        # Control case: a well-formed hash must not 422 (proves the above
+        # failures are about the pattern, not the harness).
+        status_code = _asgi_status("GET", f"/api/v1/call-watch/{JOIN_URL_HASH}/signals")
+        self.assertNotEqual(status_code, 422)
 
 
 if __name__ == "__main__":
