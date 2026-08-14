@@ -217,8 +217,8 @@ class StorageApiClient(Protocol):
     def register_call_watch(
         self, registration: CallWatchRegistration, access_token: str | None
     ) -> CallWatchReceipt: ...
-    def get_call_signals(self, access_token: str | None) -> CallSignalsResponse: ...
-    def delete_call_watch(self, access_token: str | None) -> None: ...
+    def get_call_signals(self, join_url_hash: str, access_token: str | None) -> CallSignalsResponse: ...
+    def delete_call_watch(self, join_url_hash: str, access_token: str | None) -> None: ...
 
 
 def central_enrolment_required() -> bool:
@@ -548,10 +548,10 @@ class StubStorageApiClient:
             subscription_expires_utc="2099-12-31T23:59:59.0000000Z",
         )
 
-    def get_call_signals(self, access_token: str | None) -> CallSignalsResponse:
+    def get_call_signals(self, join_url_hash: str, access_token: str | None) -> CallSignalsResponse:
         return CallSignalsResponse(signals=[])
 
-    def delete_call_watch(self, access_token: str | None) -> None:
+    def delete_call_watch(self, join_url_hash: str, access_token: str | None) -> None:
         self._fail_if_injected(self)
         return None
 
@@ -891,8 +891,10 @@ class RestStorageApiClient:
                 "storage API returned a malformed call watch receipt"
             ) from exc
 
-    def get_call_signals(self, access_token: str | None) -> CallSignalsResponse:
-        raw = self._request("GET", "/api/v1/call-watches/current/signals", access_token)
+    def get_call_signals(self, join_url_hash: str, access_token: str | None) -> CallSignalsResponse:
+        raw = self._request(
+            "GET", f"/api/v1/call-watches/{join_url_hash}/signals", access_token
+        )
         try:
             return CallSignalsResponse.model_validate(raw)
         except pydantic.ValidationError as exc:
@@ -900,12 +902,12 @@ class RestStorageApiClient:
                 "storage API returned malformed call signals"
             ) from exc
 
-    def delete_call_watch(self, access_token: str | None) -> None:
+    def delete_call_watch(self, join_url_hash: str, access_token: str | None) -> None:
         # 404 is tolerated as success — delete is idempotent (contract §9.4:
         # "always 204, whether or not a watch existed").
         self._request(
             "DELETE",
-            "/api/v1/call-watches/current",
+            f"/api/v1/call-watches/{join_url_hash}",
             access_token,
             allow_not_found=True,
         )
