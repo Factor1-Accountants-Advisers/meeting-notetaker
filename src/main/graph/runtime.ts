@@ -211,8 +211,10 @@ export async function syncGraphDetectionOnce(options: GraphRuntimeOptions): Prom
     if (options.onSyncCompleted) {
       try {
         options.onSyncCompleted(detection.decisions)
-      } catch {
-        options.logger.warn('[graph] onSyncCompleted callback failed')
+      } catch (err) {
+        options.logger.warn('[graph] onSyncCompleted callback failed', {
+          message: err instanceof Error ? err.message : String(err)
+        })
       }
     }
 

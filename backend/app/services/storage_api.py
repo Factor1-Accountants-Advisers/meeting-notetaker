@@ -17,6 +17,7 @@ import os
 import shutil
 import tempfile
 import threading
+import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -463,7 +464,14 @@ class StubStorageApiClient:
             try:
                 if current.exists():
                     revision = "updated"
-                    history_name = now.strftime("%Y%m%dT%H%M%S%fZ") + ".json"
+                    # Timestamp alone collides when two exports land in the
+                    # same coarse Windows clock tick (the long-flaky
+                    # test_stub_serializes_concurrent_exports_for_one_meeting
+                    # was this: same-name history files overwriting each
+                    # other). A random suffix makes every revision distinct.
+                    history_name = (
+                        now.strftime("%Y%m%dT%H%M%S%f") + f"-{uuid.uuid4().hex[:8]}Z.json"
+                    )
                     history = meeting_dir / "history" / history_name
                     history.parent.mkdir(parents=True, exist_ok=True)
                     descriptor, temporary_name = tempfile.mkstemp(

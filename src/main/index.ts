@@ -319,14 +319,15 @@ app.whenReady().then(() => {
   // sync's decisions land on it. Its state file sits beside the graph
   // scheduler state under userData; the synchronous read at creation makes
   // hasActiveWatch truthful before the first sync completes.
-  const callWatchRegistrar = createCallWatchRegistrar({
+  const registrar = createCallWatchRegistrar({
     statePath: join(app.getPath('userData'), 'call-watch-registrar.json')
   })
+  callWatchRegistrar = registrar
   // Same handover direction as configureCallSignals above: index.ts pushes
   // the callbacks into recording-ipc so recording-ipc never imports us.
   configureCallWatchRegistrarHooks({
-    hasActiveWatch: (hash) => callWatchRegistrar.hasActiveWatch(hash),
-    noteWatchDeleted: (hash) => callWatchRegistrar.noteWatchDeleted(hash)
+    hasActiveWatch: (hash) => registrar.hasActiveWatch(hash),
+    noteWatchDeleted: (hash) => registrar.noteWatchDeleted(hash)
   })
 
   const graphRuntime = startGraphDetectionRuntime({
@@ -339,7 +340,7 @@ app.whenReady().then(() => {
     // host gate must agree with the sync's own). handleSyncDecisions never
     // rejects — the void marks it deliberately fire-and-forget.
     onSyncCompleted: (decisions) => {
-      void callWatchRegistrar.handleSyncDecisions(decisions, getCurrentUserEmail())
+      void registrar.handleSyncDecisions(decisions, getCurrentUserEmail())
     }
   })
 
@@ -390,9 +391,18 @@ app.on('window-all-closed', () => {
   // Keep running in tray on all platforms.
 })
 
+// Module-level so before-quit can flush its pending state writes; assigned
+// once inside whenReady (null until then, and flushState is null-safe there).
+let callWatchRegistrar: ReturnType<typeof createCallWatchRegistrar> | null = null
+
 let quitFailsafeArmed = false
 app.on('before-quit', () => {
   cleanupRecordingIpc()
+  // cleanupRecordingIpc's noteWatchDeleted persist is fire-and-forget; flush
+  // the registrar's write chain so a quit right after a recording stop can't
+  // lose it (stale hasActiveWatch on relaunch would attach to a deleted
+  // watch — self-healing, but avoidable for one line).
+  void callWatchRegistrar?.flushState()
   audioEndpointService?.stop()
   stopBackendSupervisor()
   stopUpdaterTimers()
