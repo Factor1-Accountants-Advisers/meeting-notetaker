@@ -22,10 +22,11 @@
  *
  * `joinUrlHash` and `createCallWatchTransport` are this module's other two
  * exports, consumed outside Task 13: the calendar-driven registrar (Task 9)
- * uses them to park a watch ahead of recording, sharing the exact same
- * apiBase/http/identityHeaders assembly `armCallSignals` builds for its
- * poller — so the registrar and the poller can never disagree on how to reach
- * the relay or how a meeting's watch key is derived.
+ * uses them to park a watch ahead of recording. `armCallSignals` composes its
+ * own poller's transport FROM `createCallWatchTransport` too — one
+ * apiBase/http/identityHeaders assembly with one owner, so the registrar and
+ * the poller can never disagree on how to reach the relay or how a meeting's
+ * watch key is derived.
  *
  * Privacy: desktop logs carry status codes and state only — never join URLs,
  * tokens, emails, OIDs, or response bodies (same rule as `hostGateLogContext`).
@@ -199,18 +200,27 @@ export function armCallSignals(
     log('info', '[call-signals] not armed', { reason: decision.reason })
     return
   }
-  const scope = (env.MN_STORAGE_API_SCOPE ?? '').trim()
   const hash = joinUrlHash(decision.joinWebUrl)
   const mode: CallSignalPollerMode = hasActiveWatch?.(hash) ? 'attach' : 'register'
+  // The poller's transport is composed from the registrar's factory — one
+  // apiBase/http/identity assembly with one owner, never two copies to drift.
+  const transport = createCallWatchTransport(deps)
+  if (!transport) {
+    // Unreachable in practice: `shouldArmCallSignals` just returned `arm`,
+    // and its env checks are a superset of `callSignalsEnvGate`'s. Defensive
+    // decline (in D7's silent style) rather than a crash if that ever changes.
+    log('warn', '[call-signals] not armed', { reason: 'transport_unavailable' })
+    return
+  }
   activePoller = createCallSignalPoller({
     actions: deps.actions,
     mode,
     joinUrlHash: hash,
     joinWebUrl: decision.joinWebUrl,
     scheduledEndUtc: recording.endTimeUtc,
-    apiBase: deps.apiBase ?? env.MN_API_BASE ?? DEFAULT_API_BASE,
-    http: deps.http ?? defaultHttp,
-    identityHeaders: deps.identityHeaders ?? createIdentityHeaderProvider(scope),
+    apiBase: transport.apiBase,
+    http: transport.http,
+    identityHeaders: transport.identityHeaders,
     timers: deps.timers ?? { setTimeout, clearTimeout },
     log
   })
@@ -235,10 +245,11 @@ export interface CallWatchTransport {
 }
 
 /**
- * Assemble the shared transport for the call-watch registrar (Task 9), from
- * the SAME pieces `armCallSignals` uses for its poller — so the registrar and
- * the poller can never disagree on where the relay lives or how a request is
- * authenticated.
+ * Assemble the shared transport for the call-watch registrar (Task 9).
+ * `armCallSignals` composes its own poller's transport from this function as
+ * well, so the registrar and the poller can never disagree on where the relay
+ * lives or how a request is authenticated — there is exactly one place that
+ * resolves the apiBase/http/identity trio.
  *
  * Returns null under exactly the env conditions that would make
  * `armCallSignals` decline to arm: not configured (`configureCallSignals`
@@ -247,6 +258,11 @@ export interface CallWatchTransport {
  * storage scope. The recording-specific gates in `shouldArmCallSignals`
  * (auto source, a join URL) don't apply here — the registrar runs at
  * calendar discovery, before any recording exists.
+ *
+ * A null deliberately carries no reason. A caller that has to log WHY it is
+ * going dormant — the registrar's `[call-watch-registrar] dormant` line —
+ * should ask `callSignalsEnvGate` directly; it is exported for exactly that
+ * (`not_configured` remains the one cause the env gate cannot see).
  */
 export function createCallWatchTransport(
   deps: CallSignalRuntimeDeps | null = runtimeDeps

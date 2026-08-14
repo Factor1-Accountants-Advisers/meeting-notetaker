@@ -21,6 +21,7 @@ import {
   CALL_SIGNAL_MUTATION_TIMEOUT_MS,
   CALL_SIGNAL_POLL_INTERVAL_MS,
   CALL_SIGNAL_REGISTRATION_RETRY_MS,
+  callSignalsEnvGate,
   createCallSignalMachine,
   createCallSignalPoller,
   parseCallSignals,
@@ -1043,16 +1044,56 @@ function scenarioArmGate(): void {
     { arm: false, reason: 'no_storage_scope' },
     'without a storage scope there is no token to mint (stub mode)'
   )
-  // Multi-gate precedence: when a recording-shape check AND an env check both
-  // fail, the recording-shape reason must win — field triage reads `reason`
-  // to diagnose ONE recording, and `not_auto_recording` is the actionable
-  // cause for a manual recording even on a machine that also has no scope.
-  // Pins the ordering `shouldArmCallSignals` deliberately keeps inline
-  // instead of composing from callSignalsEnvGate (see its doc comment).
+
+  // The env-only trio must AGREE between the two gates: `callSignalsEnvGate`
+  // is what `createCallWatchTransport` (and through it the Task 9 registrar)
+  // consults, and `shouldArmCallSignals` keeps its own inline copy of the
+  // same three checks — a drift would let the registrar and the arm gate
+  // reach different verdicts about the same machine.
+  const envFailureCases: Array<[NodeJS.ProcessEnv, string]> = [
+    [{ ...env, MN_CALL_SIGNALS_ENABLED: 'false' }, 'feature_disabled'],
+    [{ ...env, MN_STORAGE_API_ENABLED: 'false' }, 'storage_api_disabled'],
+    [{} as NodeJS.ProcessEnv, 'no_storage_scope']
+  ]
+  for (const [caseEnv, reason] of envFailureCases) {
+    assert.deepEqual(
+      callSignalsEnvGate(caseEnv),
+      { ok: false, reason },
+      `callSignalsEnvGate must fail with ${reason} on this env`
+    )
+    assert.deepEqual(
+      shouldArmCallSignals(recording, caseEnv),
+      { arm: false, reason },
+      'for an arm-eligible recording, both gates must report the same env-failure reason'
+    )
+  }
+  assert.deepEqual(
+    callSignalsEnvGate(env),
+    { ok: true },
+    'the env that arms the poller must also pass the transport gate'
+  )
+
+  // Multi-gate precedence. The rule is kill-switch > recording-shape >
+  // storage checks — NOT "shape always wins": `MN_CALL_SIGNALS_ENABLED=false`
+  // is checked first so a thrown kill switch (D8) is always diagnosable as
+  // such, while BELOW the switch a recording-shape failure outranks the env
+  // checks — field triage reads `reason` to diagnose ONE recording, and
+  // `not_auto_recording` is the actionable cause for a manual recording even
+  // on a machine that also has no scope. Pins the ordering
+  // `shouldArmCallSignals` deliberately keeps inline instead of composing
+  // from callSignalsEnvGate (see its doc comment).
+  assert.deepEqual(
+    shouldArmCallSignals(
+      { ...recording, source: 'manual' },
+      { ...env, MN_CALL_SIGNALS_ENABLED: 'false' }
+    ),
+    { arm: false, reason: 'feature_disabled' },
+    'the kill switch must outrank recording shape — D8 dormancy is diagnosable as such'
+  )
   assert.deepEqual(
     shouldArmCallSignals({ ...recording, source: 'manual' }, {} as NodeJS.ProcessEnv),
     { arm: false, reason: 'not_auto_recording' },
-    'a recording-shape failure must outrank env failures in the decline reason'
+    'below the kill switch, a recording-shape failure outranks the storage env checks'
   )
   assert.deepEqual(
     shouldArmCallSignals(
