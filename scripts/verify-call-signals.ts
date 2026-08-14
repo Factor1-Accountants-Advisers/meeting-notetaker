@@ -1,6 +1,7 @@
 /**
  * Verify the call-signal state machine and storage poller (Task 12,
- * meeting-call-events spec D5/D6/D7/D9).
+ * meeting-call-events spec D5/D6/D7/D9, plus the per-meeting amendment's
+ * attach mode + baseline drain, spec E5).
  *
  * Assert-based harness in the repo's `verify:*` idiom (see
  * scripts/verify-update-gate.ts). Everything here runs in plain Node: the
@@ -10,6 +11,7 @@
  * the 60s grace window is asserted at the millisecond, not slept through.
  */
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 // Imports the PURE CORE only. `call-signals.ts` (the runtime half) pulls in
 // auth-msal/electron-log, which `require("electron")` at module scope; the
@@ -213,6 +215,10 @@ async function flush(rounds = 4): Promise<void> {
 // ---------------------------------------------------------------------------
 
 const JOIN_URL = 'https://teams.microsoft.com/l/meetup-join/19%3ameeting_SECRET%40thread.v2/0'
+// The real hash the runtime layer would derive (sha256 hex of the join URL,
+// spec E2) — computed, not hard-coded, so the URL assertions below pin the
+// derivation as well as the route shape.
+const JOIN_URL_HASH = createHash('sha256').update(JOIN_URL).digest('hex')
 const STORAGE_TOKEN = 'eyJ-fake-storage-token'
 const USER_EMAIL = 'recorder@factor1.com.au'
 const USER_OID = '00000000-1111-2222-3333-444444444444'
@@ -484,6 +490,54 @@ function scenarioDoneIsTerminal(): void {
   assert.equal(clock2.pendingCount(), 0, 'dispose must cancel the grace timer')
   clock2.tick(CALL_SIGNAL_GRACE_MS * 2)
   assert.deepEqual(recorder2.calls, [], 'a disposed machine must never auto-stop')
+}
+
+function scenarioPrimeSeen(): void {
+  const clock = createFakeClock()
+  const recorder = createRecorder()
+  const machine = createCallSignalMachine(recorder.actions, CALL_SIGNAL_GRACE_MS, clock.timers)
+
+  // Priming marks seqs as consumed without firing anything — even for the
+  // signal types that would otherwise pause or stop (spec E5: pre-recording
+  // activity must never act on a brand-new recording).
+  machine.primeSeen([
+    signal('001', 'recorder_left'),
+    signal('002', 'recorder_rejoined'),
+    signal('003', 'call_ended')
+  ])
+  assert.deepEqual(recorder.calls, [], 'primeSeen must fire no actions')
+  assert.equal(machine.getState(), 'watching', 'primeSeen must not change state')
+  assert.equal(clock.pendingCount(), 0, 'primeSeen must arm no timers')
+  assert.equal(machine.isPausedToastVisible(), false, 'primeSeen must not raise a toast')
+
+  // A later ingest replaying the primed seqs is fully deduped...
+  machine.ingest([
+    signal('001', 'recorder_left'),
+    signal('002', 'recorder_rejoined'),
+    signal('003', 'call_ended')
+  ])
+  assert.deepEqual(recorder.calls, [], 'ingesting primed seqs must be a no-op')
+  assert.equal(machine.getState(), 'watching', 'primed terminal signals must not end the machine')
+
+  // ...while genuinely new seqs still transition normally.
+  machine.ingest([signal('004', 'recorder_left')])
+  assert.deepEqual(
+    recorder.calls,
+    ['pause', 'showPausedToast'],
+    'a new seq after priming must drive the machine normally'
+  )
+  assert.equal(machine.getState(), 'grace', 'the post-baseline leave enters grace normally')
+
+  // primeSeen after done is a no-op (nothing fires, the machine stays done).
+  const clock2 = createFakeClock()
+  const recorder2 = createRecorder()
+  const machine2 = createCallSignalMachine(recorder2.actions, CALL_SIGNAL_GRACE_MS, clock2.timers)
+  machine2.ingest([signal('001', 'call_ended')])
+  recorder2.reset()
+  machine2.primeSeen([signal('002', 'recorder_left')])
+  assert.deepEqual(recorder2.calls, [], 'primeSeen after done must fire nothing')
+  assert.equal(machine2.getState(), 'done', 'primeSeen after done must not resurrect the machine')
+  assert.equal(clock2.pendingCount(), 0, 'primeSeen after done must arm no timers')
 }
 
 function scenarioToastActions(): void {
@@ -1008,7 +1062,9 @@ function pollerDeps(
 ): Parameters<typeof createCallSignalPoller>[0] {
   return {
     actions: recorder.actions,
+    mode: 'register',
     joinWebUrl: JOIN_URL,
+    joinUrlHash: JOIN_URL_HASH,
     scheduledEndUtc: '2026-08-13T02:00:00Z',
     apiBase: 'http://127.0.0.1:8787',
     http: http.send,
@@ -1094,8 +1150,8 @@ async function scenarioPollerHappyPath(): Promise<void> {
   assert.equal(getCalls.length, 1, 'one poll tick issues exactly one GET')
   assert.equal(
     getCalls[0].url,
-    'http://127.0.0.1:8787/api/v1/call-watch/signals',
-    'polling hits the signals relay route'
+    `http://127.0.0.1:8787/api/v1/call-watch/${JOIN_URL_HASH}/signals`,
+    'polling hits the per-meeting signals relay route (spec E2/E6)'
   )
   assert.equal(
     getCalls[0].headers['X-MN-Storage-Token'],
@@ -1146,8 +1202,8 @@ async function scenarioPollerHappyPath(): Promise<void> {
   assert.equal(deleteCalls.length, 1, 'stop deletes the watch best-effort')
   assert.equal(
     deleteCalls[0].url,
-    'http://127.0.0.1:8787/api/v1/call-watch',
-    'the delete hits the relay route'
+    `http://127.0.0.1:8787/api/v1/call-watch/${JOIN_URL_HASH}`,
+    'the delete hits the per-meeting relay route (spec E2/E6)'
   )
   assert.equal(
     deleteCalls[0].headers['X-MN-Storage-Token'],
@@ -1372,6 +1428,198 @@ async function scenarioNoPiiInLogs(): Promise<void> {
   assertNoPii(logs.entries, 'error bodies')
 }
 
+// ---------------------------------------------------------------------------
+// Attach-mode poller scenarios (spec E5: baseline drain)
+// ---------------------------------------------------------------------------
+
+async function scenarioAttachBaselineDrain(): Promise<void> {
+  const clock = createFakeClock()
+  const recorder = createRecorder()
+  const logs = createFakeLog()
+  // The watch pre-exists (registered at calendar discovery); its store already
+  // holds pre-recording activity: the organizer popped into the call early to
+  // check a camera, left, and the call even "ended" — all before recording.
+  const baseline = [signal('001', 'recorder_left'), signal('002', 'call_ended')]
+  let get = 0
+  const http = createFakeHttp((call) => {
+    if (call.method !== 'GET') return jsonResponse(200, { watch_id: 'w1' })
+    get += 1
+    if (get === 1) return jsonResponse(200, { signals: baseline })
+    if (get === 2) return jsonResponse(200, { signals: [...baseline, signal('003', 'recorder_left')] })
+    return jsonResponse(200, { signals: [...baseline, signal('003', 'recorder_left')] })
+  })
+  const poller = createCallSignalPoller({
+    ...pollerDeps(clock, http, logs, recorder),
+    mode: 'attach'
+  })
+
+  await poller.start()
+  await flush()
+  assert.equal(
+    http.calls.filter((call) => call.method === 'POST').length,
+    0,
+    'attach mode must never register — the watch already exists (spec E1/E5)'
+  )
+  assert.equal(
+    http.calls.filter((call) => call.method === 'GET').length,
+    1,
+    'attach-mode start must issue the baseline poll immediately, not after the interval'
+  )
+  assert.equal(
+    http.calls[0].url,
+    `http://127.0.0.1:8787/api/v1/call-watch/${JOIN_URL_HASH}/signals`,
+    'the baseline poll hits the per-meeting signals route'
+  )
+  assert.equal(
+    http.calls[0].timeoutMs,
+    undefined,
+    'the baseline poll stays on the short poll budget — it is just the first tick'
+  )
+  assert.equal(poller.getStatus(), 'polling', 'attach mode goes straight to polling')
+  assert.deepEqual(
+    recorder.calls,
+    [],
+    'baseline signals must be drained without acting, even recorder_left/call_ended'
+  )
+  assert.equal(
+    poller.machine.getState(),
+    'watching',
+    'a drained call_ended must not end the machine — it predates the recording'
+  )
+
+  // The next tick replays the baseline (deduped) plus a genuinely new leave,
+  // which must drive the machine exactly as in register mode.
+  clock.tick(CALL_SIGNAL_POLL_INTERVAL_MS)
+  await flush()
+  assert.deepEqual(
+    recorder.calls,
+    ['pause', 'showPausedToast'],
+    'a post-baseline leave must pause and toast normally'
+  )
+  assert.equal(poller.machine.getState(), 'grace', 'the post-baseline leave enters grace')
+
+  // A replay on the tick after that stays fully deduped.
+  recorder.reset()
+  clock.tick(CALL_SIGNAL_POLL_INTERVAL_MS)
+  await flush()
+  assert.deepEqual(recorder.calls, [], 'replayed signals stay deduped after the baseline')
+
+  poller.stop()
+  await flush()
+  assertNoPii(logs.entries, 'attach baseline drain')
+}
+
+async function scenarioAttachFailedFirstPollRetriesBaseline(): Promise<void> {
+  // A FAILED first poll must not count as the baseline: nothing was drained,
+  // so the next successful poll still primes instead of ingesting. (Signals
+  // present before the first *successful* poll predate recording by
+  // construction — the relay stored them before we ever managed to look.)
+  const clock = createFakeClock()
+  const recorder = createRecorder()
+  const logs = createFakeLog()
+  let get = 0
+  const http = createFakeHttp((call) => {
+    if (call.method !== 'GET') return jsonResponse(200, { watch_id: 'w1' })
+    get += 1
+    if (get === 1) return jsonResponse(503)
+    if (get === 2) return jsonResponse(200, { signals: [signal('001', 'recorder_left')] })
+    return jsonResponse(200, {
+      signals: [signal('001', 'recorder_left'), signal('002', 'recorder_left')]
+    })
+  })
+  const poller = createCallSignalPoller({
+    ...pollerDeps(clock, http, logs, recorder),
+    mode: 'attach'
+  })
+
+  await poller.start()
+  await flush()
+  assert.equal(get, 1, 'the immediate baseline poll was attempted')
+  assert.deepEqual(recorder.calls, [], 'a failed baseline poll must change nothing')
+  assert.equal(poller.getStatus(), 'polling', 'a failed baseline poll must not stop the poller')
+
+  clock.tick(CALL_SIGNAL_POLL_INTERVAL_MS)
+  await flush()
+  assert.equal(get, 2, 'the next tick retries')
+  assert.deepEqual(
+    recorder.calls,
+    [],
+    'the first SUCCESSFUL poll primes instead of ingesting — the leave predates recording'
+  )
+  assert.equal(poller.machine.getState(), 'watching', 'the primed leave must not enter grace')
+
+  clock.tick(CALL_SIGNAL_POLL_INTERVAL_MS)
+  await flush()
+  assert.deepEqual(
+    recorder.calls,
+    ['pause', 'showPausedToast'],
+    'once baselined, the next new signal transitions normally'
+  )
+
+  poller.stop()
+  await flush()
+  assertNoPii(logs.entries, 'attach failed first poll')
+}
+
+async function scenarioAttachStopDeletesMeetingWatch(): Promise<void> {
+  const clock = createFakeClock()
+  const recorder = createRecorder()
+  const logs = createFakeLog()
+  const http = createFakeHttp((call) =>
+    call.method === 'GET' ? jsonResponse(200, { signals: [] }) : jsonResponse(204)
+  )
+  const poller = createCallSignalPoller({
+    ...pollerDeps(clock, http, logs, recorder),
+    mode: 'attach'
+  })
+  await poller.start()
+  await flush()
+  poller.stop()
+  await flush()
+  assert.equal(
+    http.calls.filter((call) => call.method === 'POST').length,
+    0,
+    'attach mode never POSTs, before or after stop'
+  )
+  const deletes = http.calls.filter((call) => call.method === 'DELETE')
+  assert.equal(deletes.length, 1, 'attach-mode stop must still delete the watch')
+  assert.equal(
+    deletes[0].url,
+    `http://127.0.0.1:8787/api/v1/call-watch/${JOIN_URL_HASH}`,
+    'the delete targets the per-meeting watch URL'
+  )
+  assert.equal(
+    deletes[0].timeoutMs,
+    CALL_SIGNAL_MUTATION_TIMEOUT_MS,
+    'the attach-mode delete also traverses Graph and needs the long budget'
+  )
+  poller.stop()
+  await flush()
+  assert.equal(
+    http.calls.filter((call) => call.method === 'DELETE').length,
+    1,
+    'a second stop() must not issue a second delete'
+  )
+
+  // Even a never-started attach poller owns a server-side watch: the watch
+  // exists because the registrar POSTed it long before this poller was built,
+  // so stop() must delete it despite this poller never having issued a request.
+  const clock2 = createFakeClock()
+  const http2 = createFakeHttp(() => jsonResponse(204))
+  const poller2 = createCallSignalPoller({
+    ...pollerDeps(clock2, http2, createFakeLog(), createRecorder()),
+    mode: 'attach'
+  })
+  poller2.stop()
+  await flush()
+  assert.equal(
+    http2.calls.filter((call) => call.method === 'DELETE').length,
+    1,
+    'attach mode: mayHaveWatch is true from the start (the registrar created the watch)'
+  )
+  assertNoPii(logs.entries, 'attach stop')
+}
+
 /**
  * The harness must bundle the pure core ONLY. `call-signals.ts` reaches
  * auth-msal / the log module, both of which require the Electron runtime at
@@ -1410,6 +1658,7 @@ async function main(): Promise<void> {
   scenarioCallEnded()
   scenarioDedupeAndOrdering()
   scenarioDoneIsTerminal()
+  scenarioPrimeSeen()
   scenarioToastActions()
   scenarioNullEventUtc()
 
@@ -1428,6 +1677,11 @@ async function main(): Promise<void> {
   await scenarioPollerFailuresAreSkips()
   await scenarioPollerSurvivesThrowingActions()
   await scenarioNoPiiInLogs()
+
+  // Attach mode + baseline drain (spec E5).
+  await scenarioAttachBaselineDrain()
+  await scenarioAttachFailedFirstPollRetriesBaseline()
+  await scenarioAttachStopDeletesMeetingWatch()
 
   assertBundleIsRuntimeFree()
 

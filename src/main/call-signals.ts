@@ -24,6 +24,7 @@
  * tokens, emails, OIDs, or response bodies (same rule as `hostGateLogContext`).
  */
 
+import { createHash } from 'node:crypto'
 import type { ActiveRecording } from './recording-state'
 import { storageIdentityHeaders } from './storage-api-identity'
 import { getCurrentUserEmail, getCurrentUserOid, getStorageApiAccessToken } from './auth-session'
@@ -172,6 +173,14 @@ export function armCallSignals(
   const scope = (env.MN_STORAGE_API_SCOPE ?? '').trim()
   activePoller = createCallSignalPoller({
     actions: deps.actions,
+    // Task 8 wires the real mode selection (attach when the registrar already
+    // parked a watch for this meeting) and hoists the hash into a shared
+    // exported helper. Until then, register mode preserves today's behaviour
+    // byte for byte, and the hash (sha256 hex of the joinWebUrl, spec E2)
+    // targets the per-meeting relay routes that replaced the parameterless
+    // ones in the local backend.
+    mode: 'register',
+    joinUrlHash: createHash('sha256').update(decision.joinWebUrl).digest('hex'),
     joinWebUrl: decision.joinWebUrl,
     scheduledEndUtc: recording.endTimeUtc,
     apiBase: deps.apiBase ?? env.MN_API_BASE ?? DEFAULT_API_BASE,

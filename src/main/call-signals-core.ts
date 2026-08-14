@@ -1,6 +1,7 @@
 /**
  * Call-signal state machine + poller core (meeting-call-events, spec
- * D5/D6/D7/D9) — the Electron-free half of the feature.
+ * D5/D6/D7/D9 + per-meeting amendment E5) — the Electron-free half of the
+ * feature.
  *
  * Nothing in this file may import Electron, MSAL, `electron-log`, or reach the
  * network: every effect (timers, HTTP, identity, logging, recording controls)
@@ -96,6 +97,17 @@ export interface CallSignalMachine {
   /** Feed a poll response. Signals are processed in `seq` order and deduped
    *  against a seen-set (the relay returns ALL signals for the watch). */
   ingest(signals: CallSignal[]): void
+  /** Mark seqs as consumed WITHOUT acting on them — the E5 baseline drain.
+   *
+   *  When the poller attaches to a watch that pre-dates the recording
+   *  (registered at calendar discovery), the store may already hold signals
+   *  from before recording started — the organizer popping into the call to
+   *  check a camera and leaving, even a `call_ended` from an earlier
+   *  incarnation of the call. Acting on those would pause or stop a
+   *  brand-new recording, so the first successful poll feeds them here
+   *  instead of `ingest`. Only the seen-set is touched: no transition runs,
+   *  no timer arms, no toast shows. No-op once the machine is `done`. */
+  primeSeen(signals: CallSignal[]): void
   /** The user resumed from the tray/screen during grace: cancel the grace,
    *  keep recording. Explicit user intent wins (D6). */
   onManualResume(): void
@@ -279,6 +291,15 @@ export function createCallSignalMachine(
       }
     },
 
+    primeSeen(signals: CallSignal[]): void {
+      // The `done` guard mirrors `ingest` for consistency; a terminal machine
+      // ignores everything either way. Deliberately NO transition logic here —
+      // priming only ever grows the seen-set, so `ingest`'s dedupe does the
+      // actual discarding when the relay replays these seqs on later polls.
+      if (state === 'done') return
+      for (const signal of signals) seen.add(signal.seq)
+    },
+
     onManualResume(): void {
       if (state !== 'grace') return
       backToWatching(false)
@@ -309,7 +330,7 @@ export function createCallSignalMachine(
   }
 }
 
-/** Shape check for a `GET /call-watch/signals` body. */
+/** Shape check for a `GET /call-watch/{join_url_hash}/signals` body. */
 export function isCallSignalsPayload(payload: unknown): payload is { signals: unknown[] } {
   return (
     typeof payload === 'object' &&
@@ -422,9 +443,29 @@ export type CallSignalPollerStatus =
   | 'dormant'
   | 'stopped'
 
+/**
+ * How the poller acquires its watch (per-meeting amendment, spec E5):
+ *
+ * - `'attach'`: the watch already exists server-side — the calendar-driven
+ *   registrar POSTed it at meeting discovery, possibly hours ago (E1). The
+ *   poller skips registration and starts with an immediate baseline poll
+ *   whose signals are drained via `machine.primeSeen`, not acted on.
+ * - `'register'`: today's fallback for when the registrar never managed to
+ *   park a watch — POST first (with the single-retry/dormant semantics of
+ *   D7), then poll. No baseline drain: a fresh registration replaces the
+ *   watch server-side, so a brand-new subscription generation has no prior
+ *   signals to discard.
+ */
+export type CallSignalPollerMode = 'register' | 'attach'
+
 export interface CallSignalPollerDeps {
   actions: CallSignalActions
+  mode: CallSignalPollerMode
   joinWebUrl: string
+  /** sha256 hex of `joinWebUrl` (spec E2) — the per-meeting path segment for
+   *  the signals GET and the watch DELETE. Derived by the runtime layer so the
+   *  core stays free of `node:crypto` and the harness can pin exact URLs. */
+  joinUrlHash: string
   scheduledEndUtc: string
   apiBase: string
   http: CallSignalHttp
@@ -438,8 +479,11 @@ export interface CallSignalPollerDeps {
 
 export interface CallSignalPoller {
   readonly machine: CallSignalMachine
-  /** Register the watch, then start polling. Resolves once the first
-   *  registration attempt has settled; the retry (if any) runs on the timer. */
+  /** Acquire the watch, then start polling. In `'register'` mode: resolves
+   *  once the first registration attempt has settled; the retry (if any) runs
+   *  on the timer. In `'attach'` mode: resolves once the immediate baseline
+   *  poll has settled (success or not — a failed baseline retries on the
+   *  normal poll interval). */
   start(): Promise<void>
   /** Cancel timers, dispose the machine, best-effort DELETE the watch. */
   stop(): void
@@ -447,8 +491,24 @@ export interface CallSignalPoller {
 }
 
 /**
- * Registration → poll → teardown, with every failure mode collapsing to
- * "dormant" or "skip this tick" (D7).
+ * Watch acquisition (register or attach, see `CallSignalPollerMode`) → poll →
+ * teardown, with every failure mode collapsing to "dormant" or "skip this
+ * tick" (D7).
+ *
+ * Baseline drain (E5): in attach mode, the FIRST poll that both completes and
+ * parses feeds its signals to `machine.primeSeen` instead of `ingest` — those
+ * signals were stored before we ever managed to look, so they predate the
+ * recording by construction and must not pause/stop it. Every poll after that
+ * baseline ingests normally. A failed first poll does not count: the next
+ * successful one still primes.
+ *
+ * Known accepted race (E5): a GENUINE `recorder_left` (or `call_ended`) that
+ * lands in the store between recording start and the first successful poll is
+ * indistinguishable from pre-recording noise and gets drained with it. If the
+ * recorder never returns, no leave signal ever fires for that departure — the
+ * grace window never opens — and the scheduled auto-stop remains the stop
+ * path, exactly as for a machine with the feature dormant. The exposure is at
+ * most one failed-poll stretch plus the seconds before the baseline lands.
  *
  * Relay status codes are all handled identically but logged distinctly:
  * 503 = storage unavailable, 502 = Graph trouble, 422 = client bug, 0 = the
@@ -462,12 +522,20 @@ export function createCallSignalPoller(deps: CallSignalPollerDeps): CallSignalPo
     deps.graceMs ?? CALL_SIGNAL_GRACE_MS,
     deps.timers
   )
+  // POST registers against the collection route; the signals GET and the
+  // watch DELETE are per-meeting (spec E2/E6 — hash, not raw URL, so join
+  // URLs stay out of paths and logs).
   const watchUrl = `${deps.apiBase}/api/v1/call-watch`
-  const signalsUrl = `${watchUrl}/signals`
+  const meetingUrl = `${watchUrl}/${deps.joinUrlHash}`
+  const signalsUrl = `${meetingUrl}/signals`
 
   let status: CallSignalPollerStatus = 'idle'
   let timer: unknown = null
   let registrationAttempts = 0
+  // True once one attach-mode poll has succeeded end to end (E5). Register
+  // mode never baselines: it stays false there, and the mode check in
+  // `pollOnce` keeps it inert.
+  let baselined = false
 
   const clearTimer = (): void => {
     if (timer === null) return
@@ -525,7 +593,16 @@ export function createCallSignalPoller(deps: CallSignalPollerDeps): CallSignalPo
     try {
       // The machine guards its own actions, so this should never throw —
       // defence in depth so that no future change can kill the poll loop.
-      if (signals.length > 0) machine.ingest(signals)
+      if (deps.mode === 'attach' && !baselined) {
+        // E5 baseline drain: this is the first poll that both completed and
+        // parsed, so everything in it predates the recording. Mark seen, act
+        // on nothing. Failed polls never reach this line, which is exactly
+        // the retry-until-success semantics the spec asks for.
+        if (signals.length > 0) machine.primeSeen(signals)
+        baselined = true
+      } else if (signals.length > 0) {
+        machine.ingest(signals)
+      }
     } catch {
       // Status only: an exception message could carry anything.
       deps.log('warn', '[call-signals] signal ingest failed', { status: response.status })
@@ -575,20 +652,42 @@ export function createCallSignalPoller(deps: CallSignalPollerDeps): CallSignalPo
 
     async start(): Promise<void> {
       if (status !== 'idle') return
+      if (deps.mode === 'attach') {
+        // The registrar owns registration; this poller only reads and (on
+        // stop) deletes. Straight to polling, and the first poll runs NOW —
+        // waiting an interval would widen the E5 race window for no benefit,
+        // and the caller gets a settled baseline attempt out of `start()`.
+        status = 'polling'
+        deps.log('info', '[call-signals] attached to pre-registered call watch', {
+          mode: deps.mode
+        })
+        await pollOnce()
+        return
+      }
       await register()
     },
 
     stop(): void {
       clearTimer()
       // A registration that failed client-side may still have landed, so any
-      // poller that got as far as a POST cleans up after itself. A second
-      // stop() is inert: the watch is already deleted (or already orphaned).
-      const mayHaveWatch = status !== 'idle' && status !== 'stopped'
+      // poller that got as far as a POST cleans up after itself. In attach
+      // mode the watch exists server-side even though this poller never
+      // POSTed (the registrar did, at calendar discovery), so it is cleaned
+      // up regardless of how far this poller got — including not at all. A
+      // second stop() is inert either way: the watch is already deleted (or
+      // already orphaned, and orphans self-expire server-side, spec D3).
+      const mayHaveWatch =
+        deps.mode === 'attach' ? status !== 'stopped' : status !== 'idle' && status !== 'stopped'
       status = 'stopped'
       machine.dispose()
       if (!mayHaveWatch) return
       void (async () => {
-        const response = await request('DELETE', watchUrl, undefined, CALL_SIGNAL_MUTATION_TIMEOUT_MS)
+        const response = await request(
+          'DELETE',
+          meetingUrl,
+          undefined,
+          CALL_SIGNAL_MUTATION_TIMEOUT_MS
+        )
         if (!response || !response.ok) {
           deps.log('warn', '[call-signals] call watch delete failed', {
             status: response?.status ?? 0
