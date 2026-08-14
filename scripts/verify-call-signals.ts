@@ -1442,7 +1442,8 @@ async function scenarioAttachBaselineDrain(): Promise<void> {
   const baseline = [signal('001', 'recorder_left'), signal('002', 'call_ended')]
   let get = 0
   const http = createFakeHttp((call) => {
-    if (call.method !== 'GET') return jsonResponse(200, { watch_id: 'w1' })
+    // Attach mode never POSTs, so this branch is only ever the stop() DELETE.
+    if (call.method !== 'GET') return jsonResponse(204)
     get += 1
     if (get === 1) return jsonResponse(200, { signals: baseline })
     if (get === 2) return jsonResponse(200, { signals: [...baseline, signal('003', 'recorder_left')] })
@@ -1485,6 +1486,21 @@ async function scenarioAttachBaselineDrain(): Promise<void> {
     poller.machine.getState(),
     'watching',
     'a drained call_ended must not end the machine — it predates the recording'
+  )
+  const baselineLog = logs.entries.find(
+    (entry) => entry.message === '[call-signals] baseline drained'
+  )
+  assert.ok(baselineLog, 'a successful baseline poll must log exactly one info line')
+  assert.equal(baselineLog?.level, 'info', 'the baseline-drained log is informational, not a warning')
+  assert.deepEqual(
+    baselineLog?.context,
+    { drained: baseline.length },
+    'the baseline-drained log must carry only the count — never the signals themselves'
+  )
+  assert.equal(
+    logs.entries.filter((entry) => entry.message === '[call-signals] baseline drained').length,
+    1,
+    'the baseline-drained log must fire exactly once, on the first successful poll only'
   )
 
   // The next tick replays the baseline (deduped) plus a genuinely new leave,
@@ -1537,6 +1553,11 @@ async function scenarioAttachFailedFirstPollRetriesBaseline(): Promise<void> {
   assert.equal(get, 1, 'the immediate baseline poll was attempted')
   assert.deepEqual(recorder.calls, [], 'a failed baseline poll must change nothing')
   assert.equal(poller.getStatus(), 'polling', 'a failed baseline poll must not stop the poller')
+  assert.equal(
+    logs.entries.some((entry) => entry.message === '[call-signals] baseline drained'),
+    false,
+    'a failed first poll must not count as the baseline and must not log the drain'
+  )
 
   clock.tick(CALL_SIGNAL_POLL_INTERVAL_MS)
   await flush()
@@ -1547,6 +1568,15 @@ async function scenarioAttachFailedFirstPollRetriesBaseline(): Promise<void> {
     'the first SUCCESSFUL poll primes instead of ingesting — the leave predates recording'
   )
   assert.equal(poller.machine.getState(), 'watching', 'the primed leave must not enter grace')
+  const baselineLogs = logs.entries.filter(
+    (entry) => entry.message === '[call-signals] baseline drained'
+  )
+  assert.equal(baselineLogs.length, 1, 'the first successful poll must log the drain exactly once')
+  assert.deepEqual(
+    baselineLogs[0]?.context,
+    { drained: 1 },
+    'the baseline-drained log counts only the signals actually primed'
+  )
 
   clock.tick(CALL_SIGNAL_POLL_INTERVAL_MS)
   await flush()
@@ -1606,8 +1636,9 @@ async function scenarioAttachStopDeletesMeetingWatch(): Promise<void> {
   // so stop() must delete it despite this poller never having issued a request.
   const clock2 = createFakeClock()
   const http2 = createFakeHttp(() => jsonResponse(204))
+  const logs2 = createFakeLog()
   const poller2 = createCallSignalPoller({
-    ...pollerDeps(clock2, http2, createFakeLog(), createRecorder()),
+    ...pollerDeps(clock2, http2, logs2, createRecorder()),
     mode: 'attach'
   })
   poller2.stop()
@@ -1618,6 +1649,7 @@ async function scenarioAttachStopDeletesMeetingWatch(): Promise<void> {
     'attach mode: mayHaveWatch is true from the start (the registrar created the watch)'
   )
   assertNoPii(logs.entries, 'attach stop')
+  assertNoPii(logs2.entries, 'attach stop (never-started poller)')
 }
 
 /**

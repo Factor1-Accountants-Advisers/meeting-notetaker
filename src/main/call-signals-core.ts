@@ -388,6 +388,33 @@ export type CallSignalArmDecision =
   | { arm: true; joinWebUrl: string }
   | { arm: false; reason: CallSignalArmSkipReason }
 
+export type CallSignalEnvGateFailReason =
+  | 'feature_disabled'
+  | 'storage_api_disabled'
+  | 'no_storage_scope'
+
+export type CallSignalEnvGateResult =
+  | { ok: true }
+  | { ok: false; reason: CallSignalEnvGateFailReason }
+
+/**
+ * The env-only subset of `shouldArmCallSignals`'s gate: the desktop kill
+ * switch, the storage-API kill switch, and the storage scope. Extracted so
+ * `createCallWatchTransport` (`call-signals.ts`, consumed by the Task 9
+ * registrar) can apply the same three checks without a recording to test —
+ * the registrar runs at calendar discovery, before any recording exists.
+ */
+export function callSignalsEnvGate(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined>
+): CallSignalEnvGateResult {
+  if ((env.MN_CALL_SIGNALS_ENABLED ?? '').trim().toLowerCase() === 'false') {
+    return { ok: false, reason: 'feature_disabled' }
+  }
+  if (!isStorageApiEnabled(env)) return { ok: false, reason: 'storage_api_disabled' }
+  if (!(env.MN_STORAGE_API_SCOPE ?? '').trim()) return { ok: false, reason: 'no_storage_scope' }
+  return { ok: true }
+}
+
 /**
  * Whether this recording gets a call watch. Every "no" is silent and leaves
  * today's behaviour untouched (D7/D8) — the scheduled auto-stop and the T-5
@@ -397,14 +424,11 @@ export function shouldArmCallSignals(
   recording: Pick<ActiveRecording, 'source' | 'metadata'>,
   env: NodeJS.ProcessEnv | Record<string, string | undefined>
 ): CallSignalArmDecision {
-  if ((env.MN_CALL_SIGNALS_ENABLED ?? '').trim().toLowerCase() === 'false') {
-    return { arm: false, reason: 'feature_disabled' }
-  }
+  const envGate = callSignalsEnvGate(env)
+  if (!envGate.ok) return { arm: false, reason: envGate.reason }
   if (recording.source !== 'auto') return { arm: false, reason: 'not_auto_recording' }
   const joinWebUrl = readJoinWebUrl(recording.metadata)
   if (!joinWebUrl) return { arm: false, reason: 'no_join_url' }
-  if (!isStorageApiEnabled(env)) return { arm: false, reason: 'storage_api_disabled' }
-  if (!(env.MN_STORAGE_API_SCOPE ?? '').trim()) return { arm: false, reason: 'no_storage_scope' }
   return { arm: true, joinWebUrl }
 }
 
@@ -510,6 +534,13 @@ export interface CallSignalPoller {
  * path, exactly as for a machine with the feature dormant. The exposure is at
  * most one failed-poll stretch plus the seconds before the baseline lands.
  *
+ * The reverse race is equally inherent to E5: a signal generated BEFORE
+ * recording started but whose webhook delivery to the store is delayed past
+ * the baseline poll gets ingested as if it were live, and can pause a
+ * brand-new recording. This is self-healing — a genuine late rejoin resolves
+ * it within the grace window, and a lone late leave surfaces the normal
+ * cancellable "recording paused" toast well before the 60s auto-stop fires.
+ *
  * Relay status codes are all handled identically but logged distinctly:
  * 503 = storage unavailable, 502 = Graph trouble, 422 = client bug, 0 = the
  * request never completed (backend down, timeout, token acquisition failed).
@@ -600,6 +631,8 @@ export function createCallSignalPoller(deps: CallSignalPollerDeps): CallSignalPo
         // the retry-until-success semantics the spec asks for.
         if (signals.length > 0) machine.primeSeen(signals)
         baselined = true
+        // Count only — never the signals themselves (see module doc).
+        deps.log('info', '[call-signals] baseline drained', { drained: signals.length })
       } else if (signals.length > 0) {
         machine.ingest(signals)
       }
