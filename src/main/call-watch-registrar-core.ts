@@ -121,7 +121,11 @@ interface RegistrarCandidate {
  *    delta syncs only carry changed events, so absence means "unchanged",
  *    never "gone". A stored end that no longer parses is treated as ended —
  *    it could never become past on its own, and dropping it is the only way
- *    that slot ever frees.
+ *    that slot ever frees. One state deliberately not listed: a tracked
+ *    meeting whose decision returns as a `candidate` with a non-qualifying
+ *    reason (e.g. `outside_lookahead` after a big reschedule) stays tracked
+ *    until its OLD stored end passes — bounded by the server's D3 expiry,
+ *    and deliberate.
  *
  * 3. RE-REGISTER (E4) — key tracked AND a live candidate, but `startUtc`,
  *    the scheduled end, or the join URL changed: emit a remove for the OLD
@@ -364,7 +368,11 @@ export interface CallWatchRegistrar {
  * decisions anyway — queueing would only ever replay stale ones. The flag
  * also means a slow HTTP call (the register chain can legitimately take tens
  * of seconds through a cold Function App) can never interleave two passes'
- * requests over the same watch.
+ * requests over the same watch. One narrow same-key race remains:
+ * `noteWatchDeleted` firing mid-batch while that key sits in the batch's
+ * already-planned registers (a reschedule window) can transiently re-track a
+ * watch the poller just deleted — self-healing, because the next sync (or
+ * the end-of-meeting reap) reconciles the entry away.
  *
  * Failure philosophy, per request:
  * - DELETE fails → log status, DROP THE ENTRY ANYWAY. The server-side orphan

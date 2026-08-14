@@ -30,6 +30,14 @@ export interface GraphRuntimeOptions {
   clientFactory?: (accessToken: string) => GraphCalendarClient
   resumeDebounceMs?: number
   onAutoRecordEligible?: (decisions: GraphEventDecision[]) => void
+  /**
+   * Per-meeting call watches (call-watch-per-meeting spec, E1): invoked after
+   * every successful sync — polled, startup, resume, and direct `syncNow()`
+   * passes alike — with ALL of that sync's decisions, candidates and excluded
+   * both. Deliberately unfiltered: the watch registrar's planner needs the
+   * excluded decisions to reap watches for cancelled meetings.
+   */
+  onSyncCompleted?: (decisions: GraphEventDecision[]) => void
 }
 
 export interface GraphCalendarClient {
@@ -197,6 +205,16 @@ export async function syncGraphDetectionOnce(options: GraphRuntimeOptions): Prom
       autoRecordEligible: detection.autoRecordEligible.length,
       excluded: detection.excluded.length
     })
+
+    // Guarded so a throwing callback can never turn a completed sync into an
+    // error status (the state above is already persisted at this point).
+    if (options.onSyncCompleted) {
+      try {
+        options.onSyncCompleted(detection.decisions)
+      } catch {
+        options.logger.warn('[graph] onSyncCompleted callback failed')
+      }
+    }
 
     // Log host-gate decisions for diagnostics (IN-67)
     for (const decision of detection.candidates) {

@@ -2,7 +2,7 @@
 
 **Date:** 14 August 2026
 **Jira:** to be created (follow-on to the meeting-call-events feature; relates to IN-479, IN-67)
-**Status:** Approved in conversation (Joseph, 14 Aug); implementation not started
+**Status:** Implemented (14 Aug) — storage-api and desktop both on their `feature/call-watch-per-meeting` branches; live smoke against prod is deploy-gated
 **Amends:** `2026-08-12-meeting-call-events-design.md` — supersedes D2's
 one-watch-per-user model and the "arm at recording start" wiring. All other
 decisions (D1, D3–D9) stand unchanged.
@@ -137,7 +137,8 @@ the registrar never managed to, which preserves today's behaviour as the
 floor), performs the E5 baseline drain, then polls that meeting's signals
 route every 10 s exactly as today. `disarmCallSignals()` keeps deleting the
 watch on recording stop. The state machine (`call-signals-core.ts`) is
-**unchanged**.
+otherwise unchanged apart from one additive method, `primeSeen` — the E5
+baseline drain marks pre-recording signals as seen without acting on them.
 
 Kill switches unchanged (D8): `MN_CALL_SIGNALS_ENABLED` gates the registrar
 and the poller together.

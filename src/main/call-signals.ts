@@ -249,7 +249,10 @@ export interface CallWatchTransport {
  * `armCallSignals` composes its own poller's transport from this function as
  * well, so the registrar and the poller can never disagree on where the relay
  * lives or how a request is authenticated — there is exactly one place that
- * resolves the apiBase/http/identity trio.
+ * resolves the apiBase/http/identity trio. Each resolution builds a FRESH
+ * identity-header provider (absent an injected override), so the 5-minute
+ * header cache never spans registrar syncs — one forced token refresh per
+ * working sync pass, deliberate at the current 5-minute sync cadence.
  *
  * Returns null under exactly the env conditions that would make
  * `armCallSignals` decline to arm: not configured (`configureCallSignals`

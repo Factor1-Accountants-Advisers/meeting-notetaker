@@ -4,6 +4,7 @@ import { join } from 'path'
 import { registerApiProxyIpc } from './api-proxy'
 import { getCurrentUser, getCurrentUserEmail, getGraphAccessToken, onMsalSignedIn, registerAuthSessionIpc } from './auth-session'
 import { callSignalsManualResume, callSignalsToastAction, configureCallSignals } from './call-signals'
+import { createCallWatchRegistrar } from './call-watch-registrar'
 import { startGraphDetectionRuntime } from './graph/runtime'
 import { loadPublicEnv } from './env'
 import { evaluateHostGate, hostGateLogContext } from './graph/host-gate'
@@ -12,6 +13,7 @@ import { registerMediaPermissions } from './media-permissions'
 import {
   cleanupRecordingIpc,
   closeRecordingPausedToast,
+  configureCallWatchRegistrarHooks,
   extendActiveRecordingFromMain,
   extendAutoStop,
   getRecordingStateMachine,
@@ -312,12 +314,33 @@ app.whenReady().then(() => {
     }
   }
 
+  // Per-meeting call watches (call-watch-per-meeting spec): one registrar for
+  // the app's lifetime, created before the graph runtime so even the startup
+  // sync's decisions land on it. Its state file sits beside the graph
+  // scheduler state under userData; the synchronous read at creation makes
+  // hasActiveWatch truthful before the first sync completes.
+  const callWatchRegistrar = createCallWatchRegistrar({
+    statePath: join(app.getPath('userData'), 'call-watch-registrar.json')
+  })
+  // Same handover direction as configureCallSignals above: index.ts pushes
+  // the callbacks into recording-ipc so recording-ipc never imports us.
+  configureCallWatchRegistrarHooks({
+    hasActiveWatch: (hash) => callWatchRegistrar.hasActiveWatch(hash),
+    noteWatchDeleted: (hash) => callWatchRegistrar.noteWatchDeleted(hash)
+  })
+
   const graphRuntime = startGraphDetectionRuntime({
     statePath: join(app.getPath('userData'), 'graph', 'scheduler-state.json'),
     getAccessToken: getGraphAccessToken,
     getSignedInEmail: getCurrentUserEmail,
     logger: logger(),
-    onAutoRecordEligible: handleAutoRecordEligible
+    onAutoRecordEligible: handleAutoRecordEligible,
+    // Same signed-in-email source as getSignedInEmail above (the registrar's
+    // host gate must agree with the sync's own). handleSyncDecisions never
+    // rejects — the void marks it deliberately fire-and-forget.
+    onSyncCompleted: (decisions) => {
+      void callWatchRegistrar.handleSyncDecisions(decisions, getCurrentUserEmail())
+    }
   })
 
   onMsalSignedIn(() => {
