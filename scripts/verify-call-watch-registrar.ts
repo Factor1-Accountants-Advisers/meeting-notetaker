@@ -456,6 +456,130 @@ function scenarioUnparseableStoredEndIsReaped(): void {
   )
 }
 
+function scenarioRecurringJoinUrlUsesOneRegistrationUnit(): void {
+  const sharedUrl = urlFor('daily-series')
+  const first = watch(
+    'daily-series-first',
+    '2026-08-13T23:30:00Z',
+    '2026-08-14T00:30:00Z',
+    sharedUrl
+  )
+  const state = stateOf({ 'daily-series-first': first })
+  const nextOccurrence = decision({
+    key: 'daily-series-next',
+    joinWebUrl: sharedUrl,
+    startUtc: '2026-08-14T03:00:00Z',
+    endUtc: '2026-08-14T03:30:00Z'
+  })
+
+  const whileFirstIsLive = plan(state, [nextOccurrence])
+  assert.deepEqual(
+    whileFirstIsLive,
+    { register: [], remove: [] },
+    'a later recurring occurrence sharing a tracked join URL must not replace the live subscription'
+  )
+
+  const afterFirstEnded = planRegistrarActions(
+    state,
+    [nextOccurrence],
+    new Date('2026-08-14T01:00:00Z'),
+    USER_EMAIL,
+    sha
+  )
+  assert.deepEqual(
+    afterFirstEnded.remove,
+    [{ key: 'daily-series-first', joinUrlHash: sha(sharedUrl) }],
+    'the ended occurrence releases the shared hash'
+  )
+  assert.deepEqual(
+    afterFirstEnded.register.map((entry) => entry.key),
+    ['daily-series-next'],
+    'the next occurrence registers once the prior occurrence releases the hash'
+  )
+
+  const fresh = plan(stateOf({}), [
+    decision({
+      key: 'same-url-later',
+      joinWebUrl: sharedUrl,
+      startUtc: '2026-08-14T04:00:00Z',
+      endUtc: '2026-08-14T04:30:00Z'
+    }),
+    decision({
+      key: 'same-url-sooner',
+      joinWebUrl: sharedUrl,
+      startUtc: '2026-08-14T02:00:00Z',
+      endUtc: '2026-08-14T02:30:00Z'
+    }),
+    ...[1, 2, 3, 4, 5].map((n) =>
+      decision({
+        key: `distinct-${n}`,
+        startUtc: `2026-08-14T0${n + 4}:00:00Z`,
+        endUtc: `2026-08-14T0${n + 4}:30:00Z`
+      })
+    )
+  ])
+  assert.equal(fresh.register.length, REGISTRAR_CAP, 'hash-deduped candidates still fill the cap')
+  assert.equal(
+    fresh.register.filter((entry) => entry.watch.joinUrlHash === sha(sharedUrl)).length,
+    1,
+    'two fresh occurrences sharing a join URL consume one registration slot'
+  )
+  assert.equal(
+    fresh.register.find((entry) => entry.watch.joinUrlHash === sha(sharedUrl))?.key,
+    'same-url-sooner',
+    'the soonest occurrence represents a shared join URL'
+  )
+}
+
+function scenarioLiveWindowDefersDestructiveReconciliation(): void {
+  const live = stateOf({
+    live: watch('live', '2026-08-13T23:30:00Z', '2026-08-14T00:30:00Z')
+  })
+  const extended = decision({
+    key: 'live',
+    startUtc: '2026-08-13T23:30:00Z',
+    endUtc: '2026-08-14T01:30:00Z'
+  })
+  assert.deepEqual(
+    plan(live, [extended]),
+    { register: [], remove: [] },
+    'a mid-call calendar edit must not replace the working Graph subscription'
+  )
+
+  const afterOldWindow = planRegistrarActions(
+    live,
+    [extended],
+    new Date('2026-08-14T00:31:00Z'),
+    USER_EMAIL,
+    sha
+  )
+  assert.deepEqual(afterOldWindow.remove.map((entry) => entry.key), ['live'])
+  assert.deepEqual(
+    afterOldWindow.register.map((entry) => entry.key),
+    ['live'],
+    'the deferred reschedule reconciles after the stored live window closes'
+  )
+
+  const cancelled = decision({ key: 'live', status: 'excluded', reason: 'cancelled' })
+  assert.deepEqual(
+    plan(live, [cancelled]),
+    { register: [], remove: [] },
+    'cancelling the calendar item mid-call must not kill leave detection for the active call'
+  )
+  const afterCancelledWindow = planRegistrarActions(
+    live,
+    [cancelled],
+    new Date('2026-08-14T00:31:00Z'),
+    USER_EMAIL,
+    sha
+  )
+  assert.deepEqual(
+    afterCancelledWindow.remove.map((entry) => entry.key),
+    ['live'],
+    'a cancelled watch is removed after its stored live window closes'
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Engine scenarios (injected transport; real fs against a temp dir)
 // ---------------------------------------------------------------------------
@@ -900,6 +1024,8 @@ async function main(): Promise<void> {
     scenarioIneligibleCandidatesNeverRegister()
     scenarioRemovalFreesASlot()
     scenarioUnparseableStoredEndIsReaped()
+    scenarioRecurringJoinUrlUsesOneRegistrationUnit()
+    scenarioLiveWindowDefersDestructiveReconciliation()
 
     // Engine (injected transport, real fs persistence).
     await scenarioEngineRegistersAndPersists()

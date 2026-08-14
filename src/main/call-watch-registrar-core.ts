@@ -92,9 +92,16 @@ function parseUtcMs(value: string | undefined): number | null {
 interface RegistrarCandidate {
   key: string
   joinWebUrl: string
+  joinUrlHash: string
   startUtc: string
   startMs: number
   scheduledEndUtc: string
+}
+
+function watchWindowContains(watch: RegistrarWatch, nowMs: number): boolean {
+  const startMs = parseUtcMs(watch.startUtc)
+  const endMs = parseUtcMs(watch.scheduledEndUtc)
+  return startMs !== null && endMs !== null && startMs <= nowMs && nowMs <= endMs
 }
 
 /**
@@ -125,18 +132,24 @@ interface RegistrarCandidate {
  *    meeting whose decision returns as a `candidate` with a non-qualifying
  *    reason (e.g. `outside_lookahead` after a big reschedule) stays tracked
  *    until its OLD stored end passes — bounded by the server's D3 expiry,
- *    and deliberate.
+ *    and deliberate. Destructive reconciliation is deferred while `now` is
+ *    inside the stored meeting window: cancelling an event while its call is
+ *    still running must not destroy leave detection for that recording.
  *
  * 3. RE-REGISTER (E4) — key tracked AND a live candidate, but `startUtc`,
  *    the scheduled end, or the join URL changed: emit a remove for the OLD
  *    stored hash plus a fresh register. Delete-then-create is required
  *    because the Graph subscription's `expirationDateTime` derives from
  *    `scheduled_end_utc`, and a regenerated join URL changes the watch's
- *    server-side address entirely.
+ *    server-side address entirely. This is deferred inside the stored meeting
+ *    window: replacing a subscription after the call is live recreates this
+ *    feature's root cause, while the existing end+12h expiry safely covers a
+ *    mid-call calendar extension.
  *
  * 4. ADMIT — pending registrations (new + re-registers) sort by `startUtc`
- *    ascending and admit while `(tracked - removed + admitted) < REGISTRAR_CAP`
- *    (E3 soonest-first). The rest simply wait: they stay untracked, so a
+ *    ascending, deduplicate by join-URL hash, and apply the cap to distinct
+ *    hashes (E3 soonest-first). Recurring occurrences commonly share one URL,
+ *    and Graph permits one subscription per meeting resource. The rest wait: they stay untracked, so a
  *    later sync pass re-plans them once a slot frees. A re-register always
  *    fits at a full cap in isolation — its own removal freed a slot — but
  *    competes on start time like everything else.
@@ -171,6 +184,7 @@ export function planRegistrarActions(
     candidates.set(decisionKey(decision), {
       key: decisionKey(decision),
       joinWebUrl,
+      joinUrlHash: hash(joinWebUrl),
       startUtc,
       startMs,
       scheduledEndUtc: endUtc
@@ -184,7 +198,7 @@ export function planRegistrarActions(
     const excluded = decision?.status === 'excluded'
     const endMs = parseUtcMs(watch.scheduledEndUtc)
     const ended = endMs === null || endMs <= nowMs
-    if (excluded || ended) {
+    if ((excluded || ended) && !watchWindowContains(watch, nowMs)) {
       remove.push({ key, joinUrlHash: watch.joinUrlHash })
       removedKeys.add(key)
     }
@@ -204,7 +218,7 @@ export function planRegistrarActions(
       tracked.startUtc !== candidate.startUtc ||
       tracked.scheduledEndUtc !== candidate.scheduledEndUtc ||
       tracked.joinWebUrl !== candidate.joinWebUrl
-    if (changed) {
+    if (changed && !watchWindowContains(tracked, nowMs)) {
       remove.push({ key: candidate.key, joinUrlHash: tracked.joinUrlHash })
       removedKeys.add(candidate.key)
       pending.push(candidate)
@@ -214,19 +228,27 @@ export function planRegistrarActions(
   // Soonest-first (E3); key as the tiebreak so the plan is deterministic.
   pending.sort((a, b) => a.startMs - b.startMs || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
 
-  const trackedCount = Object.keys(state.watches).length
+  const occupiedHashes = new Set(
+    Object.entries(state.watches)
+      .filter(([key]) => !removedKeys.has(key))
+      .map(([, watch]) => watch.joinUrlHash)
+  )
   const register: RegistrarActions['register'] = []
   for (const candidate of pending) {
-    if (trackedCount - removedKeys.size + register.length >= REGISTRAR_CAP) break
+    // One Graph subscription backs every calendar occurrence that shares this
+    // Teams join URL. Re-POSTing would replace a possibly-live subscription.
+    if (occupiedHashes.has(candidate.joinUrlHash)) continue
+    if (occupiedHashes.size >= REGISTRAR_CAP) break
     register.push({
       key: candidate.key,
       watch: {
         joinWebUrl: candidate.joinWebUrl,
-        joinUrlHash: hash(candidate.joinWebUrl),
+        joinUrlHash: candidate.joinUrlHash,
         startUtc: candidate.startUtc,
         scheduledEndUtc: candidate.scheduledEndUtc
       }
     })
+    occupiedHashes.add(candidate.joinUrlHash)
   }
 
   return { register, remove }

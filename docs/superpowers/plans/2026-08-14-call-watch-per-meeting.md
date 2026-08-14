@@ -434,3 +434,11 @@ never join URLs (parent-spec rule).
 2. Live smoke against prod with two scheduled test meetings (the acceptance scenarios in the spec — especially: watch registered at discovery minutes ahead; join late; leave → pause + toast; camera-check pre-join → no false pause).
 3. Merge desktop, cut release, feed-verify, fleet rolls.
 4. Remove the legacy aliases in a later storage-api change once the fleet is past the new version.
+
+**Rollback warning:** rolling the desktop back from the per-meeting release to
+v2.0.25 can leave several parked watches behind. The legacy client reads their
+signals as one union, so a terminal signal from a different parked meeting can
+stop the next recording incorrectly. Before a rollback, clear
+`callwatches/{oid}/` for affected users. Without that cleanup, accept one
+at-risk recording; the first legacy DELETE removes all parked watches, so the
+risk is self-limiting.

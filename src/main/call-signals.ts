@@ -91,8 +91,9 @@ let runtimeDeps: CallSignalRuntimeDeps | null = null
 // Exactly one poller can be live, mirroring the recording state machine: it
 // permits a single active recording at a time (`recording-state.ts`), and
 // `armCallSignals` disarms any predecessor before creating the next one — so a
-// second arm can never leave two pollers racing over the same watch (the
-// Storage API keeps one watch per user OID anyway, spec D2).
+// second arm can never leave two pollers racing over recording controls. The
+// Storage API may park several per-meeting watches (spec E2), but only this
+// poller is attached to the active recording's join-URL hash.
 let activePoller: CallSignalPoller | null = null
 
 const defaultLog: CallSignalLog = (level, message, context) => {
