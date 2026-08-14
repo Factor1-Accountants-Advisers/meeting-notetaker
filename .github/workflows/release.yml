@@ -153,19 +153,32 @@ jobs:
           # against locally built installers.
           MN_VOICEPRINT_EXPANSION_EMPLOYEE_IDS: ${{ vars.MN_VOICEPRINT_EXPANSION_EMPLOYEE_IDS }}
           MN_VOICEPRINT_EXPANSION_CAP: ${{ vars.MN_VOICEPRINT_EXPANSION_CAP }}
+          # SharePoint transcript destination. These are non-secret repository
+          # variables; omitting them ships a build that can transcribe and
+          # email but cannot route completed files into the firm library.
+          MN_SHAREPOINT_DRIVE_ID: ${{ vars.MN_SHAREPOINT_DRIVE_ID }}
+          MN_SHAREPOINT_FOLDER_PATH: ${{ vars.MN_SHAREPOINT_FOLDER_PATH }}
         run: |
           $lines = @()
-          if ($env:MN_OPENAI_API_KEY) { $lines += "MN_OPENAI_API_KEY=$env:MN_OPENAI_API_KEY" }
-          if ($env:MN_PYANNOTE_API_KEY) { $lines += "MN_PYANNOTE_API_KEY=$env:MN_PYANNOTE_API_KEY" }
+          if (-not $env:MN_OPENAI_API_KEY -or -not $env:MN_PYANNOTE_API_KEY) {
+            Write-Error "Required OpenAI/pyannote release secrets are not both set — refusing to build a partial or stub installer"
+            exit 1
+          }
+          $lines += "MN_OPENAI_API_KEY=$env:MN_OPENAI_API_KEY"
+          $lines += "MN_PYANNOTE_API_KEY=$env:MN_PYANNOTE_API_KEY"
           if ($env:MN_VOICEPRINT_EXPANSION_EMPLOYEE_IDS) {
             $lines += "MN_VOICEPRINT_EXPANSION_EMPLOYEE_IDS=$env:MN_VOICEPRINT_EXPANSION_EMPLOYEE_IDS"
             if ($env:MN_VOICEPRINT_EXPANSION_CAP) { $lines += "MN_VOICEPRINT_EXPANSION_CAP=$env:MN_VOICEPRINT_EXPANSION_CAP" }
           } else {
             Write-Warning "MN_VOICEPRINT_EXPANSION_EMPLOYEE_IDS repo variable not set — manual recordings will only match the recorder's voiceprint (IN-79 expansion disabled)"
           }
-          if ($lines.Count -eq 0) {
-            Write-Error "No credential secrets set — refusing to build a stub installer for release"
+          if (-not $env:MN_SHAREPOINT_DRIVE_ID) {
+            Write-Error "MN_SHAREPOINT_DRIVE_ID repo variable is not set — refusing to ship without transcript upload routing"
             exit 1
+          }
+          $lines += "MN_SHAREPOINT_DRIVE_ID=$env:MN_SHAREPOINT_DRIVE_ID"
+          if ($env:MN_SHAREPOINT_FOLDER_PATH) {
+            $lines += "MN_SHAREPOINT_FOLDER_PATH=$env:MN_SHAREPOINT_FOLDER_PATH"
           }
           # Central Storage API wiring (IN-379 ops gap, hit live on the first
           # clean 2.0.8 install: without the URL the packaged backend runs in
