@@ -398,11 +398,18 @@ export type CallSignalEnvGateResult =
   | { ok: false; reason: CallSignalEnvGateFailReason }
 
 /**
- * The env-only subset of `shouldArmCallSignals`'s gate: the desktop kill
- * switch, the storage-API kill switch, and the storage scope. Extracted so
- * `createCallWatchTransport` (`call-signals.ts`, consumed by the Task 9
- * registrar) can apply the same three checks without a recording to test —
- * the registrar runs at calendar discovery, before any recording exists.
+ * The three env-only checks that also appear in `shouldArmCallSignals`: the
+ * desktop kill switch, the storage-API kill switch, and the storage scope.
+ * Exists for `createCallWatchTransport` (`call-signals.ts`, consumed by the
+ * Task 9 registrar), which has no recording to gate on — the registrar runs
+ * at calendar discovery, before any recording exists.
+ *
+ * Deliberately NOT reused by `shouldArmCallSignals` itself: composing the two
+ * would change ITS reason precedence for a recording that fails both an env
+ * check and a recording-shape check (see that function's doc). The three
+ * `reason` values below intentionally shadow three of
+ * `CallSignalArmSkipReason`'s five — keep both lists in sync by hand if
+ * either gate grows a new check.
  */
 export function callSignalsEnvGate(
   env: NodeJS.ProcessEnv | Record<string, string | undefined>
@@ -419,16 +426,28 @@ export function callSignalsEnvGate(
  * Whether this recording gets a call watch. Every "no" is silent and leaves
  * today's behaviour untouched (D7/D8) — the scheduled auto-stop and the T-5
  * Extend toast are unaffected either way.
+ *
+ * Reason precedence is deliberately NOT `callSignalsEnvGate` followed by the
+ * recording checks: field triage reads `reason` to diagnose a single
+ * recording, so a manual recording on a machine with no storage scope must
+ * still report `not_auto_recording` (the actionable cause for THIS
+ * recording), not `no_storage_scope` (a machine-wide condition that would be
+ * true for every recording, auto or manual). Kept inline, byte-for-byte the
+ * original order, rather than composed from `callSignalsEnvGate` — the two
+ * storage checks are unreachable until after the recording-shape checks.
  */
 export function shouldArmCallSignals(
   recording: Pick<ActiveRecording, 'source' | 'metadata'>,
   env: NodeJS.ProcessEnv | Record<string, string | undefined>
 ): CallSignalArmDecision {
-  const envGate = callSignalsEnvGate(env)
-  if (!envGate.ok) return { arm: false, reason: envGate.reason }
+  if ((env.MN_CALL_SIGNALS_ENABLED ?? '').trim().toLowerCase() === 'false') {
+    return { arm: false, reason: 'feature_disabled' }
+  }
   if (recording.source !== 'auto') return { arm: false, reason: 'not_auto_recording' }
   const joinWebUrl = readJoinWebUrl(recording.metadata)
   if (!joinWebUrl) return { arm: false, reason: 'no_join_url' }
+  if (!isStorageApiEnabled(env)) return { arm: false, reason: 'storage_api_disabled' }
+  if (!(env.MN_STORAGE_API_SCOPE ?? '').trim()) return { arm: false, reason: 'no_storage_scope' }
   return { arm: true, joinWebUrl }
 }
 

@@ -1043,6 +1043,25 @@ function scenarioArmGate(): void {
     { arm: false, reason: 'no_storage_scope' },
     'without a storage scope there is no token to mint (stub mode)'
   )
+  // Multi-gate precedence: when a recording-shape check AND an env check both
+  // fail, the recording-shape reason must win — field triage reads `reason`
+  // to diagnose ONE recording, and `not_auto_recording` is the actionable
+  // cause for a manual recording even on a machine that also has no scope.
+  // Pins the ordering `shouldArmCallSignals` deliberately keeps inline
+  // instead of composing from callSignalsEnvGate (see its doc comment).
+  assert.deepEqual(
+    shouldArmCallSignals({ ...recording, source: 'manual' }, {} as NodeJS.ProcessEnv),
+    { arm: false, reason: 'not_auto_recording' },
+    'a recording-shape failure must outrank env failures in the decline reason'
+  )
+  assert.deepEqual(
+    shouldArmCallSignals(
+      { ...recording, metadata: {} },
+      { MN_STORAGE_API_ENABLED: 'false' } as NodeJS.ProcessEnv
+    ),
+    { arm: false, reason: 'no_join_url' },
+    'no_join_url must outrank the storage kill switch in the decline reason'
+  )
 
   assert.equal(readJoinWebUrl({ joinWebUrl: JOIN_URL }), JOIN_URL, 'metadata join URL is read')
   assert.equal(readJoinWebUrl({ joinWebUrl: '  ' }), null, 'a blank join URL counts as absent')
