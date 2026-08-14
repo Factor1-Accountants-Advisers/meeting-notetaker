@@ -222,7 +222,7 @@ app.on('second-instance', (_event, argv) => {
   showMainWindow()
 })
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // A losing second instance calls app.quit() at module scope, but quit is
   // asynchronous and 'ready' can still fire first — without this guard the
   // doomed instance briefly built a full window, tray, and backend supervisor
@@ -242,6 +242,14 @@ app.whenReady().then(() => {
     })
   }
   logger().info('[app] ready')
+  // Start the packaged relay immediately, in parallel with the lightweight UI
+  // setup below. Calendar/watch discovery awaits this promise before its first
+  // sync; dev resolves immediately because it owns an external uvicorn.
+  const backendStartup = startBackendSupervisor().catch((err) => {
+    logger().error('[app] backend supervisor failed to start', {
+      message: err instanceof Error ? err.message : String(err)
+    })
+  })
   ensureDefaultAutoLaunchEnabled()
 
   // IN-469: tray "Restart to update" delegates to the updater's gated path.
@@ -314,6 +322,13 @@ app.whenReady().then(() => {
     }
   }
 
+  // Show the UI while the packaged backend completes its health handshake.
+  // Watch registration itself must not race that handshake (v2.0.26 field
+  // failure), so only the meeting-automation startup below is gated.
+  createWindow({ showOnReady: !isBackgroundLaunch() })
+  createTray(showMainWindow)
+  await backendStartup
+
   // Per-meeting call watches (call-watch-per-meeting spec): one registrar for
   // the app's lifetime, created before the graph runtime so even the startup
   // sync's decisions land on it. Its state file sits beside the graph
@@ -336,12 +351,10 @@ app.whenReady().then(() => {
     getSignedInEmail: getCurrentUserEmail,
     logger: logger(),
     onAutoRecordEligible: handleAutoRecordEligible,
-    // Same signed-in-email source as getSignedInEmail above (the registrar's
-    // host gate must agree with the sync's own). handleSyncDecisions never
-    // rejects — the void marks it deliberately fire-and-forget.
-    onSyncCompleted: (decisions) => {
-      void registrar.handleSyncDecisions(decisions, getCurrentUserEmail())
-    }
+    // Same signed-in-email source as getSignedInEmail above. Reconciliation is
+    // awaited by the Graph runtime so auto-record cannot inspect
+    // hasActiveWatch while the discovery-time POST is still in flight.
+    onSyncCompleted: (decisions) => registrar.handleSyncDecisions(decisions, getCurrentUserEmail())
   })
 
   onMsalSignedIn(() => {
@@ -371,15 +384,6 @@ app.whenReady().then(() => {
     })
   }
 
-  createWindow({ showOnReady: !isBackgroundLaunch() })
-  createTray(showMainWindow)
-
-  // Packaged builds: spawn + supervise backend (dev uses external uvicorn).
-  startBackendSupervisor().catch((err) => {
-    logger().error('[app] backend supervisor failed to start', {
-      message: err instanceof Error ? err.message : String(err)
-    })
-  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

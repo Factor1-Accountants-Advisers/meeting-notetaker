@@ -37,7 +37,7 @@ export interface GraphRuntimeOptions {
    * both. Deliberately unfiltered: the watch registrar's planner needs the
    * excluded decisions to reap watches for cancelled meetings.
    */
-  onSyncCompleted?: (decisions: GraphEventDecision[]) => void
+  onSyncCompleted?: (decisions: GraphEventDecision[]) => void | Promise<void>
 }
 
 export interface GraphCalendarClient {
@@ -73,7 +73,17 @@ export function startGraphDetectionRuntime(options: GraphRuntimeOptions): GraphD
   let stopped = false
   let consecutiveFailures = 0
 
-  const syncNow = (): Promise<GraphSyncResult> => syncGraphDetectionOnce(options)
+  // A persisted delta cursor only contains changes. Force one complete future
+  // calendar snapshot per process lifetime so a fresh/rebuilt call-watch
+  // registry can see unchanged upcoming meetings after an update or restart.
+  // Keep the flag set through token/backoff/errors and clear it only after the
+  // first successful full sync.
+  let needsFullSnapshot = true
+  const syncNow = async (): Promise<GraphSyncResult> => {
+    const result = await syncGraphDetectionOnce(options, { forceFullSnapshot: needsFullSnapshot })
+    if (result.status === 'success') needsFullSnapshot = false
+    return result
+  }
 
   const startPolling = (intervalMs = DEFAULT_POLL_INTERVAL_MS): void => {
     if (pollTimer) return
@@ -153,7 +163,10 @@ export function startGraphDetectionRuntime(options: GraphRuntimeOptions): GraphD
   return { syncNow, startPolling, stopPolling, scheduleResumeSync }
 }
 
-export async function syncGraphDetectionOnce(options: GraphRuntimeOptions): Promise<GraphSyncResult> {
+export async function syncGraphDetectionOnce(
+  options: GraphRuntimeOptions,
+  syncOptions: { forceFullSnapshot?: boolean } = {}
+): Promise<GraphSyncResult> {
   const now = options.now?.() ?? new Date()
   const state = await readGraphSchedulerState(options.statePath)
 
@@ -174,7 +187,7 @@ export async function syncGraphDetectionOnce(options: GraphRuntimeOptions): Prom
     new GraphClient({ getAccessToken: async () => accessToken })
 
   try {
-    const response = state.deltaLink
+    const response = state.deltaLink && !syncOptions.forceFullSnapshot
       ? await client.fetchDeltaLink(state.deltaLink)
       : await client.fetchCalendarView({ startUtc: windowStartUtc, endUtc: windowEndUtc })
 
@@ -210,7 +223,7 @@ export async function syncGraphDetectionOnce(options: GraphRuntimeOptions): Prom
     // error status (the state above is already persisted at this point).
     if (options.onSyncCompleted) {
       try {
-        options.onSyncCompleted(detection.decisions)
+        await options.onSyncCompleted(detection.decisions)
       } catch (err) {
         options.logger.warn('[graph] onSyncCompleted callback failed', {
           message: err instanceof Error ? err.message : String(err)

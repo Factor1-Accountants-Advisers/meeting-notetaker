@@ -46,9 +46,10 @@ manually — no Intune, no group policy.
      call and every word appears twice in the transcript.
 
 3. **Voiceprints**
-   - Joseph, David, Benjamin, and Jose T are **pre-enrolled** — the installer
-     seeds their voiceprints on first launch, so they can record immediately
-     after Microsoft sign-in.
+   - Joseph, David, Benjamin, and Jose T are **pre-enrolled in the central
+     voiceprint store**. The installer no longer ships biometric seed data;
+     after Microsoft sign-in, the enrollment check resolves their existing
+     central records so they can record immediately.
    - Confirm the app finishes the voiceprint check without showing the
      enrollment wizard. The test installer intentionally provides a zero-touch
      setup for this group.
@@ -78,7 +79,7 @@ manually — no Intune, no group policy.
 - [ ] Tray icon visible; tooltip shows "Idle" (not "Backend unavailable")
 - [ ] No "sample data" notice anywhere in the UI
 - [ ] Microsoft sign-in completes successfully
-- [ ] People/enrollment check completes without a wizard for all four pre-seeded testers (Joseph, David, Benjamin, Jose T)
+- [ ] People/enrollment check completes without a wizard for all four centrally enrolled testers (Joseph, David, Benjamin, Jose T)
 - [ ] Manual recording → pipeline completes → transcript visible
 - [ ] Email sends after Graph sign-in
 - [ ] **Live auto-start**: schedule a Teams meeting → app in tray →

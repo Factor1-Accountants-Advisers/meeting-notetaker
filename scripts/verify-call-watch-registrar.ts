@@ -251,6 +251,26 @@ function scenarioCapAdmissionSoonestFirst(): void {
   assert.deepEqual(partial.remove, [], 'live tracked watches are untouched by admission')
 }
 
+function scenarioUpcomingRecoveryBeatsAlreadyLive(): void {
+  const actions = plan(stateOf({}), [
+    decision({
+      key: 'already-live',
+      startUtc: '2026-08-13T23:50:00Z',
+      endUtc: '2026-08-14T00:30:00Z'
+    }),
+    decision({
+      key: 'starts-next',
+      startUtc: '2026-08-14T00:01:00Z',
+      endUtc: '2026-08-14T00:31:00Z'
+    })
+  ])
+  assert.deepEqual(
+    actions.register.map((entry) => entry.key),
+    ['starts-next', 'already-live'],
+    'startup recovery must park an upcoming call before spending a slow registration on an already-live call'
+  )
+}
+
 function scenarioCancelledAndEndedRemove(): void {
   const state = stateOf({
     'gone-cancelled': watch('gone-cancelled', '2026-08-14T02:00:00Z', '2026-08-14T02:30:00Z'),
@@ -1018,6 +1038,7 @@ async function main(): Promise<void> {
   try {
     // Planner (pure, spec E1/E3/E4).
     scenarioCapAdmissionSoonestFirst()
+    scenarioUpcomingRecoveryBeatsAlreadyLive()
     scenarioCancelledAndEndedRemove()
     scenarioRescheduleReRegisters()
     scenarioAbsentFromDeltaIsNotRemoved()
