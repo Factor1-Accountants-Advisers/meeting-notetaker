@@ -33,7 +33,7 @@ import { readFileSync } from 'node:fs'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { GraphEventDecision } from './graph/types'
-import { evaluateHostGate } from './graph/host-gate'
+import { evaluateHostOwnership } from './graph/host-gate'
 import {
   CALL_SIGNAL_MUTATION_TIMEOUT_MS,
   readJoinWebUrl,
@@ -122,8 +122,8 @@ function watchWindowContains(watch: RegistrarWatch, nowMs: number): boolean {
  *
  * 2. REMOVE — a tracked watch is removed when its key shows up in THIS sync
  *    as `excluded` (cancellation, decline, …) or its STORED scheduled end has
- *    passed (the meeting is over; recording stop usually deleted the watch
- *    already via `noteWatchDeleted`, this catches the never-recorded rest).
+ *    passed (the meeting is over; this also reaps watches for meetings that
+ *    never recorded).
  *    A tracked meeting merely ABSENT from the decisions is NOT removed:
  *    delta syncs only carry changed events, so absence means "unchanged",
  *    never "gone". A stored end that no longer parses is treated as ended —
@@ -180,7 +180,7 @@ export function planRegistrarActions(
     const startMs = parseUtcMs(startUtc)
     const endMs = parseUtcMs(endUtc)
     if (startMs === null || endMs === null || endMs <= nowMs) continue
-    if (!evaluateHostGate(decision, signedInEmail).allowed) continue
+    if (!evaluateHostOwnership(decision, signedInEmail).allowed) continue
     candidates.set(decisionKey(decision), {
       key: decisionKey(decision),
       joinWebUrl,
@@ -379,9 +379,9 @@ export interface CallWatchRegistrar {
   /** True iff a tracked watch has this join-URL hash. `armCallSignals` uses
    *  it to pick attach mode (spec E5) over the register-on-the-spot floor. */
   hasActiveWatch(joinUrlHash: string): boolean
-  /** The recording poller deleted this meeting's watch on stop (today's
-   *  behaviour, unchanged): drop the tracked entry so the slot frees and a
-   *  later sync doesn't DELETE a watch that is already gone. Persists. */
+  /** Drop tracked state after an explicit out-of-band watch deletion. Normal
+   *  recording teardown does not call this: attach-mode pollers preserve the
+   *  registrar-owned watch. Persists. */
   noteWatchDeleted(joinUrlHash: string): void
   /** Await any pending state writes (shutdown/test seam — state writes are
    *  otherwise fire-and-forget so no caller ever blocks on the disk). */

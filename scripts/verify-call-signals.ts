@@ -1651,7 +1651,7 @@ async function scenarioAttachFailedFirstPollRetriesBaseline(): Promise<void> {
   assertNoPii(logs.entries, 'attach failed first poll')
 }
 
-async function scenarioAttachStopDeletesMeetingWatch(): Promise<void> {
+async function scenarioAttachStopPreservesRegistrarWatch(): Promise<void> {
   const clock = createFakeClock()
   const recorder = createRecorder()
   const logs = createFakeLog()
@@ -1671,29 +1671,21 @@ async function scenarioAttachStopDeletesMeetingWatch(): Promise<void> {
     0,
     'attach mode never POSTs, before or after stop'
   )
-  const deletes = http.calls.filter((call) => call.method === 'DELETE')
-  assert.equal(deletes.length, 1, 'attach-mode stop must still delete the watch')
   assert.equal(
-    deletes[0].url,
-    `http://127.0.0.1:8787/api/v1/call-watch/${JOIN_URL_HASH}`,
-    'the delete targets the per-meeting watch URL'
-  )
-  assert.equal(
-    deletes[0].timeoutMs,
-    CALL_SIGNAL_MUTATION_TIMEOUT_MS,
-    'the attach-mode delete also traverses Graph and needs the long budget'
+    http.calls.filter((call) => call.method === 'DELETE').length,
+    0,
+    'attach-mode stop must detach without deleting the registrar-owned watch'
   )
   poller.stop()
   await flush()
   assert.equal(
     http.calls.filter((call) => call.method === 'DELETE').length,
-    1,
-    'a second stop() must not issue a second delete'
+    0,
+    'a second attach-mode stop() must remain deletion-free'
   )
 
-  // Even a never-started attach poller owns a server-side watch: the watch
-  // exists because the registrar POSTed it long before this poller was built,
-  // so stop() must delete it despite this poller never having issued a request.
+  // Even a never-started attach poller must not delete the server-side watch:
+  // the registrar created it and retains lifecycle ownership.
   const clock2 = createFakeClock()
   const http2 = createFakeHttp(() => jsonResponse(204))
   const logs2 = createFakeLog()
@@ -1705,8 +1697,8 @@ async function scenarioAttachStopDeletesMeetingWatch(): Promise<void> {
   await flush()
   assert.equal(
     http2.calls.filter((call) => call.method === 'DELETE').length,
-    1,
-    'attach mode: mayHaveWatch is true from the start (the registrar created the watch)'
+    0,
+    'a never-started attach poller must preserve the registrar-owned watch'
   )
   assertNoPii(logs.entries, 'attach stop')
   assertNoPii(logs2.entries, 'attach stop (never-started poller)')
@@ -1773,7 +1765,7 @@ async function main(): Promise<void> {
   // Attach mode + baseline drain (spec E5).
   await scenarioAttachBaselineDrain()
   await scenarioAttachFailedFirstPollRetriesBaseline()
-  await scenarioAttachStopDeletesMeetingWatch()
+  await scenarioAttachStopPreservesRegistrarWatch()
 
   assertBundleIsRuntimeFree()
 

@@ -341,8 +341,7 @@ app.whenReady().then(async () => {
   // Same handover direction as configureCallSignals above: index.ts pushes
   // the callbacks into recording-ipc so recording-ipc never imports us.
   configureCallWatchRegistrarHooks({
-    hasActiveWatch: (hash) => registrar.hasActiveWatch(hash),
-    noteWatchDeleted: (hash) => registrar.noteWatchDeleted(hash)
+    hasActiveWatch: (hash) => registrar.hasActiveWatch(hash)
   })
 
   const graphRuntime = startGraphDetectionRuntime({
@@ -402,10 +401,7 @@ let callWatchRegistrar: ReturnType<typeof createCallWatchRegistrar> | null = nul
 let quitFailsafeArmed = false
 app.on('before-quit', () => {
   cleanupRecordingIpc()
-  // cleanupRecordingIpc's noteWatchDeleted persist is fire-and-forget; flush
-  // the registrar's write chain so a quit right after a recording stop can't
-  // lose it (stale hasActiveWatch on relaunch would attach to a deleted
-  // watch — self-healing, but avoidable for one line).
+  // Flush any registrar state writes already in flight before shutdown.
   void callWatchRegistrar?.flushState()
   audioEndpointService?.stop()
   stopBackendSupervisor()

@@ -393,7 +393,6 @@ function scenarioIneligibleCandidatesNeverRegister(): void {
     decision({ key: 'ok', startUtc: '2026-08-14T01:00:00Z', endUtc: '2026-08-14T01:30:00Z' }),
     decision({ key: 'no-url', joinWebUrl: null }),
     decision({ key: 'not-organizer', isOrganizer: false }),
-    decision({ key: 'not-auto-eligible', autoRecordEligible: false }),
     decision({ key: 'excluded', status: 'excluded', reason: 'declined' }),
     decision({ key: 'wrong-reason', reason: 'outside_lookahead' }),
     decision({ key: 'already-over', startUtc: '2026-08-13T22:00:00Z', endUtc: '2026-08-13T23:00:00Z' }),
@@ -408,9 +407,16 @@ function scenarioIneligibleCandidatesNeverRegister(): void {
   assert.deepEqual(actions.remove, [], 'ineligible candidates plan no removals either')
 
   // `not_due_yet` is a candidate status too — registration happens at
-  // discovery (E1), hours before the meeting is due.
+  // discovery (E1), hours before the meeting is due. Its real filter shape
+  // has autoRecordEligible=false until the three-minute recording window.
   const notDue = plan(stateOf({}), [
-    decision({ key: 'later-today', reason: 'not_due_yet', startUtc: '2026-08-14T09:00:00Z', endUtc: '2026-08-14T09:30:00Z' })
+    decision({
+      key: 'later-today',
+      reason: 'not_due_yet',
+      autoRecordEligible: false,
+      startUtc: '2026-08-14T09:00:00Z',
+      endUtc: '2026-08-14T09:30:00Z'
+    })
   ])
   assert.deepEqual(
     notDue.register.map((entry) => entry.key),

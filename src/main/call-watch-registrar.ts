@@ -29,8 +29,7 @@
  * Task 10 owns the wiring: it creates one registrar at startup (statePath
  * under userData), calls `handleSyncDecisions` after every calendar sync,
  * routes `hasActiveWatch` into `armCallSignals` (attach-mode pick, spec E5),
- * and calls `noteWatchDeleted` when a recording's poller deletes the watch
- * on stop.
+ * and leaves registrar-owned watches parked when a recording poller detaches.
  */
 
 import { logger } from './logger'

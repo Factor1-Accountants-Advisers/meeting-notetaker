@@ -2,7 +2,7 @@ import { BrowserWindow, Notification, powerSaveBlocker } from 'electron'
 import { createRecordingStateMachine, type ActiveRecording, type RecordingStateMachine } from './recording-state'
 import { logger } from './logger'
 import { buildEndingSoonToastXml, buildRecordingPausedToastXml } from './toast-xml'
-import { armCallSignals, disarmCallSignals, joinUrlHash, readJoinWebUrl } from './call-signals'
+import { armCallSignals, disarmCallSignals } from './call-signals'
 
 // IN-129: while recording, hold the system awake so an idle timeout can't
 // sleep the machine mid-meeting. (Lid-close sleep is OS power policy and
@@ -82,9 +82,6 @@ function playNotificationChime(): void {
 export interface CallWatchRegistrarHooks {
   /** `CallWatchRegistrar.hasActiveWatch` — attach-mode pick (spec E5). */
   hasActiveWatch: (joinUrlHash: string) => boolean
-  /** `CallWatchRegistrar.noteWatchDeleted` — free the slot after the poller
-   *  deletes the watch on recording stop. */
-  noteWatchDeleted: (joinUrlHash: string) => void
 }
 
 let registrarHooks: CallWatchRegistrarHooks | null = null
@@ -278,7 +275,7 @@ export function registerManualRecording(recording: ActiveRecording & { title?: s
 }
 
 export function handleRendererRecordingStopped(): void {
-  closePausedToastAndDisarm(activeRecordingJoinWebUrl())
+  closePausedToastAndDisarm()
 
   recordingPaused = false
   resetAutoStopState()
@@ -298,7 +295,7 @@ export function handleRendererRecordingStopped(): void {
 }
 
 export function handleRendererRecordingError(message: string): void {
-  closePausedToastAndDisarm(activeRecordingJoinWebUrl())
+  closePausedToastAndDisarm()
 
   recordingPaused = false
   resetAutoStopState()
@@ -554,29 +551,13 @@ export function closeRecordingPausedToast(): void {
  * path). closeRecordingPausedToast() is already a safe no-op when nothing is
  * showing, so callers need no visibility check of their own.
  *
- * `joinWebUrl` (Task 10): the recording's join URL, when the caller still has
- * the recording in scope — callers pass `activeRecordingJoinWebUrl()` BEFORE
- * tearing the state machine down. Disarm best-effort deletes the watch for
- * any non-idle poller, so the registrar is told its tracked entry is gone.
- * Deliberately unconditional whenever a join URL exists: if the poller never
- * actually deleted (arm declined, or the poller was still idle), the stale
- * noteWatchDeleted only drops a client-side entry for a watch the server
- * still holds — the next calendar sync re-registers it, which the server
- * treats as replace-in-place (spec E2). Benign, and far simpler than
- * mirroring the poller's internal state out here.
+ * Disarm follows watch ownership: a fallback register-mode poller deletes the
+ * watch it created; an attach-mode poller leaves the registrar-owned watch
+ * parked for the rest of the live meeting.
  */
-function closePausedToastAndDisarm(joinWebUrl?: string | null): void {
+function closePausedToastAndDisarm(): void {
   closeRecordingPausedToast()
   disarmCallSignals()
-  if (joinWebUrl) registrarHooks?.noteWatchDeleted(joinUrlHash(joinWebUrl))
-}
-
-/** Join URL of the recording currently held by the state machine, if any.
- *  Reads `recordingSM` directly (not the lazy getter) so the cleanup path
- *  never resurrects a machine just to ask it. */
-function activeRecordingJoinWebUrl(): string | null {
-  const active = recordingSM?.getActiveRecording()
-  return active ? readJoinWebUrl(active.metadata) : null
 }
 
 /** True while an auto-recording with a scheduled end is active (extendable). */
@@ -618,7 +599,7 @@ function resetAutoStopState(): void {
 }
 
 export function cleanupRecordingIpc(): void {
-  closePausedToastAndDisarm(activeRecordingJoinWebUrl())
+  closePausedToastAndDisarm()
   resetAutoStopState()
   unblockSleep()
   clearAutoStartAckTimer()

@@ -721,18 +721,14 @@ export function createCallSignalPoller(deps: CallSignalPollerDeps): CallSignalPo
 
     stop(): void {
       clearTimer()
-      // A registration that failed client-side may still have landed, so any
-      // poller that got as far as a POST cleans up after itself. In attach
-      // mode the watch exists server-side even though this poller never
-      // POSTed (the registrar did, at calendar discovery), so it is cleaned
-      // up regardless of how far this poller got — including not at all. A
-      // second stop() is inert either way: the watch is already deleted (or
-      // already orphaned, and orphans self-expire server-side, spec D3).
-      const mayHaveWatch =
-        deps.mode === 'attach' ? status !== 'stopped' : status !== 'idle' && status !== 'stopped'
+      // Lifecycle ownership follows creation ownership. A fallback `register`
+      // poller cleans up the watch it POSTed; an `attach` poller only detaches
+      // from the registrar-owned watch so it remains parked for a live meeting.
+      const mayHaveOwnedWatch =
+        deps.mode === 'register' && status !== 'idle' && status !== 'stopped'
       status = 'stopped'
       machine.dispose()
-      if (!mayHaveWatch) return
+      if (!mayHaveOwnedWatch) return
       void (async () => {
         const response = await request(
           'DELETE',

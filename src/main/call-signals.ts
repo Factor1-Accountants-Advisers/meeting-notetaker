@@ -282,8 +282,9 @@ export function createCallWatchTransport(
   }
 }
 
-/** Stop polling, dispose the machine, and best-effort delete the watch.
- *  Safe when never armed.
+/** Stop polling, dispose the machine, and best-effort delete only a fallback
+ *  watch created by this poller. Registrar-owned attach-mode watches stay
+ *  parked for the rest of the live meeting. Safe when never armed.
  *
  *  Task 13, two things to know:
  *

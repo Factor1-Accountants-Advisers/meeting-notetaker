@@ -24,6 +24,27 @@ export interface HostGateResult {
  *
  * Manual recordings bypass the gate entirely.
  */
+export function evaluateHostOwnership(
+  decision: GraphEventDecision,
+  signedInEmail?: string
+): HostGateResult {
+  if (decision.status === 'excluded') {
+    return { allowed: false, reason: 'excluded_by_filter' }
+  }
+
+  if (!decision.logContext.isOrganizer) {
+    return { allowed: false, reason: 'not_organizer' }
+  }
+
+  if (signedInEmail) {
+    return { allowed: true, reason: 'organizer_verified' }
+  }
+
+  // Graph's isOrganizer flag is authoritative when no signed-in email is
+  // available to add local context.
+  return { allowed: true, reason: 'organizer_confirmed' }
+}
+
 export function evaluateHostGate(decision: GraphEventDecision, signedInEmail?: string): HostGateResult {
   if (decision.status === 'excluded') {
     return { allowed: false, reason: 'excluded_by_filter' }
@@ -33,17 +54,7 @@ export function evaluateHostGate(decision: GraphEventDecision, signedInEmail?: s
     return { allowed: false, reason: 'not_auto_record_eligible' }
   }
 
-  if (!decision.logContext.isOrganizer) {
-    return { allowed: false, reason: 'not_organizer' }
-  }
-
-  if (signedInEmail && decision.logContext.isOrganizer) {
-    return { allowed: true, reason: 'organizer_verified' }
-  }
-
-  // If we have the organiser flag set but no email match to confirm,
-  // still allow — Graph's isOrganizer is authoritative.
-  return { allowed: true, reason: 'organizer_confirmed' }
+  return evaluateHostOwnership(decision, signedInEmail)
 }
 
 /**
