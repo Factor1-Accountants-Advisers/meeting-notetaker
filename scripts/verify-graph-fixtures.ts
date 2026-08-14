@@ -438,6 +438,76 @@ async function main(): Promise<void> {
     assert.equal(callbackDecisions.length, 1)
     assert.equal(callbackDecisions[0].autoRecordEligible, true)
 
+    // A process restart must rebuild discovery watches from a complete future
+    // calendar snapshot even when the persisted Graph scheduler already has a
+    // delta cursor. v2.0.26 introduced a fresh registrar state beside an old
+    // scheduler cursor, so unchanged upcoming meetings were invisible.
+    const bootstrapPath = join(runtimeDir, 'bootstrap.json')
+    await writeGraphSchedulerState(bootstrapPath, {
+      ...EMPTY_GRAPH_SCHEDULER_STATE,
+      deltaLink: 'https://graph.microsoft.com/delta/existing-cursor',
+      decisions: {}
+    })
+    let fullFetches = 0
+    let deltaFetches = 0
+    const bootstrapRuntime = startGraphDetectionRuntime({
+      statePath: bootstrapPath,
+      getAccessToken: async () => 'redacted-token',
+      getSignedInEmail: () => signedInEmail,
+      logger: { info: () => undefined, warn: () => undefined },
+      now: () => now,
+      clientFactory: () => ({
+        fetchCalendarView: async () => {
+          fullFetches += 1
+          return {
+            value: [baseEvent({ id: 'bootstrap-upcoming' })],
+            '@odata.deltaLink': 'https://graph.microsoft.com/delta/refreshed-cursor'
+          }
+        },
+        fetchDeltaLink: async () => {
+          deltaFetches += 1
+          return { value: [] }
+        }
+      })
+    })
+    await waitUntil('full startup calendar bootstrap', () => fullFetches === 1)
+    bootstrapRuntime.stopPolling()
+    await bootstrapRuntime.syncNow()
+    assert.equal(fullFetches, 1, 'only the first successful process sync should force a full snapshot')
+    assert.equal(deltaFetches, 1, 'later syncs should resume from the refreshed delta cursor')
+
+    // Discovery reconciliation owns watcher registration and must finish
+    // before an eligible meeting can start recording. Otherwise the recorder
+    // checks hasActiveWatch while registration is still in flight and falls
+    // back to the original too-late register mode.
+    const callbackOrder: string[] = []
+    const orderedRuntime = startGraphDetectionRuntime({
+      statePath: join(runtimeDir, 'ordered-callbacks.json'),
+      getAccessToken: async () => 'redacted-token',
+      getSignedInEmail: () => signedInEmail,
+      logger: { info: () => undefined, warn: () => undefined },
+      now: () => now,
+      clientFactory: () => ({
+        fetchCalendarView: async () => ({ value: [baseEvent({ id: 'ordered-eligible' })] }),
+        fetchDeltaLink: async () => ({ value: [] })
+      }),
+      onSyncCompleted: async () => {
+        callbackOrder.push('watch-start')
+        await wait(20)
+        callbackOrder.push('watch-ready')
+      },
+      onAutoRecordEligible: () => {
+        callbackOrder.push('auto-record')
+      }
+    })
+    await waitUntil('ordered discovery callbacks', () => callbackOrder.includes('auto-record'))
+    orderedRuntime.stopPolling()
+    assert.deepEqual(
+      callbackOrder,
+      ['watch-start', 'watch-ready', 'auto-record'],
+      'auto-record eligibility must wait for discovery-watch reconciliation'
+    )
+
     // Polling lifecycle: start/stop/resume API surface
     const pollRuntime = startGraphDetectionRuntime({
       statePath: join(runtimeDir, 'poll.json'),

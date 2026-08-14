@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { createServer } from 'node:http'
+import { join } from 'node:path'
 import {
   probeHttpHealth,
   shouldAdoptExistingBackend,
@@ -27,6 +29,21 @@ async function close(server: ReturnType<typeof createServer>): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  // Packaged startup must not launch the first calendar/watch sync while the
+  // bundled relay is still booting. The field failure in v2.0.26 registered
+  // the discovery watch against a closed port, then fell back to recording-
+  // time registration after the user had already joined the Teams call.
+  const indexSource = readFileSync(join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8')
+  const backendStartedAt = indexSource.indexOf('startBackendSupervisor()')
+  const backendReadyAt = indexSource.indexOf('await backendStartup')
+  const graphRuntimeAt = indexSource.indexOf('startGraphDetectionRuntime({')
+  assert.ok(backendStartedAt >= 0, 'main startup must start the packaged backend supervisor')
+  assert.ok(backendReadyAt >= 0, 'main startup must await packaged backend readiness')
+  assert.ok(
+    backendStartedAt < backendReadyAt && backendReadyAt < graphRuntimeAt,
+    'backend startup must begin early and readiness must complete before the Graph/watch runtime starts'
+  )
+
   const healthyServer = createServer((_req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end('{"status":"ok"}')

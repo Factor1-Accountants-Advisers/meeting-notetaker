@@ -225,8 +225,16 @@ export function planRegistrarActions(
     }
   }
 
-  // Soonest-first (E3); key as the tiebreak so the plan is deterministic.
-  pending.sort((a, b) => a.startMs - b.startMs || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+  // Recovery priority: park meetings that have not started before spending a
+  // potentially slow cold-Function registration on an already-live call. A
+  // watch created after a call is live may never receive that call's roster
+  // events, while an upcoming meeting is still fully protectable. Within each
+  // bucket retain E3's soonest-first order and a stable key tiebreak.
+  pending.sort((a, b) => {
+    const aUpcoming = a.startMs > nowMs ? 0 : 1
+    const bUpcoming = b.startMs > nowMs ? 0 : 1
+    return aUpcoming - bUpcoming || a.startMs - b.startMs || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+  })
 
   const occupiedHashes = new Set(
     Object.entries(state.watches)
