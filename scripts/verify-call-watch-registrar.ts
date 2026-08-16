@@ -71,6 +71,8 @@ function decision(overrides: DecisionOverrides = {}): GraphEventDecision {
   const joinWebUrl = 'joinWebUrl' in overrides ? overrides.joinWebUrl : urlFor(key)
   const startUtc = 'startUtc' in overrides ? overrides.startUtc : '2026-08-14T01:00:00Z'
   const endUtc = 'endUtc' in overrides ? overrides.endUtc : '2026-08-14T01:30:00Z'
+  const status = overrides.status ?? 'candidate'
+  const reason = overrides.reason ?? 'eligible'
   return {
     eventId,
     idempotencyKey: key,
@@ -79,9 +81,18 @@ function decision(overrides: DecisionOverrides = {}): GraphEventDecision {
       meetingId: `meeting-${eventId}`,
       ...(joinWebUrl ? { joinWebUrl } : {})
     },
-    status: overrides.status ?? 'candidate',
-    reason: overrides.reason ?? 'eligible',
-    autoRecordEligible: overrides.autoRecordEligible ?? true,
+    status,
+    reason,
+    // DERIVED from `reason`, never blindly defaulted. `filter.ts` computes
+    // `reason` and `autoRecordEligible` from the SAME `dueForAutoStart`
+    // boolean, so in the field `not_due_yet` always carries
+    // `autoRecordEligible: false`. A plain `?? true` default let a fixture
+    // express a decision production can never produce, and that is exactly
+    // how the E1 pre-registration bug stayed green across v2.0.25–v2.0.27
+    // while failing every live test: the harness asserted E1 worked using a
+    // decision shape the real filter never emits.
+    autoRecordEligible:
+      overrides.autoRecordEligible ?? (status === 'candidate' && reason === 'eligible'),
     logContext: {
       eventIdHash: `evthash-${eventId}`,
       startUtc,
@@ -422,6 +433,30 @@ function scenarioIneligibleCandidatesNeverRegister(): void {
     notDue.register.map((entry) => entry.key),
     ['later-today'],
     'not_due_yet candidates register at discovery — that is the whole point of E1'
+  )
+
+  // The TEMPORAL invariant, which "a register was planned" alone does not
+  // pin. The watch must be parked STRICTLY BEFORE the call starts: a
+  // `meetingCallEvents` subscription created once the call is already live
+  // never receives that call's roster events, so no `recorder_left` ever
+  // arrives and the recording never pauses. That is the precise
+  // v2.0.25–v2.0.27 field failure — which did reach `mode: 'attach'` and
+  // still missed every leave, because attaching proves a watch EXISTS, not
+  // that it existed BEFORE the call.
+  const parked = notDue.register[0]
+  assert.ok(parked, 'a not_due_yet candidate must plan exactly one register')
+  assert.ok(
+    Date.parse(parked.watch.startUtc) > NOW.getTime(),
+    'E1: the watch must be parked ahead of its meeting start, not at start time'
+  )
+
+  // Pin the fixture invariant itself, so a later `decision()` override cannot
+  // silently reintroduce the impossible `not_due_yet` + eligible pairing that
+  // made this very assertion pass while production did the opposite.
+  assert.equal(
+    decision({ reason: 'not_due_yet' }).autoRecordEligible,
+    false,
+    'fixture must mirror filter.ts: not_due_yet always implies autoRecordEligible=false'
   )
 }
 
