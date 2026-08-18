@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import {
   buildEndingSoonToastXml,
+  buildJoinPromptToastXml,
   buildRecordingPausedToastXml,
   buildUpdateCountdownToastXml,
   buildUpdateReadyToastXml,
@@ -120,5 +121,22 @@ assert.equal(
   'no legacy mn-* form for resume-recording'
 )
 assert.equal(toastActionFromArgv(['exe', '--background']), null, 'unrelated argv still yields null')
+
+// Join-trigger prompt (spec J3): shown once per meeting at start + 2 min when
+// the meeting is armed and nothing is recording. Same protocol-activation /
+// reminder-scenario / silent-audio contract as the toasts above.
+{
+  const xml = buildJoinPromptToastXml('Weekly 1:1 with Kristel')
+  assert.match(xml, /Meeting Weekly 1:1 with Kristel has started/)
+  assert.match(xml, /Recording will begin when you join\./)
+  assert.match(xml, /arguments="notetaker:\/\/record-now"/)
+  assert.match(xml, /content="Record now"/)
+  assert.match(xml, /scenario="reminder"/, 'sticky so our own 60 s close() governs lifetime')
+  assert.match(xml, /<audio silent="true"\/>/)
+  // XML-escaping of the title, same rule as the other builders
+  assert.match(buildJoinPromptToastXml('Q&A <Board>'), /Meeting Q&amp;A &lt;Board&gt; has started/)
+  assert.equal(toastActionFromArgv(['notetaker://record-now']), 'record-now')
+  assert.equal(toastActionFromArgv(['notetaker://record-now/']), 'record-now', 'trailing slash tolerated like the others')
+}
 
 console.log('Toast XML verification passed')

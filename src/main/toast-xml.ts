@@ -24,6 +24,7 @@ export type ToastAction =
   | 'update-defer'
   | 'upload-now'
   | 'resume-recording'
+  | 'record-now'
 
 export function toastUri(action: ToastAction): string {
   return `${TOAST_PROTOCOL_SCHEME}://${action}`
@@ -33,8 +34,9 @@ export function toastUri(action: ToastAction): string {
  * Extract the toast action from a process argv. Understands the current
  * `notetaker://<action>` URIs and the legacy `mn-*` foreground arguments
  * (still emitted by toasts shown by app versions before the IN-483 fix,
- * which can outlive the update that fixes them). `upload-now` and
- * `resume-recording` postdate that fix, so they have no legacy `mn-*` form.
+ * which can outlive the update that fixes them). `upload-now`,
+ * `resume-recording`, and `record-now` postdate that fix, so they have no
+ * legacy `mn-*` form.
  */
 export function toastActionFromArgv(argv: readonly string[]): ToastAction | null {
   for (const raw of argv) {
@@ -45,6 +47,7 @@ export function toastActionFromArgv(argv: readonly string[]): ToastAction | null
     if (arg === toastUri('open') || arg === 'mn-open') return 'open'
     if (arg === toastUri('upload-now')) return 'upload-now'
     if (arg === toastUri('resume-recording')) return 'resume-recording'
+    if (arg === toastUri('record-now')) return 'record-now'
   }
   return null
 }
@@ -140,6 +143,29 @@ export function buildUpdateCountdownToastXml(version: string, seconds: number): 
     '<audio silent="true"/>' +
     '<actions>' +
     `<action content="Not now" activationType="protocol" arguments="${toastUri('update-defer')}"/>` +
+    '</actions>' +
+    '</toast>'
+  )
+}
+
+/**
+ * Join-trigger prompt (spec J3): shown once at start + 2 min when the
+ * meeting is armed and nothing is recording — the fail-closed path for
+ * hybrid/in-room meetings and blind watches. `scenario="reminder"` keeps
+ * it on screen; the runtime closes it after JOIN_WATCH_PROMPT_LIFETIME_MS
+ * (transient toasts slide into Action Center after ~5 s, same rationale as
+ * the paused toast).
+ */
+export function buildJoinPromptToastXml(title: string): string {
+  return (
+    `<toast scenario="reminder" activationType="protocol" launch="${toastUri('open')}">` +
+    '<visual><binding template="ToastGeneric">' +
+    `<text>Meeting ${xmlEscape(title)} has started</text>` +
+    '<text>Recording will begin when you join.</text>' +
+    '</binding></visual>' +
+    '<audio silent="true"/>' +
+    '<actions>' +
+    `<action content="Record now" activationType="protocol" arguments="${toastUri('record-now')}"/>` +
     '</actions>' +
     '</toast>'
   )
