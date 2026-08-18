@@ -100,8 +100,8 @@ function registerRecordingIpcHandlers(): void {
     registerManualRecording(recording)
     updateTrayMenu()
   })
-  ipcMain.on('recording:stopped', () => {
-    handleRendererRecordingStopped()
+  ipcMain.on('recording:stopped', (_event, opts?: { discarded?: boolean }) => {
+    handleRendererRecordingStopped(opts)
     updateTrayMenu()
   })
   ipcMain.on('recording:error', (_event, message: string) => {

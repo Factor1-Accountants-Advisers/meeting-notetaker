@@ -192,8 +192,12 @@ const api = {
   notifyManualRecordingStarted: (recording: AutoStartRequest & { title?: string }): void =>
     ipcRenderer.send('recording:manual-started', recording),
 
-  /** Notify main process that recording stopped. */
-  notifyRecordingStopped: (): void => ipcRenderer.send('recording:stopped'),
+  /** Notify main process that recording stopped. The renderer reports what
+   *  it ACTUALLY did: `discarded: true` only when it dropped the recording
+   *  without uploading (join-trigger false start, spec J4). Main re-arms the
+   *  meeting on that report alone — its own send-time `deliver` decision can
+   *  be overtaken by an upload already in flight. Omit for a delivered stop. */
+  notifyRecordingStopped: (opts?: { discarded?: boolean }): void => ipcRenderer.send('recording:stopped', opts),
 
   /** Notify main process of a recording error. */
   notifyRecordingError: (message: string): void => ipcRenderer.send('recording:error', message),

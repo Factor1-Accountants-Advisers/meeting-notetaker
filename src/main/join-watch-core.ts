@@ -109,8 +109,10 @@ export type RecordingTrigger = 'join' | 'prompt' | 'calendar'
  *  - `call_ended` — a `call_ended` signal arrived.
  *  - `upload_now` — the paused toast's "Upload now" button: a human
  *    override that must ALWAYS deliver.
- * `scheduled_end` comes from the scheduled-end auto-stop timer. `manual`
- * comes from a user/tray stop.
+ * `scheduled_end` comes from the scheduled-end auto-stop timer. `manual` is
+ * reserved for a user/tray stop routed through `sendAutoStopRequest` — today
+ * renderer/tray-initiated stops go straight to the renderer and never pass
+ * through it, so nothing emits `manual` yet.
  */
 export type AutoStopReason = CallSignalStopReason | 'scheduled_end' | 'manual'
 

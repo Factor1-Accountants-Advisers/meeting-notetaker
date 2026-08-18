@@ -14,12 +14,14 @@ import {
   writeGraphSchedulerState
 } from '../src/main/graph/store.ts'
 import { evaluateHostGate } from '../src/main/graph/host-gate.ts'
+import { logger } from '../src/main/logger.ts'
 import { createRecordingStateMachine } from '../src/main/recording-state.ts'
 import {
   cleanupRecordingIpc,
   configureJoinWatchHooks,
   getEndReminderPlan,
   getRecordingStateMachine,
+  handleRendererRecordingError,
   handleRendererRecordingReady,
   handleRendererRecordingStarted,
   handleRendererRecordingStopped,
@@ -410,16 +412,36 @@ async function main(): Promise<void> {
   {
     const discarded: string[] = []
     const started: string[] = []
+    const startFailed: string[] = []
     configureJoinWatchHooks({
       onRecordingDiscarded: (key) => discarded.push(key),
-      onRecordingStarted: (key) => started.push(key)
+      onRecordingStarted: (key) => started.push(key),
+      onRecordingStartFailed: (key) => startFailed.push(key)
     })
-    const joinRequest = (key: string, trigger: 'join' | 'calendar') => ({
+    // Capture `[recording] discard confirmation mismatch` warns: main's
+    // send-time decision and the renderer's report can disagree, and the
+    // renderer wins — but loudly.
+    const mismatchWarns: unknown[] = []
+    const log = logger()
+    // Hooks run once per transport; count the console one only.
+    const warnHook: (typeof log.hooks)[number] = (message, _transport, transportName) => {
+      if (
+        transportName === 'console' &&
+        message.level === 'warn' &&
+        message.data[0] === '[recording] discard confirmation mismatch'
+      ) {
+        mismatchWarns.push(message.data[1])
+      }
+      return message
+    }
+    log.hooks.push(warnHook)
+    const joinRequest = (key: string, trigger: 'join' | 'calendar', startOffsetMs = 60_000) => ({
       eventId: `${key}-event`,
       idempotencyKey: key,
-      // Scheduled start 1 min out and a start "now": inside J4's start+2min /
-      // <5min window, so only the reason/trigger decide the outcome.
-      startTimeUtc: new Date(Date.now() + 60_000).toISOString(),
+      // Scheduled start 1 min out (default) and a start "now": inside J4's
+      // start+2min / <5min window, so only the reason/trigger decide the
+      // outcome. A negative offset puts the stop outside the window.
+      startTimeUtc: new Date(Date.now() + startOffsetMs).toISOString(),
       endTimeUtc: new Date(Date.now() + 3_600_000).toISOString(),
       source: 'auto' as const,
       trigger
@@ -448,10 +470,13 @@ async function main(): Promise<void> {
       deliver: false
     })
     assert.deepEqual(discarded, [], 'hook waits for the renderer to confirm the stop')
-    handleRendererRecordingStopped()
+    // The renderer reports what it actually did; only its `discarded: true`
+    // re-arms (a coalesced in-flight upload may have delivered instead).
+    handleRendererRecordingStopped({ discarded: true })
     assert.equal(getRecordingStateMachine().getState(), 'idle')
     assert.equal(getRecordingStateMachine().canStartAutoRecording('join-discard-key'), true, 'false start re-arms the key')
     assert.deepEqual(discarded, ['join-discard-key'], 'onRecordingDiscarded fired with the key')
+    assert.deepEqual(mismatchWarns, [], 'renderer agreed with main: no mismatch warn')
     // A later join really can start it again (J4 "re-armed").
     assert.equal(sendAutoStartRequest(joinRequest('join-discard-key', 'join')), true, 're-armed key starts again')
     handleRendererRecordingStarted()
@@ -494,6 +519,56 @@ async function main(): Promise<void> {
     assert.equal(getRecordingStateMachine().canStartAutoRecording('cal-key'), false)
     assert.deepEqual(discarded, ['join-discard-key'])
 
+    // (v-b) join + grace_expired but OUTSIDE the J4 window (scheduled start
+    // 3 min ago) -> deliver. Pins that scheduledStartUtc is wired from the
+    // active recording's startTimeUtc, not the ack time.
+    assert.equal(sendAutoStartRequest(joinRequest('join-late-key', 'join', -3 * 60_000)), true)
+    handleRendererRecordingStarted()
+    sendAutoStopRequest({ reason: 'grace_expired' })
+    assert.deepEqual(lastAutoStop(joinWindow.sent), {
+      eventId: 'join-late-key-event',
+      idempotencyKey: 'join-late-key',
+      deliver: true
+    })
+    handleRendererRecordingStopped()
+    assert.equal(getRecordingStateMachine().canStartAutoRecording('join-late-key'), false)
+    assert.deepEqual(discarded, ['join-discard-key'])
+
+    // Mismatch A: main asked for a discard, but the renderer delivered (e.g. a
+    // user Stop during grace was already uploading and coalesced the discard).
+    // The renderer wins: key stays blocked, no re-arm, warn logged.
+    for (const ack of [undefined, { discarded: false }]) {
+      const key = ack ? 'join-mismatch-a2-key' : 'join-mismatch-a1-key'
+      assert.equal(sendAutoStartRequest(joinRequest(key, 'join')), true)
+      handleRendererRecordingStarted()
+      sendAutoStopRequest({ reason: 'grace_expired' })
+      assert.deepEqual(lastAutoStop(joinWindow.sent), { eventId: key + '-event', idempotencyKey: key, deliver: false })
+      mismatchWarns.length = 0
+      handleRendererRecordingStopped(ack)
+      assert.equal(getRecordingStateMachine().canStartAutoRecording(key), false, 'renderer delivered: key stays blocked')
+      assert.deepEqual(discarded, ['join-discard-key'], 'renderer delivered: no discard hook')
+      assert.deepEqual(mismatchWarns, [{ idempotencyKey: key, expectedDiscard: true, rendererDiscarded: false }])
+    }
+
+    // Mismatch B: main expected delivery, but the renderer says it discarded.
+    // Follow the renderer: forget + hook, and warn.
+    assert.equal(sendAutoStartRequest(joinRequest('join-mismatch-b-key', 'join')), true)
+    handleRendererRecordingStarted()
+    sendAutoStopRequest({ reason: 'upload_now' })
+    assert.deepEqual(lastAutoStop(joinWindow.sent), {
+      eventId: 'join-mismatch-b-key-event',
+      idempotencyKey: 'join-mismatch-b-key',
+      deliver: true
+    })
+    mismatchWarns.length = 0
+    handleRendererRecordingStopped({ discarded: true })
+    assert.equal(getRecordingStateMachine().canStartAutoRecording('join-mismatch-b-key'), true, 'renderer discarded: re-armed')
+    assert.deepEqual(discarded, ['join-discard-key', 'join-mismatch-b-key'], 'renderer discarded: hook fired')
+    assert.deepEqual(mismatchWarns, [
+      { idempotencyKey: 'join-mismatch-b-key', expectedDiscard: false, rendererDiscarded: true }
+    ])
+    mismatchWarns.length = 0
+
     // (vi) a manual start of the same meeting also fires onRecordingStarted so
     // the join watcher stops polling/prompting for it.
     registerManualRecording({
@@ -519,8 +594,42 @@ async function main(): Promise<void> {
     handleRendererRecordingStarted()
     assert.equal(getRecordingStateMachine().getState(), 'recording')
     sendAutoStopRequest({ reason: 'grace_expired' })
-    handleRendererRecordingStopped()
+    handleRendererRecordingStopped({ discarded: true })
     assert.equal(getRecordingStateMachine().canStartAutoRecording('join-throw-key'), true)
+
+    // onRecordingStartFailed (Task 7 review): the watcher must learn that a
+    // start it believed accepted never became a recording, so it can re-arm.
+    configureJoinWatchHooks({
+      onRecordingDiscarded: (key) => discarded.push(key),
+      onRecordingStarted: (key) => started.push(key),
+      onRecordingStartFailed: (key) => startFailed.push(key)
+    })
+    cleanupRecordingIpc()
+    setAutoStartAckTimeoutMsForTest(10)
+    const failWindow = fakeWindow()
+    setMainWindow(failWindow.window)
+    handleRendererRecordingReady()
+    // (a) renderer never acks -> ack timeout fires the hook; key is startable.
+    assert.equal(sendAutoStartRequest(joinRequest('join-ack-timeout-key', 'join')), true)
+    await waitUntil('ack-timeout start-failed hook', () => startFailed.includes('join-ack-timeout-key'))
+    assert.deepEqual(startFailed, ['join-ack-timeout-key'])
+    assert.equal(getRecordingStateMachine().canStartAutoRecording('join-ack-timeout-key'), true)
+    // (b) renderer errors BEFORE acking the start -> hook fires; key startable.
+    setAutoStartAckTimeoutMsForTest(10_000)
+    assert.equal(sendAutoStartRequest(joinRequest('join-prestart-error-key', 'join')), true)
+    handleRendererRecordingError('capture failed to start')
+    assert.deepEqual(startFailed, ['join-ack-timeout-key', 'join-prestart-error-key'])
+    assert.equal(getRecordingStateMachine().canStartAutoRecording('join-prestart-error-key'), true)
+    assert.equal(getRecordingStateMachine().getState(), 'idle')
+    // (c) renderer errors AFTER the start was acked -> NOT a start failure.
+    assert.equal(sendAutoStartRequest(joinRequest('join-poststart-error-key', 'join')), true)
+    handleRendererRecordingStarted()
+    assert.equal(started.at(-1), 'join-poststart-error-key')
+    handleRendererRecordingError('capture died mid-meeting')
+    assert.deepEqual(startFailed, ['join-ack-timeout-key', 'join-prestart-error-key'], 'post-start error is not a start failure')
+    assert.equal(getRecordingStateMachine().canStartAutoRecording('join-poststart-error-key'), false, 'errored recording stays completed')
+
+    log.hooks.splice(log.hooks.indexOf(warnHook), 1)
     configureJoinWatchHooks(null)
   }
 

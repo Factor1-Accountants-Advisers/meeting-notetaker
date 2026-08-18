@@ -100,6 +100,10 @@ export function configureCallWatchRegistrarHooks(hooks: CallWatchRegistrarHooks 
 export interface JoinWatchHooks {
   onRecordingDiscarded?: (idempotencyKey: string) => void
   onRecordingStarted?: (idempotencyKey: string) => void
+  /** An accepted auto-start never became a recording (renderer ack timed
+   *  out, or the renderer errored before acking) — the watcher must re-arm
+   *  instead of believing a recording is under way. */
+  onRecordingStartFailed?: (idempotencyKey: string) => void
 }
 
 let joinWatchHooks: JoinWatchHooks | null = null
@@ -124,9 +128,10 @@ function notifyJoinWatch(hook: keyof JoinWatchHooks, idempotencyKey: string): vo
   }
 }
 
-/** Key of the recording we asked the renderer to discard (J4 false start);
- *  consumed when the renderer confirms the stop, cleared on every terminal
- *  path so a stale value can never forget a real recording later. */
+/** Key of the recording we asked the renderer to discard (J4 false start).
+ *  A cross-check only: the renderer's own `discarded` report decides the
+ *  re-arm (see handleRendererRecordingStopped). Cleared on every terminal
+ *  path so a stale value can never confuse a later recording. */
 let pendingDiscardKey: string | null = null
 
 let mainWindow: BrowserWindow | null = null
@@ -341,12 +346,24 @@ export function registerManualRecording(recording: ActiveRecording & { title?: s
     eventId: recording.eventId,
     idempotencyKey: recording.idempotencyKey
   })
-  // A manual recording of a watched meeting must also stop the join watcher
-  // polling/prompting for it (spec J1) — the human already chose to record.
+  // Fired for symmetry with the auto path. Manual keys are backend meeting
+  // ids / `manual-<ts>`, never the calendar idempotency key, so the join
+  // engine's per-meeting `noteRecordingStarted` no-ops on them; the real
+  // suppression of polling/prompting while a manual recording runs is the
+  // engine's `isRecordingActive()` check.
   notifyJoinWatch('onRecordingStarted', recording.idempotencyKey)
 }
 
-export function handleRendererRecordingStopped(): void {
+/**
+ * The renderer confirmed the stop. `opts.discarded` is the renderer's own
+ * report of what it did (preload `notifyRecordingStopped`): only a
+ * renderer-confirmed discard forgets the key and re-arms the meeting (J4).
+ * Main's send-time `deliver` decision is a cross-check, not the authority —
+ * a user Stop during grace may already be uploading when grace expires, in
+ * which case the renderer coalesces the discard request and delivers; had
+ * main re-armed on its own decision the meeting could record twice.
+ */
+export function handleRendererRecordingStopped(opts?: { discarded?: boolean }): void {
   closePausedToastAndDisarm()
 
   recordingPaused = false
@@ -365,15 +382,28 @@ export function handleRendererRecordingStopped(): void {
   // Transition back to idle after processing
   sm.completeProcessing()
 
-  if (finished && pendingDiscardKey === finished.idempotencyKey) {
+  const expectedDiscard = finished !== null && pendingDiscardKey === finished.idempotencyKey
+  const rendererDiscarded = opts?.discarded === true
+  pendingDiscardKey = null
+  if (!finished) return
+
+  if (expectedDiscard !== rendererDiscarded) {
+    // The renderer knows what it did; follow it, but say so — a mismatch is
+    // either the coalesced-upload race above or a contract drift worth seeing.
+    logger().warn('[recording] discard confirmation mismatch', {
+      idempotencyKey: finished.idempotencyKey,
+      expectedDiscard,
+      rendererDiscarded
+    })
+  }
+  if (rendererDiscarded) {
     // J4 false start: the renderer dropped the spill, so the key must not
     // stay "completed" — forget it so a later real join records afresh.
-    pendingDiscardKey = null
     sm.forgetCompleted(finished.idempotencyKey)
-    logger().info('[recording] false start discarded; meeting re-armed', { idempotencyKey: finished.idempotencyKey })
+    logger().info('[recording] false start discarded; meeting re-armed', {
+      idempotencyKey: finished.idempotencyKey
+    })
     notifyJoinWatch('onRecordingDiscarded', finished.idempotencyKey)
-  } else {
-    pendingDiscardKey = null
   }
 }
 
@@ -384,6 +414,9 @@ export function handleRendererRecordingError(message: string): void {
   resetAutoStopState()
   unblockSleep()
   clearAutoStartAckTimer()
+  // An error before the start was acked means the auto-start never became a
+  // recording; an error on a running recording is an ordinary stop.
+  const unackedStartKey = pendingAutoStart?.idempotencyKey ?? null
   pendingAutoStart = null
   pendingDiscardKey = null
 
@@ -392,6 +425,7 @@ export function handleRendererRecordingError(message: string): void {
   sm.completeProcessing()
 
   logger().warn('[recording] renderer reported error', { message })
+  if (unackedStartKey) notifyJoinWatch('onRecordingStartFailed', unackedStartKey)
 }
 
 function sendPendingAutoStart(logMessage: string): void {
@@ -431,6 +465,7 @@ function scheduleAutoStartAckTimeout(): void {
     })
     pendingAutoStart = null
     autoStartAckTimer = null
+    notifyJoinWatch('onRecordingStartFailed', pending.idempotencyKey)
   }, autoStartAckTimeoutMs)
 }
 
