@@ -267,6 +267,10 @@ interface Tracked {
    *  once the recorder is seen out of the call, so a 5 s poll does not repeat
    *  the same line for the length of a manual recording. */
   refusalLogged: boolean
+  /** "start refused: past scheduled end" has been logged; past-end is
+   *  monotonic for a tracked slot (a reschedule re-tracks from scratch), so
+   *  once is enough for the whole +10 tail. */
+  pastEndLogged: boolean
 }
 
 type TimerSlot = 'armTimer' | 'promptTimer' | 'disarmTimer' | 'pollTimer'
@@ -357,11 +361,37 @@ export function createJoinWatchEngine(deps: JoinWatchDeps): JoinWatchEngine {
     safe('onDisarm', () => deps.onDisarm(t.meeting))
   }
 
-  /** J1/J3 start. Refused (not queued) while anything records, and not
-   *  flipped to `recording` unless the start request is ACCEPTED: in both
-   *  cases the meeting stays armed and the next poll / prompt decides again. */
+  /** J2 amendment: a recording may start only while `now < scheduled end`.
+   *  The arm window's +10 tail exists so late signals and GC are handled —
+   *  never to start a recording after the meeting is over: the scheduled-end
+   *  backstop (`scheduleAutoStop`) would fire at 0 ms and deliver a
+   *  sub-second junk recording. */
+  const pastScheduledEnd = (t: Tracked): boolean => {
+    const endMs = Date.parse(t.meeting.endUtc)
+    return Number.isFinite(endMs) && deps.now() >= endMs
+  }
+
+  /** J1/J3 start. Refused (not queued) while anything records or once the
+   *  meeting's scheduled end has passed, and not flipped to `recording`
+   *  unless the start request is ACCEPTED: in every case the meeting stays
+   *  armed and the next poll / prompt decides again. */
   const start = (t: Tracked, trigger: Exclude<RecordingTrigger, 'calendar'>): void => {
     if (t.phase !== 'armed') return
+    if (pastScheduledEnd(t)) {
+      // Both triggers: a join inside the +10 tail and a Record now clicked
+      // after the end would each produce the junk recording described above.
+      // Phase untouched — the end + 10 timer is pure GC from here. The join
+      // refusal logs once (a 5 s poll would otherwise repeat it for the whole
+      // tail); a Record now click is a human action and always logs.
+      if (!t.pastEndLogged || trigger === 'prompt') {
+        t.pastEndLogged = true
+        deps.log('info', '[join-watch] start refused: past scheduled end', {
+          key: t.meeting.idempotencyKey,
+          trigger
+        })
+      }
+      return
+    }
     if (recordingActive()) {
       if (!t.refusalLogged) {
         t.refusalLogged = true
@@ -458,6 +488,16 @@ export function createJoinWatchEngine(deps: JoinWatchDeps): JoinWatchEngine {
     t.promptTimer = deps.timers.setTimeout(() => {
       t.promptTimer = null
       if (disposed || t.phase !== 'armed') return
+      if (pastScheduledEnd(t)) {
+        // A meeting shorter than the prompt offset (or a late arm inside the
+        // +10 tail) lands here after its end: Record now could only produce
+        // the junk recording `start` refuses, so ask nothing. The once-only
+        // key is NOT consumed — nothing was shown.
+        deps.log('info', '[join-watch] prompt skipped: past scheduled end', {
+          key: t.meeting.idempotencyKey
+        })
+        return
+      }
       if (recordingActive()) {
         deps.log('info', '[join-watch] prompt suppressed: a recording is active', {
           key: t.meeting.idempotencyKey
@@ -545,7 +585,8 @@ export function createJoinWatchEngine(deps: JoinWatchDeps): JoinWatchEngine {
       disarmTimer: null,
       pollTimer: null,
       polling: false,
-      refusalLogged: false
+      refusalLogged: false,
+      pastEndLogged: false
     }
     tracked.set(meeting.idempotencyKey, t)
     t.disarmTimer = deps.timers.setTimeout(() => {

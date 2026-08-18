@@ -573,6 +573,9 @@ async function scenario15_windowCloseAndVanish(): Promise<void> {
 
   // Already-tracked and past scheduled end: Graph's window no longer returns
   // it, so absence is not cancellation — the end+10 timer owns that disarm.
+  // But a join AFTER scheduled end must NOT start (J2 amendment): the
+  // scheduled-end backstop would stop it at once and deliver a sub-second
+  // junk recording. The +10 tail is GC only.
   const h = makeFake(T(-3))
   syncOne(h, 'd3', 0, 60)
   await h.advance(64 * MIN)
@@ -580,7 +583,38 @@ async function scenario15_windowCloseAndVanish(): Promise<void> {
   assert.deepEqual(h.disarmed, [], 'past-end absence keeps the arm window open')
   h.http.history[H('d3')] = [sig('recorder_rejoined', T(62))]
   await h.advance(POLL)
-  assert.deepEqual(h.started, [{ key: 'd3', trigger: 'join' }], 'late join inside end+10 still starts')
+  assert.deepEqual(h.started, [], 'a join after scheduled end never starts a recording')
+  assert.equal(h.engine.getPhase('d3'), 'armed', 'stays armed (GC only) — no phase change on refusal')
+  await h.advance(3 * POLL)
+  assert.equal(
+    h.logs.filter((l) => /start refused: past scheduled end/.test(l) && l.includes('"trigger":"join"')).length,
+    1,
+    'past-end refusal is logged once per streak, not per poll'
+  )
+  // Record now after end is refused the same way (prompt trigger).
+  h.engine.acceptPrompt('d3')
+  assert.deepEqual(h.started, [], 'Record now after scheduled end is refused too')
+  assert.ok(h.logs.some((l) => /start refused: past scheduled end/.test(l) && l.includes('"trigger":"prompt"')))
+  await h.advance(9 * MIN)
+  assert.deepEqual(h.disarmed, ['d3'], 'the end+10 GC still disarms')
+  assert.equal(h.pending(), 0)
+
+  // The prompt is never shown after scheduled end either: a 1-min meeting's
+  // +2 prompt timer lands past its end → skipped, once-only key NOT consumed.
+  const h2 = makeFake(T(-3))
+  syncOne(h2, 'd3b', 0, 1)
+  await h2.advance(6 * MIN)
+  assert.deepEqual(h2.prompted, [], 'no prompt after scheduled end')
+  assert.ok(h2.logs.some((l) => /prompt skipped: past scheduled end/.test(l)), 'skipped prompt is logged')
+  assert.ok(!h2.promptedStore.has('d3b'), 'a skipped prompt does not consume the once-only key')
+  // Late arm past end (app woke inside the +10 tail): no flash toast for a
+  // meeting that is already over.
+  const h3 = makeFake(T(65))
+  syncOne(h3, 'd3c', 0, 60)
+  assert.equal(h3.engine.getPhase('d3c'), 'armed', 'inside the +10 tail still tracks (GC only)')
+  await h3.advance(2 * POLL)
+  assert.deepEqual(h3.prompted, [], 'late arm past end never prompts')
+  assert.ok(!h3.promptedStore.has('d3c'))
 
   // A meeting whose window is already closed at sync time is never tracked.
   const i = makeFake(T(75))
@@ -597,7 +631,7 @@ async function scenario15_windowCloseAndVanish(): Promise<void> {
   j.engine.handleSyncDecisions([])
   assert.equal(j.engine.getPhase('d5'), 'recording')
   assert.deepEqual(j.disarmed, [])
-  for (const fake of [f, g, h, i, j]) assertNoPii(fake)
+  for (const fake of [f, g, h, h2, h3, i, j]) assertNoPii(fake)
 }
 
 /** s16 — reschedule re-tracks from scratch; a same-time re-sync is a no-op (E4-style). */

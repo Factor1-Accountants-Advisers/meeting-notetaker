@@ -105,6 +105,11 @@ discovered ──(start − 3 min, host gate)──▶ armed ──(recorder-in-
 ```
 
 - Arming is silent: no capture, nothing user-visible.
+- Recording may start only while `now < end`; the window's `+10 min` tail
+  exists so late signals/GC are handled, never to start a recording after
+  the meeting's scheduled end (a join then would be stopped instantly by
+  the scheduled-end backstop and deliver junk). The prompt is likewise
+  never shown after scheduled end.
 - `call_ended` **at or after scheduled start** with no later recorder IN
   disarms — the meeting is over. A `call_ended` *before* scheduled start
   (Teams ending a pre-meeting camera check) only means "not in call": the
@@ -273,6 +278,7 @@ recording ─▶ attach poller (5 s) ─▶ recorder_left ─▶ pause/grace ─
 | Join then network drop | No roster OUT (Teams holds the seat) → keeps recording, as today |
 | Recurring series | Same join URL; watch persists across occurrences (existing) |
 | Manual recording already running | Join signals ignored; prompt suppressed |
+| Join after scheduled end | No start (logged); prompt not shown |
 | Renderer not ready at start | Existing pending-auto-start / ack-timeout path |
 
 Deliberate regression: hybrid meetings where the user is in the room and
