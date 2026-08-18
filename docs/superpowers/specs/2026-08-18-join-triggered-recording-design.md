@@ -342,6 +342,18 @@ on 14 Aug.
   prompting. Needs `Presence.Read` delegated consent (David A).
 - **F3 — storage-api emits `call_started`.** Lets the desktop *know* a watch
   is blind (registered after start) and word the prompt accordingly. Small.
+- **F5 — Grace-toast wording (UX, cheap).** The paused toast is where the
+  discard decision is actually offered ("Upload now" / "Keep recording"), so
+  its body could say what ignoring it means: *"A recording that ends before
+  the meeting starts is discarded."* Main-side text in `recording-ipc.ts`;
+  no renderer change. Silent discard on Home is otherwise defensible.
+- **F6 — Deployment ordering.** The desktop's discard path calls the new
+  backend `DELETE /meetings/{id}` (Task 6). Both ship in the same installer
+  (backend is bundled), so no ordering issue for the fleet — but a dev
+  running an older backend against a newer renderer would leak an empty
+  Draft per false start; the renderer logs
+  `false-start meeting delete failed; empty draft may remain` when that
+  happens.
 - **F4 — Restore invitee delivery** (`MN_DELIVERY_RECIPIENTS=attendees`) once
   David F is comfortable — independent of this feature.
 
