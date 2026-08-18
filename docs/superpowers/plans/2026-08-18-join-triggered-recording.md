@@ -964,7 +964,7 @@ git commit -m "feat(call-signals): stop(reason) — grace_expired vs call_ended"
 
 **Files:**
 - Modify: `src/main/recording-state.ts`
-- Test: `scripts/verify-recording-controls.ts` (existing harness — check `package.json` `verify:recording-controls`; add assertions there)
+- Test: `scripts/verify-graph-fixtures.ts` (existing harness with the "Recording state machine (IN-66)" block; run `npm run verify:graph`). NOT `verify-recording-controls.tsx` — that one is renderer-only.
 
 - [ ] **Step 1: Failing test** — in the recording-controls harness add:
 
@@ -979,7 +979,7 @@ git commit -m "feat(call-signals): stop(reason) — grace_expired vs call_ended"
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails** — `npm run verify:recording-controls` → `forgetCompleted is not a function` (or TS error on `trigger`).
+- [ ] **Step 2: Run to verify it fails** — `npm run verify:graph` → `forgetCompleted is not a function` (or TS error on `trigger`).
 
 - [ ] **Step 3: Implement**
 
@@ -1010,8 +1010,8 @@ and in `createRecordingStateMachine`: `forgetCompleted(key) { completedKeys.dele
 - [ ] **Step 4: Run + typecheck + commit**
 
 ```bash
-npm run verify:recording-controls && npm run typecheck && git diff --check
-git add src/main/recording-state.ts scripts/verify-recording-controls.ts
+npm run verify:graph && npm run typecheck && git diff --check
+git add src/main/recording-state.ts scripts/verify-graph-fixtures.ts
 git commit -m "feat(recording-state): trigger, startedAtUtc, forgetCompleted"
 ```
 
