@@ -74,6 +74,8 @@ const T = (min: number): string => new Date(Date.UTC(2026, 7, 20, 10, 0, 0) + mi
   // Scheduled end / manual → deliver.
   assert.equal(decideFalseStart({ ...base, stopReason: 'scheduled_end', nowUtc: T(0) }), 'deliver')
   assert.equal(decideFalseStart({ ...base, stopReason: 'manual', nowUtc: T(0) }), 'deliver')
+  // Upload-now override → deliver (human explicitly ended it).
+  assert.equal(decideFalseStart({ ...base, stopReason: 'upload_now', nowUtc: T(0) }), 'deliver')
   // Prompt- and calendar-triggered are never discarded.
   assert.equal(decideFalseStart({ ...base, trigger: 'prompt', stopReason: 'grace_expired', nowUtc: T(0) }), 'deliver')
   assert.equal(decideFalseStart({ ...base, trigger: 'calendar', stopReason: 'grace_expired', nowUtc: T(0) }), 'deliver')
@@ -85,6 +87,7 @@ const T = (min: number): string => new Date(Date.UTC(2026, 7, 20, 10, 0, 0) + mi
   // Missing / unparseable times → cannot prove short → deliver.
   assert.equal(decideFalseStart({ ...base, startedAtUtc: undefined, stopReason: 'grace_expired', nowUtc: T(0) }), 'deliver')
   assert.equal(decideFalseStart({ ...base, scheduledStartUtc: 'garbage', stopReason: 'grace_expired', nowUtc: T(0) }), 'deliver')
+  assert.equal(decideFalseStart({ ...base, stopReason: 'grace_expired', nowUtc: 'garbage' }), 'deliver')
 }
 
 // ---- readAutoStartTrigger (J6) -----------------------------------------------
@@ -99,6 +102,7 @@ const T = (min: number): string => new Date(Date.UTC(2026, 7, 20, 10, 0, 0) + mi
   assert.equal(readAutoStartTrigger({ MN_AUTO_START_TRIGGER: 'calendar' }, {}), 'calendar')
   // An EMPTY layer value must not mask a process-env value.
   assert.equal(readAutoStartTrigger({ MN_AUTO_START_TRIGGER: '' }, { MN_AUTO_START_TRIGGER: 'calendar' }), 'calendar')
+  assert.equal(readAutoStartTrigger({ MN_AUTO_START_TRIGGER: '   ' }, { MN_AUTO_START_TRIGGER: 'calendar' }), 'calendar')
 }
 
 // ---- bundle purity ---------------------------------------------------------

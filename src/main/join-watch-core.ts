@@ -95,8 +95,23 @@ export function deriveCallPresence(signals: readonly CallSignal[], scheduledStar
 // decideFalseStart (J4)
 // ---------------------------------------------------------------------------
 
+/** Per-recording provenance: what started THIS recording; `undefined` for
+ *  manual recordings. */
 export type RecordingTrigger = 'join' | 'prompt' | 'calendar'
-export type AutoStopReason = 'grace_expired' | 'call_ended' | 'scheduled_end' | 'manual'
+
+/**
+ * Why an auto-managed recording stopped. `grace_expired`, `call_ended`, and
+ * `upload_now` come from the call-signal machine's `stop(reason)` (threaded
+ * in Task 4):
+ *  - `grace_expired` — the grace window opened by `recorder_left` ran out
+ *    with no rejoin.
+ *  - `call_ended` — a `call_ended` signal arrived.
+ *  - `upload_now` — the paused toast's "Upload now" button: a human
+ *    override that must ALWAYS deliver.
+ * `scheduled_end` comes from the scheduled-end auto-stop timer. `manual`
+ * comes from a user/tray stop.
+ */
+export type AutoStopReason = 'grace_expired' | 'call_ended' | 'upload_now' | 'scheduled_end' | 'manual'
 
 export interface FalseStartInput {
   trigger: RecordingTrigger | undefined
@@ -113,6 +128,11 @@ export interface FalseStartInput {
  * alone, so a genuinely short call at its scheduled time still delivers.
  * Prompt- and calendar-triggered recordings are never discarded — a human
  * (or the legacy mode) chose those. Any doubt → deliver.
+ *
+ * Spec J4 says `stopReason == recorder_left`; the stop machine reports that
+ * as `grace_expired` (the grace window opened by recorder_left ran out) —
+ * the human "Upload now" override reports `upload_now` and always delivers.
+ * Manual recordings carry no trigger and are never discarded.
  */
 export function decideFalseStart(input: FalseStartInput): 'discard' | 'deliver' {
   if (input.trigger !== 'join') return 'deliver'
@@ -130,6 +150,9 @@ export function decideFalseStart(input: FalseStartInput): 'discard' | 'deliver' 
 // readAutoStartTrigger (J6)
 // ---------------------------------------------------------------------------
 
+/** Machine-wide mode read from `MN_AUTO_START_TRIGGER` (J6), not a
+ *  per-recording value — the literals overlap with `RecordingTrigger`
+ *  deliberately. */
 export type AutoStartTrigger = 'join' | 'calendar'
 
 /**
@@ -138,6 +161,8 @@ export type AutoStartTrigger = 'join' | 'calendar'
  * precedence over the process env; the code default is `join`; anything
  * unrecognised is `join` (fail closed: never fall back to calendar-time
  * recording by typo). An empty layer value does not mask the process env.
+ * The process env is the dev/unpackaged fallback — packaged builds set the
+ * file; spec J6's precedence is PROGRAMDATA > bundled > code default.
  */
 export function readAutoStartTrigger(
   layers: Record<string, string | undefined>,
