@@ -495,6 +495,17 @@ function App(): JSX.Element {
       }
     })
 
+    // Shared tail of a COMPLETED stop (delivered or discarded): drop the
+    // session and re-arm the stop option so the next stop delivers by default.
+    const clearRecordingState = (): void => {
+      recordingRef.current = null
+      setRecording(null)
+      autoGraphMetadataRef.current = null
+      setCaptureStatus(null)
+      setAutoRecordingState('idle')
+      stopOptsRef.current = { deliver: true }
+    }
+
     // Single-flight, self-re-arming stop (field incident 3 Aug: a manual
     // `stopping` flag was never reset on the success path, so after one
     // successful stop the auto-stop timer, tray Stop, and on-screen Stop were
@@ -527,10 +538,12 @@ function App(): JSX.Element {
           segmentOffsetsMs: systemSegments.map((s) => s.offsetMs),
           durationSeconds
         })
-        // covered by: Task 14 live L4 (join-trigger false start) and the
-        // main-side ack harness (Task 7, scripts/verify-graph-fixtures.ts,
-        // `npm run verify:graph`) — the renderer harness never mounts App, so
-        // this branch is not unit-tested here.
+        // covered by: scripts/verify-graph-fixtures.ts (main-side discard-ack
+        // contract), spec section J4 in
+        // docs/superpowers/specs/2026-08-18-join-triggered-recording-design.md,
+        // and live check L4 in
+        // docs/superpowers/plans/2026-08-18-join-triggered-recording.md. The
+        // renderer harness never mounts App, so this branch is not unit-tested here.
         if (!deliver) {
           // Join-trigger false start (spec J4): the recording ended before the
           // meeting was really under way. Nothing is kept — no local save, no
@@ -539,13 +552,13 @@ function App(): JSX.Element {
           // confirmation, so we must report exactly what we did.
           window.api.debugLog('recording discarded as false start', { meetingId, durationSeconds })
           capture.discardCompletedSpill()
-          if (meetingId) await deleteMeeting(meetingId)
-          recordingRef.current = null
-          setRecording(null)
-          autoGraphMetadataRef.current = null
-          setCaptureStatus(null)
-          setAutoRecordingState('idle')
-          stopOptsRef.current = { deliver: true }
+          if (meetingId) {
+            const deleted = await deleteMeeting(meetingId)
+            if (!deleted) {
+              window.api.debugLog('false-start meeting delete failed; empty draft may remain', { meetingId })
+            }
+          }
+          clearRecordingState()
           window.api.notifyRecordingStopped({ discarded: true })
           return
         }
@@ -615,12 +628,7 @@ function App(): JSX.Element {
             }
           }
         }
-        recordingRef.current = null
-        setRecording(null)
-        autoGraphMetadataRef.current = null
-        setCaptureStatus(null)
-        setAutoRecordingState('idle')
-        stopOptsRef.current = { deliver: true }
+        clearRecordingState()
         window.api.notifyRecordingStopped()
       } catch (err) {
         // A failed stop must never leave a stale deliver:false for the next
