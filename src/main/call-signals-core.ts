@@ -65,6 +65,13 @@ export interface CallSignal {
   received_utc: string
 }
 
+/** Why the machine issued a stop. Threaded to `sendAutoStopRequest({ reason })`
+ *  so the join-trigger false-start rule (J4, `decideFalseStart` in
+ *  `join-watch-core`) can tell a grace-expiry stop from a call-ended stop and
+ *  from the human "Upload now" override, which must ALWAYS deliver. This is
+ *  the machine-side subset of `AutoStopReason`. */
+export type CallSignalStopReason = 'grace_expired' | 'call_ended' | 'upload_now'
+
 /** Control surfaces the machine drives. Task 13 supplies the real ones.
  *  All of them may throw without consequence — the machine guards each call. */
 export interface CallSignalActions {
@@ -72,8 +79,8 @@ export interface CallSignalActions {
   pause(): void
   /** -> sendTrayRecordingControl('resume') */
   resume(): void
-  /** -> sendAutoStopRequest() */
-  stop(): void
+  /** -> sendAutoStopRequest({ reason }). See `CallSignalStopReason`. */
+  stop(reason: CallSignalStopReason): void
   /** Sticky "recording paused" toast + the renderer chime. */
   showPausedToast(): void
   /** MUST be safe to call when no toast is showing — the machine closes
@@ -201,14 +208,16 @@ export function createCallSignalMachine(
     }
   }
 
-  /** Terminal transition: grace expiry, `call_ended`, or "Upload now". */
-  const finish = (): void => {
+  /** Terminal transition: grace expiry, `call_ended`, or "Upload now" — the
+   *  single stop site, so `reason` is the only thing that tells them apart
+   *  downstream (J4 false-start rule). */
+  const finish = (reason: CallSignalStopReason): void => {
     cancelGrace()
     toastVisible = false
     signalInitiatedPause = false
     state = 'done'
     const committed = ++generation
-    runEffects(committed, [() => actions.closePausedToast(), () => actions.stop()])
+    runEffects(committed, [() => actions.closePausedToast(), () => actions.stop(reason)])
   }
 
   /** Leave grace and keep recording. `resume` is false when the pause was the
@@ -242,7 +251,7 @@ export function createCallSignalMachine(
   const onGraceExpired = (): void => {
     graceTimer = null
     if (state !== 'grace') return
-    finish()
+    finish('grace_expired')
   }
 
   const applySignal = (signal: CallSignal): void => {
@@ -270,7 +279,7 @@ export function createCallSignalMachine(
         return
       }
       case 'call_ended': {
-        finish()
+        finish('call_ended')
         return
       }
     }
@@ -308,7 +317,7 @@ export function createCallSignalMachine(
     onToastAction(action: CallSignalToastAction): void {
       if (state !== 'grace') return
       if (action === 'upload-now') {
-        finish()
+        finish('upload_now')
         return
       }
       // "Keep recording" is an explicit user choice, so it always resumes —

@@ -30,6 +30,7 @@ import {
   type CallSignal,
   type CallSignalActions,
   type CallSignalHttpResponse,
+  type CallSignalStopReason,
   type CallSignalTimers
 } from '../src/main/call-signals-core'
 
@@ -89,6 +90,11 @@ function createFakeClock(): FakeClock {
 interface Recorder {
   actions: CallSignalActions
   calls: string[]
+  /** The `reason` of every `stop()` in arrival order. The join-trigger
+   *  false-start rule (J4) discards a short recording ONLY on
+   *  `grace_expired`; `call_ended` and the human "Upload now" must always
+   *  deliver, so each of the three stop paths pins its reason here. */
+  stopReasons: CallSignalStopReason[]
   reset(): void
   setPaused(paused: boolean): void
   isPaused(): boolean
@@ -98,9 +104,11 @@ interface Recorder {
  *  deliberately absent from the call log. */
 function createRecorder(): Recorder {
   const calls: string[] = []
+  const stopReasons: CallSignalStopReason[] = []
   let paused = false
   return {
     calls,
+    stopReasons,
     actions: {
       pause(): void {
         calls.push('pause')
@@ -110,8 +118,9 @@ function createRecorder(): Recorder {
         calls.push('resume')
         paused = false
       },
-      stop(): void {
+      stop(reason: CallSignalStopReason): void {
         calls.push('stop')
+        stopReasons.push(reason)
       },
       showPausedToast(): void {
         calls.push('showPausedToast')
@@ -123,6 +132,7 @@ function createRecorder(): Recorder {
     },
     reset(): void {
       calls.length = 0
+      stopReasons.length = 0
     },
     setPaused(value: boolean): void {
       paused = value
@@ -262,6 +272,11 @@ function scenarioLeaveThenGraceExpiry(): void {
     'grace expiry must close the toast and stop the recording'
   )
   assert.equal(machine.getState(), 'done', 'grace expiry ends the machine')
+  assert.deepEqual(
+    recorder.stopReasons.at(-1),
+    'grace_expired',
+    'a grace-expiry stop must carry reason grace_expired (the only J4-discardable reason)'
+  )
   assert.equal(clock.pendingCount(), 0, 'no timer may survive the grace expiry')
   assert.equal(machine.isPausedToastVisible(), false, 'the toast flag must clear on expiry')
   assert.equal(machine.getActionErrorCount(), 0, 'a healthy run must swallow nothing')
@@ -379,6 +394,11 @@ function scenarioCallEnded(): void {
     'call_ended from watching must stop the recording immediately'
   )
   assert.equal(machineA.getState(), 'done', 'call_ended ends the machine')
+  assert.deepEqual(
+    recorderA.stopReasons.at(-1),
+    'call_ended',
+    'a call_ended stop must carry reason call_ended (never J4-discardable)'
+  )
   assert.equal(clockA.pendingCount(), 0, 'call_ended leaves no timers behind')
 
   // From grace.
@@ -392,6 +412,11 @@ function scenarioCallEnded(): void {
     recorderB.calls,
     ['closePausedToast', 'stop'],
     'call_ended during grace must cancel the timer and stop once'
+  )
+  assert.deepEqual(
+    recorderB.stopReasons.at(-1),
+    'call_ended',
+    'call_ended during grace is still reason call_ended, not grace_expired'
   )
   assert.equal(clockB.pendingCount(), 0, 'the grace timer must be cancelled by call_ended')
   clockB.tick(CALL_SIGNAL_GRACE_MS * 2)
@@ -542,7 +567,9 @@ function scenarioPrimeSeen(): void {
 }
 
 function scenarioToastActions(): void {
-  // Upload now during grace behaves exactly like grace expiry.
+  // Upload now during grace behaves exactly like grace expiry — same effects,
+  // same terminal state — except that the stop reason is `upload_now`, the
+  // one the join-trigger false-start rule (J4) must never discard.
   const clockA = createFakeClock()
   const recorderA = createRecorder()
   const machineA = createCallSignalMachine(recorderA.actions, CALL_SIGNAL_GRACE_MS, clockA.timers)
@@ -555,6 +582,11 @@ function scenarioToastActions(): void {
     'Upload now must stop the recording immediately'
   )
   assert.equal(machineA.getState(), 'done', 'Upload now ends the machine')
+  assert.deepEqual(
+    recorderA.stopReasons.at(-1),
+    'upload_now',
+    'the human Upload now override must carry reason upload_now — J4 must never discard it'
+  )
   assert.equal(clockA.pendingCount(), 0, 'Upload now cancels the grace timer')
 
   // Keep recording during grace resumes and returns to watching.
@@ -681,8 +713,8 @@ function scenarioThrowingActions(): void {
   const recorderC = createRecorder()
   const throwingStop: CallSignalActions = {
     ...recorderC.actions,
-    stop(): void {
-      recorderC.actions.stop()
+    stop(reason: CallSignalStopReason): void {
+      recorderC.actions.stop(reason)
       throw new Error('no window')
     }
   }
