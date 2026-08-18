@@ -1653,10 +1653,12 @@ Build: freeze backend (unchanged code but do it for a clean bundle), `npm run bu
 | L5 | Create meeting 2 min before start (watch blind) | prompt at +2; Record now works | log `no active watch: prompt-only`; toast; recording starts on click |
 | L6 | `MN_AUTO_START_TRIGGER=calendar` in `%PROGRAMDATA%` file, restart | old behaviour (starts at −3 without join) | log `auto-start trigger mode=calendar` |
 | L7 | Manual recording running across a scheduled start | no auto-start, no prompt | log `prompt suppressed: recording active` |
+| L8 | Join at end+2 (inside the +10 tail) | no start, no prompt | log `[join-watch] start refused: past scheduled end`; no toast; no meeting created |
+| L9 | Join (recording starts), leave within ~5 s, don't return | recording pauses → grace → stops within ~65 s and is DISCARDED (false start), not delivered | log `[call-signals] baseline drained` with `live: 1`, then `false start discarded; meeting re-armed`; no email, no Draft |
 
 Record results in `docs/jira-progress.md` under a new IN- ticket (create it: "Join-triggered auto-record").
 
-- [ ] All seven pass → open PR `feature/join-triggered-recording` → `main`; release as v2.0.31 after the SharePoint hardening (v2.0.30) per the spec's J6.
+- [ ] All nine pass → open PR `feature/join-triggered-recording` → `main`; release as v2.0.31 after the SharePoint hardening (v2.0.30) per the spec's J6.
 
 ---
 

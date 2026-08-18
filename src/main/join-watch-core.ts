@@ -24,9 +24,11 @@ import type { GraphEventDecision } from './graph/types'
 // ---------------------------------------------------------------------------
 
 /** J2: how long before scheduled start a meeting arms for join-watch polling.
- *  MUST stay equal to `DEFAULT_AUTO_START_LEAD_MS` in `src/main/graph/runtime.ts`
- *  (also 3 min) — that constant decides when calendar-sync schedules the
- *  arm timer in the first place, so the two must never drift apart. */
+ *  Keep equal to `DEFAULT_AUTO_START_LEAD_MS` in `src/main/graph/runtime.ts`
+ *  (also 3 min) so the host-gate log / tray hint (driven by that constant's
+ *  `autoRecordEligible` flip) and arming (driven by this one's own timer)
+ *  agree; drift would only misalign those — arming itself is timer-based
+ *  and does not wait for the calendar sync to flip eligibility. */
 export const JOIN_WATCH_LEAD_MS = 3 * 60_000
 /** J3: how long into the armed window with no in-call signal before the
  *  "start recording?" prompt is shown. */

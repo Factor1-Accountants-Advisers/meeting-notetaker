@@ -140,7 +140,11 @@ keys without reinstalling, drop an override file on each machine:
   and cut a new release. The setting is read from `backend.env`, **not**
   `resources\.env.production` — auto-update overwrites everything under
   `resources\` on every install, so a `resources\.env.production` edit
-  would not survive the next update.
+  would not survive the next update. Note that `calendar` restores the
+  *start* behaviour only: the live meeting's attach poller keeps the 5 s
+  cadence introduced with this feature (previously 10 s). That is
+  harmless — leave-detection is simply a little quicker — and needs no
+  separate switch.
 - **Log lines to look for**: `[app] auto-start trigger`,
   `[join-watch] armed`, `[join-watch] starting recording`,
   `[join-watch] prompting`, `[recording] false start discarded; meeting
