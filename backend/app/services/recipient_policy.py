@@ -46,6 +46,16 @@ DEFAULT_DELIVERY_DOMAINS: tuple[str, ...] = (
 )
 
 
+def attendee_fan_out_enabled() -> bool:
+    """Whether meeting artifacts fan out to invitees (email + SharePoint
+    grants) or go to the recording owner only.
+
+    Organiser-only is the default and the fail-closed reading of anything
+    unrecognised: only the exact value ``attendees`` opens fan-out.
+    """
+    return get_settings().delivery_recipients.strip().lower() == "attendees"
+
+
 def allowed_delivery_domains() -> frozenset[str]:
     """Domains permitted to receive meeting artifacts.
 

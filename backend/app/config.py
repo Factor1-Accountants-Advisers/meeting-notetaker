@@ -78,6 +78,18 @@ class Settings(BaseSettings):
     # it never means "allow nothing". Widening this is the supported way to add
     # a company without a release.
     delivery_domain_allowlist: str = ""
+    # Temporary organiser-only delivery (David F via David A, 18 Aug 2026):
+    # a Notetaker auto-recorded a scheduled meeting while its user was still
+    # in an unrelated in-person client conversation, and that transcript went
+    # to the meeting's invitees. Until recording is tied to actually joining
+    # the meeting, artifacts go to the recording owner only — no invitee
+    # fan-out by email and no per-file SharePoint grants (those would surface
+    # the file in invitees' "Shared with me" even without an email).
+    # "attendees" restores the full IN-93/IN-387 behaviour. Restrictive by
+    # default on purpose: an unconfigured build must never fan out. Flip via
+    # the MN_DELIVERY_RECIPIENTS repo variable + release, or per machine
+    # through the %PROGRAMDATA% backend.env override.
+    delivery_recipients: str = "organizer"
 
     # IN-471 Storage API (Slice 2). Empty = stub mode AND central enrolment
     # not yet required (config-flagged cutover). MN_STORAGE_API_SCOPE is also

@@ -44,6 +44,9 @@ _NEUTRALIZED = {
     "MN_STORAGE_API_URL": "",
     "MN_STORAGE_API_ENABLED": "false",
     "MN_PYANNOTE_API_KEY": "",
+    # The suite pins the full IN-93/IN-387 fan-out; the organiser-only
+    # default is covered explicitly in test_organizer_only_delivery.py.
+    "MN_DELIVERY_RECIPIENTS": "attendees",
 }
 
 
