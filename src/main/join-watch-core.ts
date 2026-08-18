@@ -232,7 +232,7 @@ export interface JoinWatchDeps {
    *  sent); false — or a throw — means nothing started: the engine stays
    *  armed and the next poll / prompt tries again. `baseline.lastSeenSeq` is
    *  the seq of the last watch signal this engine had seen for the meeting
-   *  (null if it never read a history): the attach poller drains only up to
+   *  (null if it never read a history, or the history was empty): the attach poller drains only up to
    *  it and acts on anything later, so a leave that lands between this
    *  decision and the first attach poll is not swallowed (J5/E5). */
   startRecording: (

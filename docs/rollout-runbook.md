@@ -120,8 +120,8 @@ keys without reinstalling, drop an override file on each machine:
   your *join* to its Teams call, not at calendar start time. The 3-minute
   arming lead before scheduled start is unchanged (recording never begins
   earlier than that); if you join late, recording still starts
-  as soon as you're in the call, however long after the scheduled start
-  that is.
+  as soon as you're in the call, at any point up to the meeting's scheduled
+  end (a join after the scheduled end is not recorded — start manually).
 - **The prompt**: if you haven't joined by start + 2 min, a toast offers
   **Record now**. It shows once per meeting, auto-dismisses after 60 s
   with no action taken, and is suppressed entirely while a recording is
