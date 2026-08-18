@@ -387,6 +387,12 @@ async function restartWithBackoff(): Promise<void> {
 // Credentials — two-layer loading (C5)
 // ---------------------------------------------------------------------------
 
+// The most recent merged layers from loadCredentials(), so main-process code
+// (join-watch-core's readAutoStartTrigger, spec J6) can read the same
+// PROGRAMDATA-wins backend.env the backend child was spawned with, without
+// re-parsing the files itself. See getBackendEnvLayers() below.
+let lastLoadedLayers: Record<string, string> = {}
+
 /**
  * Parse a KEY=VALUE env file (``#`` comments, CRLF-tolerant).
  * Returns parsed entries; never logs values or key names with values.
@@ -467,7 +473,19 @@ function loadCredentials(bundleDir: string): Record<string, string> {
     layers: layers.map((l) => ({ path: l.path, found: l.found })),
   })
 
+  lastLoadedLayers = { ...result }
   return result
+}
+
+/** The merged two-layer backend.env (bundled, then %PROGRAMDATA%; PROGRAMDATA
+ *  wins) as last loaded for the backend child. Main-process settings that
+ *  must survive auto-update read from here — the join-trigger kill switch
+ *  MN_AUTO_START_TRIGGER (spec J6) — because main's own resources/.env.production
+ *  is replaced on every update. Empty until the supervisor has loaded (and
+ *  in dev, where no supervisor runs — callers fall back to process.env).
+ *  Returns a copy; never log its values (it carries the API keys). */
+export function getBackendEnvLayers(): Record<string, string> {
+  return { ...lastLoadedLayers }
 }
 
 // ---------------------------------------------------------------------------
