@@ -923,7 +923,7 @@ git commit -m "feat(join-watch): engine — arm at start−3, poll history, star
 // grace expiry must report why it stopped (join-trigger false-start rule reads this)
 assert.deepEqual(stopReasons.at(-1), 'grace_expired')
 ```
-and after a `call_ended` ingest test: `assert.deepEqual(stopReasons.at(-1), 'call_ended')`. (`const stopReasons: string[] = []`; the fake `stop: (reason) => { stopReasons.push(reason) }`.)
+and after a `call_ended` ingest test: `assert.deepEqual(stopReasons.at(-1), 'call_ended')`; and after an `onToastAction('upload-now')` during grace: `assert.deepEqual(stopReasons.at(-1), 'upload_now')`. (`const stopReasons: string[] = []`; the fake `stop: (reason) => { stopReasons.push(reason) }`.)
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -933,17 +933,18 @@ Expected: TS/esbuild complaint that `stop` takes no argument, or assertion `unde
 - [ ] **Step 3: Implement** — in `call-signals-core.ts`:
 
 ```ts
-export type CallSignalStopReason = 'grace_expired' | 'call_ended'
+export type CallSignalStopReason = 'grace_expired' | 'call_ended' | 'upload_now'
 
 export interface CallSignalActions {
   pause(): void
   resume(): void
   /** -> sendAutoStopRequest({ reason }). `reason` lets the join-trigger
-   *  false-start rule (J4) tell a grace-expiry stop from a call-ended stop. */
+   *  false-start rule (J4) tell a grace-expiry stop from a call-ended stop
+   *  and from the human "Upload now" override, which must ALWAYS deliver. */
   stop(reason: CallSignalStopReason): void
   ...
 ```
-Update the machine: the grace-timer expiry path calls `actions.stop('grace_expired')`; the `call_ended` transition calls `actions.stop('call_ended')`. Both sites are inside `createCallSignalMachine` — search for `.stop()`.
+**There is ONE `actions.stop()` call site** — inside the machine's private `finish()` (search `finish(`) — reached from THREE paths: grace-timer expiry, the `call_ended` transition, and `onToastAction('upload-now')`. Thread a `reason` parameter through `finish(reason)` and pass `'grace_expired'`, `'call_ended'`, `'upload_now'` respectively. Getting the toast path wrong (tagging it `grace_expired`) would let J4 discard a human's Upload now — the harness must pin it: after driving `onToastAction('upload-now')` in grace, assert `stopReasons.at(-1) === 'upload_now'`.
 
 - [ ] **Step 4: Run both harnesses + typecheck**
 
