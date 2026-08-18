@@ -90,3 +90,60 @@ export function deriveCallPresence(signals: readonly CallSignal[], scheduledStar
   }
   return { inCall, endedAtOrAfterStart, lastSignalUtc }
 }
+
+// ---------------------------------------------------------------------------
+// decideFalseStart (J4)
+// ---------------------------------------------------------------------------
+
+export type RecordingTrigger = 'join' | 'prompt' | 'calendar'
+export type AutoStopReason = 'grace_expired' | 'call_ended' | 'scheduled_end' | 'manual'
+
+export interface FalseStartInput {
+  trigger: RecordingTrigger | undefined
+  stopReason: AutoStopReason
+  scheduledStartUtc: string
+  startedAtUtc: string | undefined
+  nowUtc: string
+}
+
+/**
+ * A join-triggered recording that the leave flow stopped BEFORE the meeting
+ * was really under way is a false start (early join, then left): discard it
+ * and let the meeting re-arm (J4). Anchored on scheduled start, not duration
+ * alone, so a genuinely short call at its scheduled time still delivers.
+ * Prompt- and calendar-triggered recordings are never discarded — a human
+ * (or the legacy mode) chose those. Any doubt → deliver.
+ */
+export function decideFalseStart(input: FalseStartInput): 'discard' | 'deliver' {
+  if (input.trigger !== 'join') return 'deliver'
+  if (input.stopReason !== 'grace_expired') return 'deliver'
+  const startMs = Date.parse(input.scheduledStartUtc)
+  const nowMs = Date.parse(input.nowUtc)
+  const startedMs = input.startedAtUtc ? Date.parse(input.startedAtUtc) : Number.NaN
+  if (![startMs, nowMs, startedMs].every(Number.isFinite)) return 'deliver'
+  if (nowMs >= startMs + FALSE_START_MAX_AFTER_START_MS) return 'deliver'
+  if (nowMs - startedMs >= FALSE_START_MAX_DURATION_MS) return 'deliver'
+  return 'discard'
+}
+
+// ---------------------------------------------------------------------------
+// readAutoStartTrigger (J6)
+// ---------------------------------------------------------------------------
+
+export type AutoStartTrigger = 'join' | 'calendar'
+
+/**
+ * `MN_AUTO_START_TRIGGER`. `layers` is the supervisor's merged two-layer
+ * backend.env (bundled, then %PROGRAMDATA% — PROGRAMDATA wins) and takes
+ * precedence over the process env; the code default is `join`; anything
+ * unrecognised is `join` (fail closed: never fall back to calendar-time
+ * recording by typo). An empty layer value does not mask the process env.
+ */
+export function readAutoStartTrigger(
+  layers: Record<string, string | undefined>,
+  env: NodeJS.ProcessEnv | Record<string, string | undefined>
+): AutoStartTrigger {
+  const fromLayers = (layers.MN_AUTO_START_TRIGGER ?? '').trim()
+  const raw = (fromLayers || (env.MN_AUTO_START_TRIGGER ?? '')).trim().toLowerCase()
+  return raw === 'calendar' ? 'calendar' : 'join'
+}
