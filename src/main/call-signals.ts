@@ -85,6 +85,12 @@ export interface CallSignalRuntimeDeps {
   identityHeaders?: () => Promise<Record<string, string>>
   timers?: CallSignalTimers
   log?: CallSignalLog
+  /**
+   * Poll cadence for the live meeting's attach poller. Join-trigger spec J5
+   * sets 5 s from index.ts so leave-detection tightens along with
+   * join-detection; absent = the core default (10 s).
+   */
+  pollIntervalMs?: number
 }
 
 let runtimeDeps: CallSignalRuntimeDeps | null = null
@@ -223,13 +229,14 @@ export function armCallSignals(
     http: transport.http,
     identityHeaders: transport.identityHeaders,
     timers: deps.timers ?? { setTimeout, clearTimeout },
+    pollIntervalMs: deps.pollIntervalMs,
     log
   })
   log('info', '[call-signals] arming call-signal poller', {
     eventId: recording.eventId,
     mode,
     graceMs: CALL_SIGNAL_GRACE_MS,
-    pollIntervalMs: CALL_SIGNAL_POLL_INTERVAL_MS
+    pollIntervalMs: deps.pollIntervalMs ?? CALL_SIGNAL_POLL_INTERVAL_MS
   })
   void activePoller.start().catch(() => {
     log('warn', '[call-signals] poller start failed', { status: 0 })

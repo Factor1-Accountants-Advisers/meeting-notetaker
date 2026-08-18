@@ -1319,6 +1319,59 @@ async function scenarioPollerHappyPath(): Promise<void> {
   assertNoPii(logs.entries, 'happy path')
 }
 
+/**
+ * Task 12 / join-trigger spec J5: index.ts injects the 5s join-watch cadence
+ * (`JOIN_WATCH_POLL_INTERVAL_MS`) as `pollIntervalMs` so the live-meeting
+ * attach poller's leave-detection tightens along with join-detection. Pins
+ * that an explicit `pollIntervalMs` actually drives the tick — not just the
+ * documented default (`CALL_SIGNAL_POLL_INTERVAL_MS`, asserted pinned at 10s
+ * below).
+ */
+async function scenarioPollerHonoursInjectedPollInterval(): Promise<void> {
+  const clock = createFakeClock()
+  const recorder = createRecorder()
+  const logs = createFakeLog()
+  const leave = signal('001', 'recorder_left')
+  const http = createFakeHttp((call) =>
+    call.method === 'GET' ? jsonResponse(200, { signals: [leave] }) : jsonResponse(200, { watch_id: 'w1' })
+  )
+  const injectedIntervalMs = 5_000
+  assert.ok(
+    injectedIntervalMs < CALL_SIGNAL_POLL_INTERVAL_MS,
+    'the injected interval must be shorter than the default for this scenario to be meaningful'
+  )
+  const poller = createCallSignalPoller({
+    ...pollerDeps(clock, http, logs, recorder),
+    pollIntervalMs: injectedIntervalMs
+  })
+  await poller.start()
+
+  clock.tick(injectedIntervalMs - 1)
+  await flush()
+  assert.equal(
+    http.calls.filter((call) => call.method === 'GET').length,
+    0,
+    'no poll may fire before the injected interval elapses'
+  )
+
+  clock.tick(1)
+  await flush()
+  assert.equal(
+    http.calls.filter((call) => call.method === 'GET').length,
+    1,
+    'an injected pollIntervalMs must drive the tick cadence, not the core default'
+  )
+  assert.deepEqual(
+    recorder.calls,
+    ['pause', 'showPausedToast'],
+    'the poll fired at the injected cadence must still drive the machine'
+  )
+
+  poller.stop()
+  await flush()
+  assertNoPii(logs.entries, 'injected poll interval')
+}
+
 async function scenarioPollerRegistrationRetry(): Promise<void> {
   // Failure then success: exactly one retry at +30s, then normal polling.
   const clock = createFakeClock()
@@ -1789,6 +1842,7 @@ async function main(): Promise<void> {
 
   // Poller core with injected HTTP/timers/identity/log (spec D7).
   await scenarioPollerHappyPath()
+  await scenarioPollerHonoursInjectedPollInterval()
   await scenarioPollerRegistrationRetry()
   await scenarioPollerFailuresAreSkips()
   await scenarioPollerSurvivesThrowingActions()

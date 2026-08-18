@@ -51,6 +51,7 @@ import {
   configureJoinWatch,
   disposeJoinWatch,
   handleJoinWatchSyncDecisions,
+  JOIN_WATCH_POLL_INTERVAL_MS,
   joinWatchPromptAccepted,
   joinWatchRecordingDiscarded,
   joinWatchRecordingStartFailed,
@@ -146,7 +147,10 @@ configureCallSignals({
     showPausedToast: showRecordingPausedToast,
     closePausedToast: closeRecordingPausedToast,
     isPaused: isRecordingPaused
-  }
+  },
+  // Join-trigger spec J5: the same 5s tick that drives the join watcher
+  // carries over to the attach poller, so leave-detection tightens for free.
+  pollIntervalMs: JOIN_WATCH_POLL_INTERVAL_MS
 })
 
 // IN-469: earliest known auto-record-eligible meeting start (UTC ms) for the
