@@ -8,6 +8,7 @@ import { LoginScreen, type User } from './screens/LoginScreen'
 import { RecordingScreen, type RecordingSession } from './screens/RecordingScreen'
 import {
   createMeeting,
+  deleteMeeting,
   emailNotes,
   ensureCurrentPerson,
   fetchEnrolmentStatus,
@@ -173,6 +174,11 @@ function App(): JSX.Element {
     resume: () => {},
     stop: () => {}
   })
+  // Options for the NEXT stop run (join-trigger spec J4). Only the auto-stop
+  // subscription writes it, and only when no stop is in flight; tray/manual
+  // stops never touch it, so they always deliver. Reset to the default after
+  // every completed stop, never on entry.
+  const stopOptsRef = useRef<{ deliver: boolean }>({ deliver: true })
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null)
   // Mirror for mount-once subscriptions (the endpoint-change listener) so they
   // read current recording state instead of a stale closure.
@@ -494,6 +500,9 @@ function App(): JSX.Element {
     // successful stop the auto-stop timer, tray Stop, and on-screen Stop were
     // all silently swallowed for the rest of the session).
     const finishActiveRecording = async (): Promise<void> => {
+      // Read, don't reset: a coalesced request must not flip the option of the
+      // run already in flight, and a failed run resets it in the catch below.
+      const { deliver } = stopOptsRef.current
       try {
         setAutoRecordingState('processing')
         // Leave the active controls immediately. Capture finalization and upload
@@ -518,6 +527,28 @@ function App(): JSX.Element {
           segmentOffsetsMs: systemSegments.map((s) => s.offsetMs),
           durationSeconds
         })
+        // covered by: Task 14 live L4 (join-trigger false start) and the
+        // main-side ack harness (Task 7, scripts/verify-graph-fixtures.ts,
+        // `npm run verify:graph`) — the renderer harness never mounts App, so
+        // this branch is not unit-tested here.
+        if (!deliver) {
+          // Join-trigger false start (spec J4): the recording ended before the
+          // meeting was really under way. Nothing is kept — no local save, no
+          // upload, no email — and the empty backend meeting is removed so it
+          // never shows as a Draft. Main re-arms the meeting only on this
+          // confirmation, so we must report exactly what we did.
+          window.api.debugLog('recording discarded as false start', { meetingId, durationSeconds })
+          capture.discardCompletedSpill()
+          if (meetingId) await deleteMeeting(meetingId)
+          recordingRef.current = null
+          setRecording(null)
+          autoGraphMetadataRef.current = null
+          setCaptureStatus(null)
+          setAutoRecordingState('idle')
+          stopOptsRef.current = { deliver: true }
+          window.api.notifyRecordingStopped({ discarded: true })
+          return
+        }
         if (result) {
           let savedLocally = false
           const name = `${meetingId ?? `auto-${Date.now()}`}.webm`
@@ -589,8 +620,12 @@ function App(): JSX.Element {
         autoGraphMetadataRef.current = null
         setCaptureStatus(null)
         setAutoRecordingState('idle')
+        stopOptsRef.current = { deliver: true }
         window.api.notifyRecordingStopped()
       } catch (err) {
+        // A failed stop must never leave a stale deliver:false for the next
+        // (manual or auto) stop to pick up.
+        stopOptsRef.current = { deliver: true }
         setAutoRecordingState(recordingRef.current ? 'recording' : 'idle')
         window.api.notifyRecordingError(err instanceof Error ? err.message : String(err))
       }
@@ -633,7 +668,19 @@ function App(): JSX.Element {
     }
     controlHandlersRef.current = controls
 
-    const unsubStop = window.api.onAutoStopRequest(controls.stop)
+    // Auto-stop carries `deliver` (spec J4). Set the option only when no stop
+    // is in flight: if one is already running it delivers, and main will see
+    // no `discarded` ack and keep the key completed (the safe direction).
+    const unsubStop = window.api.onAutoStopRequest((data) => {
+      if (stopFlight.isRunning()) {
+        window.api.debugLog('auto-stop received while a stop is in flight; the running stop delivers', {
+          deliver: data.deliver
+        })
+        return
+      }
+      stopOptsRef.current = { deliver: data.deliver !== false }
+      void stopFlight.invoke()
+    })
     const unsubTrayControl = window.api.onTrayRecordingControl((action) => {
       controls[action]()
     })
