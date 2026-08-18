@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import binascii
+import json
 import logging
 import re
 import shutil
@@ -157,14 +158,28 @@ async def delete_meeting(meeting_id: UUID, actor: str = Actor) -> Response:
             status.HTTP_409_CONFLICT,
             "Meeting already has audio or processing; cannot delete",
         )
-    before = meeting.model_dump_json()
+    # Compact `before` (not the full model): enough to identify what was
+    # removed and prove it was untouched, without bloating the audit log.
+    before = json.dumps(
+        {
+            "id": meeting.id,
+            "title": meeting.title,
+            "source": meeting.source,
+            "owner_id": meeting.owner_id,
+            "created_at": meeting.created_at,
+            "pipeline_status": meeting.pipeline_status,
+        },
+        default=str,
+    )
     del store.MEETINGS[meeting_id]
     # create_meeting seeds the owner access entry; nothing else can exist for
     # a pending_audio meeting (transcript/summary/export all need audio).
     store.ACCESS.pop(meeting_id, None)
-    store.add_audit(
-        actor, "meeting.delete", str(meeting_id), before=before, meeting_id=meeting_id
-    )
+    store.add_audit(actor, "meeting.delete", meeting.title, before=before, meeting_id=meeting_id)
+    # The response middleware also snapshots after non-GET <400 responses; this
+    # is explicit because the handler is invoked directly (outside the
+    # middleware) by tests and any in-process caller, and a delete that never
+    # reaches disk would resurrect the meeting on restart.
     store.save_snapshot()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -433,6 +448,22 @@ def _merge_mic_and_system_audio(
     return merged_path
 
 
+def _discard_uploaded_audio(meeting_id: UUID, mime_type: str) -> None:
+    """Remove every file an upload can leave for a meeting that no longer exists.
+
+    Covers the merged/stored file for either extension audio_path_for() can
+    produce, the raw mic track, and the per-segment system captures the merge
+    step writes (`{id}.system*.webm`).
+    """
+    for candidate in (
+        audio_path_for(meeting_id, mime_type),
+        audio_path_for(meeting_id, "audio/webm"),
+        mic_track_path(meeting_id),
+        *audio_dir().glob(f"{meeting_id}.system*.webm"),
+    ):
+        candidate.unlink(missing_ok=True)
+
+
 async def _prepare_uploaded_audio(
     meeting_id: UUID,
     audio: bytes | None,
@@ -496,6 +527,17 @@ async def upload_audio(
         body.mime_type,
         body.duration_seconds,
     )
+
+    # DELETE /meetings/{id} may have won the race while the audio was being
+    # written (it checks the disk before the file lands). Re-fetch rather than
+    # trusting the local copy: re-inserting a deleted meeting would resurrect
+    # it, and the file just written would be an orphan nobody can reach.
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        _discard_uploaded_audio(meeting_id, body.mime_type)
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Meeting was deleted while the upload was in flight"
+        )
 
     # Fresh audio invalidates any earlier silence verdict; the pipeline
     # re-measures in the background (full-file decode is too slow for this

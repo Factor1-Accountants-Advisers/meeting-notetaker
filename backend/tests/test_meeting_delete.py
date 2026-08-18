@@ -6,12 +6,14 @@ false-start discard needs a tidy-up call. These tests pin the guard rails:
 owner-only, refused once anything was uploaded or processed, audited.
 """
 
+import base64
+import json
 import unittest
+from unittest.mock import patch
 from uuid import uuid4
 
-from fastapi import HTTPException
-
 from app import store
+from app.paths import audio_dir
 from app.routers import meetings as meetings_router
 from app.schemas import (
     AccessRole,
@@ -19,8 +21,10 @@ from app.schemas import (
     MeetingCreate,
     MeetingSource,
     PipelineStatus,
+    UploadAudioRequest,
 )
-from app.services.pipeline import audio_path_for
+from app.services.pipeline import audio_path_for, mic_track_path
+from fastapi import HTTPException
 
 OWNER = "joseph@factor1.com.au"
 VIEWER = "viewer@factor1.com.au"
@@ -57,8 +61,14 @@ class MeetingDeleteTests(unittest.IsolatedAsyncioTestCase):
         audit = [a for a in store.AUDIT_LOG if a.action == "meeting.delete"]
         self.assertTrue(audit, "delete must be audited")
         self.assertEqual(audit[-1].meeting_id, self.meeting_id)
-        self.assertEqual(audit[-1].target, str(self.meeting_id))
-        self.assertIn("False start", audit[-1].before or "")
+        self.assertEqual(audit[-1].target, "False start")
+        before = json.loads(audit[-1].before or "null")
+        self.assertEqual(
+            set(before),
+            {"id", "title", "source", "owner_id", "created_at", "pipeline_status"},
+        )
+        self.assertEqual(before["id"], str(self.meeting_id))
+        self.assertEqual(before["pipeline_status"], "pending_audio")
 
     async def test_non_owner_is_forbidden(self):
         # A viewer is on the access list, so require() answers 403 (not the
@@ -107,3 +117,37 @@ class MeetingDeleteTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HTTPException) as ctx:
             await meetings_router.delete_meeting(uuid4(), actor=OWNER)
         self.assertEqual(ctx.exception.status_code, 404)
+
+    async def test_upload_racing_a_delete_is_refused_and_leaves_no_audio(self):
+        # Reverse race: DELETE wins while upload_audio is awaiting
+        # _prepare_uploaded_audio. The handler must not re-insert the meeting
+        # from its stale local copy, and the file it just wrote must not
+        # survive as an orphan.
+        original = meetings_router._prepare_uploaded_audio
+
+        async def delete_then_prepare(meeting_id, *args, **kwargs):
+            store.MEETINGS.pop(meeting_id, None)
+            store.ACCESS.pop(meeting_id, None)
+            return await original(meeting_id, *args, **kwargs)
+
+        body = UploadAudioRequest(audio_b64=base64.b64encode(b"a" * 2048).decode("ascii"))
+        markers = (
+            audio_path_for(self.meeting_id, "audio/webm"),
+            mic_track_path(self.meeting_id),
+        )
+        try:
+            with (
+                patch("app.routers.meetings._prepare_uploaded_audio", new=delete_then_prepare),
+                patch("app.routers.meetings.kick_pipeline") as kick,
+                self.assertRaises(HTTPException) as ctx,
+            ):
+                await meetings_router.upload_audio(self.meeting_id, body, actor=OWNER)
+            self.assertEqual(ctx.exception.status_code, 409)
+            self.assertNotIn(self.meeting_id, store.MEETINGS)
+            kick.assert_not_called()
+            for path in markers:
+                self.assertFalse(path.exists(), f"orphaned audio left behind: {path}")
+            self.assertEqual(list(audio_dir().glob(f"{self.meeting_id}.*")), [])
+        finally:
+            for path in audio_dir().glob(f"{self.meeting_id}.*"):
+                path.unlink(missing_ok=True)

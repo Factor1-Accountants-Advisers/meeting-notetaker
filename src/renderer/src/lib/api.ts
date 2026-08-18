@@ -248,6 +248,19 @@ async function callRequired<T>(method: Method, path: string, body?: unknown): Pr
   throw new Error(errorMessage(res.body))
 }
 
+/** For endpoints whose success reply has no body (204): `call` would return
+ *  `null` for both "accepted" and "failed", so surface `res.ok` instead.
+ *  False when the bridge is missing or the request throws. */
+async function callOk(method: Method, path: string): Promise<boolean> {
+  if (typeof window.api?.request !== 'function') return false
+  try {
+    const res = await window.api.request<unknown>(method, `${PREFIX}${path}`)
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
 async function get<T>(path: string): Promise<T | null> {
   return call<T>('GET', path)
 }
@@ -298,19 +311,9 @@ export async function createMeeting(
 
 /** Owner-only tidy-up of a meeting that never received audio (join-trigger
  *  false start, spec J4). Resolves true when the backend accepted the delete;
- *  false on any error — callers must not block on it.
- *
- *  Uses the bridge directly rather than `call`: the backend answers 204 with
- *  an empty body, which `call` would hand back as `null` — indistinguishable
- *  from "request failed". `res.ok` is the only honest discriminator here. */
+ *  false on any error — callers must not block on it. */
 export async function deleteMeeting(meetingId: string): Promise<boolean> {
-  if (typeof window.api?.request !== 'function') return false
-  try {
-    const res = await window.api.request<unknown>('DELETE', `${PREFIX}/meetings/${meetingId}`)
-    return res.ok
-  } catch {
-    return false
-  }
+  return callOk('DELETE', `/meetings/${meetingId}`)
 }
 
 /** One system-audio capture segment; offsetMs places it on the merge timeline (IN-468). */
