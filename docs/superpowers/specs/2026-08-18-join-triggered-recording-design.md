@@ -80,6 +80,11 @@ backstop) is unchanged.
 `handleAutoRecordEligible` no longer starts a recording. When a meeting
 becomes eligible on the existing time basis (`start − 3 min`, host gate
 passed, not already recorded) it **arms** the join watcher for that meeting.
+Arming is timer-driven: the join watcher receives every sync's decisions
+(the same unfiltered feed the registrar consumes), tracks host-owned
+candidates with their `startUtc`/`endUtc`, and arms each at exactly
+`start − 3 min` by its own timer rather than waiting for the 5-min poll grid
+to flip `autoRecordEligible`.
 Recording starts when the meeting is armed **and** recorder-in-call is true.
 That is immediate for an early joiner who is still present at −3 min, and
 on the next `recorder_rejoined` for anyone who joins later — 5 min or 40 min
@@ -100,7 +105,10 @@ discovered ──(start − 3 min, host gate)──▶ armed ──(recorder-in-
 ```
 
 - Arming is silent: no capture, nothing user-visible.
-- `call_ended` before any start disarms — the meeting is over.
+- `call_ended` **at or after scheduled start** with no later recorder IN
+  disarms — the meeting is over. A `call_ended` *before* scheduled start
+  (Teams ending a pre-meeting camera check) only means "not in call": the
+  meeting stays armed and the real call's `recorder_rejoined` starts it.
 - A meeting with **no active watch** (beyond the 5-cap, created too late,
   relay unavailable) still arms, but can only start via the prompt (J3).
 - Once a recording starts for the meeting, the join watcher steps aside;
