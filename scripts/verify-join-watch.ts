@@ -824,6 +824,64 @@ void (async () => {
   assert.equal(JOIN_WATCH_POLL_INTERVAL_MS, 5_000)
   assert.equal(JOIN_WATCH_DISARM_AFTER_END_MS, 10 * MIN)
 
+  // ---- index.ts / join-watch.ts wiring (Task 11) -----------------------------
+  // Source-text checks only (same style as verify-backend-supervisor): the
+  // runtime half imports electron, so it is never bundled here — the bundle
+  // purity check above stays about the core alone.
+  {
+    const indexSource = readFileSync(join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8')
+    // J6: the mode comes from the supervisor's two-layer backend.env, process
+    // env as the dev fallback — read once, after the layers are loaded.
+    assert.ok(
+      indexSource.includes('readAutoStartTrigger(getBackendEnvLayers(), process.env)'),
+      'index.ts must read MN_AUTO_START_TRIGGER from the backend.env layers'
+    )
+    const layersReadAt = indexSource.indexOf('readAutoStartTrigger(getBackendEnvLayers(), process.env)')
+    const backendReadyAt = indexSource.indexOf('await backendStartup')
+    assert.ok(backendReadyAt >= 0 && backendReadyAt < layersReadAt, 'the trigger mode must be read after backend startup resolves')
+    // Task 7's hooks: all three wired, so a discard, a start, and a failed
+    // start each steer the engine.
+    const hooksAt = indexSource.indexOf('configureJoinWatchHooks({')
+    assert.ok(hooksAt >= 0, 'index.ts must configure the join-watch hooks')
+    const hooksBlock = indexSource.slice(hooksAt, indexSource.indexOf('})', hooksAt))
+    for (const hook of ['onRecordingDiscarded', 'onRecordingStarted', 'onRecordingStartFailed']) {
+      assert.ok(hooksBlock.includes(hook), `join-watch hook ${hook} must be wired`)
+    }
+    // J3: the toast's Record now verb reaches the prompt-accept path.
+    const recordNowAt = indexSource.indexOf("toastAction === 'record-now'")
+    assert.ok(recordNowAt >= 0, 'index.ts must handle the record-now toast verb')
+    assert.ok(
+      indexSource.indexOf('joinWatchPromptAccepted()', recordNowAt) >= 0,
+      'record-now must call joinWatchPromptAccepted()'
+    )
+    // J1: the watcher consumes every sync's decisions; teardown disposes it.
+    assert.ok(indexSource.includes('handleJoinWatchSyncDecisions('), 'onSyncCompleted must feed the join watcher')
+    assert.ok(indexSource.includes('disposeJoinWatch()'), 'shutdown must dispose the join watcher')
+    // J1/J6: in join mode the calendar path never starts a recording — the
+    // guard sits inside handleAutoRecordEligible's per-decision loop.
+    const eligibleAt = indexSource.indexOf('function handleAutoRecordEligible(')
+    const eligibleEnd = indexSource.indexOf('createWindow(', eligibleAt)
+    assert.ok(eligibleAt >= 0 && eligibleEnd > eligibleAt, 'handleAutoRecordEligible must precede window creation')
+    const eligibleBody = indexSource.slice(eligibleAt, eligibleEnd)
+    assert.ok(eligibleBody.includes("if (autoStartTrigger === 'join')"), 'handleAutoRecordEligible must skip starts in join mode')
+    assert.ok(
+      eligibleBody.indexOf("if (autoStartTrigger === 'join')") < eligibleBody.indexOf('sendAutoStartRequest('),
+      'the join-mode guard must come before the calendar start'
+    )
+    assert.ok(eligibleBody.includes("trigger: 'calendar'"), 'calendar-mode starts must be tagged trigger: calendar')
+
+    const runtimeSource = readFileSync(join(process.cwd(), 'src', 'main', 'join-watch.ts'), 'utf8')
+    // The relay route is singular `call-watch` (see createCallSignalPoller).
+    assert.ok(runtimeSource.includes('/api/v1/call-watch/'), 'join-watch.ts must poll the singular call-watch signals route')
+    assert.ok(!runtimeSource.includes('/api/v1/call-watches/'), 'join-watch.ts must not use the plural route')
+    // The engine only flips to recording when the start is ACCEPTED, so the
+    // runtime must return sendAutoStartRequest's boolean, not swallow it.
+    assert.ok(runtimeSource.includes('return sendAutoStartRequest('), 'startRecording must return the accept result')
+    // J2 "already recording" guard counts a pending, unacked auto-start.
+    assert.ok(runtimeSource.includes('hasPendingAutoStart()'), 'isRecordingActive must include a pending auto-start')
+    assert.ok(!runtimeSource.includes('console.log'), 'join-watch.ts must log through electron-log only')
+  }
+
   console.log('join-watch verification passed')
 })().catch((e) => {
   console.error(e)
