@@ -135,6 +135,13 @@ assert.equal(toastActionFromArgv(['exe', '--background']), null, 'unrelated argv
   assert.match(xml, /<audio silent="true"\/>/)
   // XML-escaping of the title, same rule as the other builders
   assert.match(buildJoinPromptToastXml('Q&A <Board>'), /Meeting Q&amp;A &lt;Board&gt; has started/)
+  // No title (Graph gave none, or the watcher's fallback is ''): plain
+  // wording, never "Meeting  has started" with a hole in it.
+  const untitled = buildJoinPromptToastXml('')
+  assert.match(untitled, /<text>Your meeting has started<\/text>/, 'empty title → generic first line')
+  assert.doesNotMatch(untitled, /Meeting  has started/, 'no double-space hole for an empty title')
+  assert.match(untitled, /Recording will begin when you join\./, 'body line unchanged')
+  assert.match(untitled, /arguments="notetaker:\/\/record-now"/, 'Record now still wired')
   assert.equal(toastActionFromArgv(['notetaker://record-now']), 'record-now')
   assert.equal(toastActionFromArgv(['notetaker://record-now/']), 'record-now', 'trailing slash tolerated like the others')
 }

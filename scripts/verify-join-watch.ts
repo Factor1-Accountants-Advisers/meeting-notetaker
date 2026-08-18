@@ -184,6 +184,8 @@ interface Fake {
    *  order — the seq the attach poller must drain up to (spec J5/E5). */
   baselines: Array<string | null>
   prompted: string[]
+  /** The meeting title each `showPrompt` saw, in order (toast wording). */
+  promptTitles: string[]
   disarmed: string[]
   recordingActive: { value: boolean }
   promptedStore: Set<string>
@@ -207,6 +209,7 @@ function makeFake(nowUtc: string, hasWatch: (hash: string) => boolean = () => tr
   const started: Fake['started'] = []
   const baselines: Fake['baselines'] = []
   const prompted: string[] = []
+  const promptTitles: string[] = []
   const disarmed: string[] = []
   const recordingActive = { value: false }
   const promptedStore = new Set<string>()
@@ -243,6 +246,7 @@ function makeFake(nowUtc: string, hasWatch: (hash: string) => boolean = () => tr
     },
     showPrompt: (m) => {
       prompted.push(m.idempotencyKey)
+      promptTitles.push(m.title)
       if (effects.throwPrompt) throw new Error('prompt effect threw')
     },
     onDisarm: (m) => {
@@ -274,7 +278,7 @@ function makeFake(nowUtc: string, hasWatch: (hash: string) => boolean = () => tr
     await settle()
   }
   return {
-    engine, now: () => nowMs, advance, http, started, baselines, prompted, disarmed, recordingActive, promptedStore,
+    engine, now: () => nowMs, advance, http, started, baselines, prompted, promptTitles, disarmed, recordingActive, promptedStore,
     effects, logs, pending: () => timers.length
   }
 }
@@ -398,10 +402,13 @@ async function scenario5b_callEndedBeforeStart(): Promise<void> {
 async function scenario6_noWatchPromptOnly(): Promise<void> {
   const f = makeFake(T(-5), () => false)
   f.http.history[H('f')] = [sig('recorder_rejoined', T(-4))]
-  syncOne(f, 'f', 0, 60)
+  syncOne(f, 'f', 0, 60, { title: '   ' })
   await f.advance(8 * MIN)
   assert.deepEqual(f.started, [])
   assert.deepEqual(f.prompted, ['f'])
+  // A blank Graph subject reaches the toast as '' so buildJoinPromptToastXml
+  // can say "Your meeting has started" — never a made-up "Teams meeting".
+  assert.deepEqual(f.promptTitles, [''], 'blank title falls back to empty, not a placeholder')
   assert.equal(f.http.calls, 0, 'never polls without a watch')
   f.engine.acceptPrompt('f')
   assert.deepEqual(f.started, [{ key: 'f', trigger: 'prompt' }])

@@ -154,13 +154,15 @@ export function buildUpdateCountdownToastXml(version: string, seconds: number): 
  * hybrid/in-room meetings and blind watches. `scenario="reminder"` keeps
  * it on screen; the runtime closes it after JOIN_WATCH_PROMPT_LIFETIME_MS
  * (transient toasts slide into Action Center after ~5 s, same rationale as
- * the paused toast).
+ * the paused toast). An empty `title` (Graph gave no subject) gets plain
+ * wording rather than "Meeting  has started" with a hole in it.
  */
 export function buildJoinPromptToastXml(title: string): string {
+  const headline = title ? `Meeting ${xmlEscape(title)} has started` : 'Your meeting has started'
   return (
     `<toast scenario="reminder" activationType="protocol" launch="${toastUri('open')}">` +
     '<visual><binding template="ToastGeneric">' +
-    `<text>Meeting ${xmlEscape(title)} has started</text>` +
+    `<text>${headline}</text>` +
     '<text>Recording will begin when you join.</text>' +
     '</binding></visual>' +
     '<audio silent="true"/>' +

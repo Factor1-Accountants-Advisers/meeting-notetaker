@@ -696,7 +696,9 @@ export function createJoinWatchEngine(deps: JoinWatchDeps): JoinWatchEngine {
           joinUrlHash,
           startUtc,
           endUtc,
-          title: d.metadata?.title?.trim() || 'Teams meeting',
+          // Empty when Graph gave no subject: the toast builder words the
+          // headline generically rather than naming a placeholder meeting.
+          title: d.metadata?.title?.trim() ?? '',
           metadata: d.metadata
         })
       }
