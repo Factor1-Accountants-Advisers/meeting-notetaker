@@ -1212,6 +1212,8 @@ In `handleRendererRecordingStopped`, after `const finished = sm.stopRecording()`
 ```
 Also clear `pendingDiscardKey = null` in `handleRendererRecordingError`.
 
+- [ ] **Step 2b: `sendAutoStartRequest` returns `boolean`** — `true` when the request was queued/sent (i.e. it passed the pending-start and `canStartAutoRecording` guards), `false` on any refusal. The join watcher (Task 3 review, item 7) stays `armed` and keeps polling when this returns `false` instead of believing a recording started. Existing callers ignore the return value.
+
 - [ ] **Step 3: `index.ts`** — the call-signals action: `stop: (reason) => sendAutoStopRequest({ reason })`.
 
 - [ ] **Step 4: Typecheck + existing harnesses**
@@ -1469,7 +1471,7 @@ export function configureJoinWatch(opts: { hasActiveWatch: (hash: string) => boo
     isRecordingActive: () => getRecordingStateMachine().getState() !== 'idle' || hasPendingAutoStart(),
     startRecording: (m, trigger) => {
       closePrompt()
-      sendAutoStartRequest({
+      return sendAutoStartRequest({
         eventId: m.eventId,
         idempotencyKey: m.idempotencyKey,
         startTimeUtc: m.startUtc,
