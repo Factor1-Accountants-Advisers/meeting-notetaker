@@ -1042,7 +1042,6 @@ from app.schemas import MeetingSource, PipelineStatus
 
 class MeetingDeleteTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        store.reset_for_tests() if hasattr(store, "reset_for_tests") else None
         created = await meetings_router.create_meeting(
             meetings_router.MeetingCreate(title="False start", source=MeetingSource.online),
             actor="joseph@factor1.com.au",
@@ -1052,7 +1051,7 @@ class MeetingDeleteTests(unittest.IsolatedAsyncioTestCase):
     async def test_owner_deletes_untouched_meeting(self):
         await meetings_router.delete_meeting(self.meeting_id, actor="joseph@factor1.com.au")
         self.assertNotIn(self.meeting_id, store.MEETINGS)
-        audit = [a for a in store.AUDIT_LOG if a.get("action") == "meeting.delete"]
+        audit = [a for a in store.AUDIT_LOG if a.action == "meeting.delete"]
         self.assertTrue(audit, "delete must be audited")
 
     async def test_non_owner_is_forbidden(self):
@@ -1063,7 +1062,7 @@ class MeetingDeleteTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_meeting_with_audio_or_pipeline_is_refused(self):
         m = store.MEETINGS[self.meeting_id]
-        store.MEETINGS[self.meeting_id] = m.model_copy(update={"pipeline_status": PipelineStatus.processing})
+        store.MEETINGS[self.meeting_id] = m.model_copy(update={"pipeline_status": PipelineStatus.queued})
         with self.assertRaises(HTTPException) as ctx:
             await meetings_router.delete_meeting(self.meeting_id, actor="joseph@factor1.com.au")
         self.assertEqual(ctx.exception.status_code, 409)
@@ -1098,20 +1097,19 @@ async def delete_meeting(meeting_id: UUID, actor: str = Actor) -> Response:
     if meeting is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
     require(meeting_id, actor, AccessRole.owner)
-    if (
-        meeting.pipeline_status is not PipelineStatus.not_started
-        or store.TRANSCRIPTS.get(meeting_id)
-        or meeting.audio_uploaded_at is not None
-    ):
+    # `pending_audio` is the created-but-nothing-uploaded state; anything else
+    # means audio landed (queued/processing/ready/failed) and this tidy-up
+    # must refuse. audio_path_for() is the on-disk marker for the same thing.
+    if meeting.pipeline_status is not PipelineStatus.pending_audio or audio_path_for(meeting_id, "audio/webm").exists():
         raise HTTPException(status.HTTP_409_CONFLICT, "Meeting already has audio or processing; cannot delete")
-    before = meeting.model_dump(mode="json")
+    before = meeting.model_dump_json()
     del store.MEETINGS[meeting_id]
-    store.add_audit(actor, "meeting.delete", str(meeting_id), before=before, after=None)
+    store.add_audit(actor, "meeting.delete", str(meeting_id), before=before, after=None, meeting_id=meeting_id)
     store.save_snapshot()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 ```
 
-Verify field names against `app/schemas.py` (`Meeting.pipeline_status`, an audio-uploaded marker — search `audio_uploaded_at`/`audio_path`; use whatever the model has) and `store.add_audit`'s real signature (`grep -n "def add_audit" backend/app/store.py`). Import `Response` from `fastapi` if not already.
+`PipelineStatus.pending_audio` and `audio_path_for` (already imported at the top of the router) are verified against the codebase; `store.add_audit(actor, action, target, before=None, after=None, meeting_id=None)` takes JSON strings for before/after. Import `Response` from `fastapi` if not already.
 
 - [ ] **Step 4: Run the new tests, then the full suite**
 
@@ -1243,7 +1241,7 @@ and
 ```ts
 const unsubStop = window.api.onAutoStopRequest((data) => void stopFlight.invoke({ deliver: data.deliver !== false }))
 ```
-(`createSingleFlight` must forward its argument — check `src/renderer/src/lib/single-flight.ts` or wherever it lives; if it takes none, wrap: keep a `pendingStopOpts` ref set before `invoke()` and read inside.)
+`createSingleFlight` (`src/renderer/src/lib/singleFlight.ts`) takes a zero-arg `run` — do not change it. Hold the option in a ref: `const stopOptsRef = useRef({ deliver: true })`; the subscription sets `stopOptsRef.current = { deliver: data.deliver !== false }` then calls `stopFlight.invoke()`; `finishActiveRecording` reads `stopOptsRef.current` and resets it to `{ deliver: true }` on entry. Tray/manual stops leave the ref at its default, so they always deliver.
 
 - [ ] **Step 2: Discard branch** — inside `finishActiveRecording`, right after `const result = await capture.stop(...)` and the debug log, before the local-save block:
 
