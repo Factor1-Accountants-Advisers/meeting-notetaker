@@ -164,6 +164,20 @@ async function main(): Promise<void> {
     'getBackendEnvLayers must return a fresh spread copy, not the shared lastLoadedLayers reference'
   )
 
+  // The adoption path (an already-healthy same-version backend on 8787) must
+  // still call loadCredentials() for its lastLoadedLayers side effect, or
+  // getBackendEnvLayers() stays empty after backendStartup resolves and the
+  // %PROGRAMDATA% J6 kill-switch override becomes invisible to main even
+  // though no child was spawned.
+  const adoptedAt = supervisorSource.indexOf('adoptedPid = readPidFile()')
+  const adoptionReturnAt = supervisorSource.indexOf('return', adoptedAt)
+  const adoptionLoadCredentialsAt = supervisorSource.indexOf('loadCredentials(', adoptedAt)
+  assert.ok(adoptedAt >= 0, 'adoption branch (adoptedPid assignment) must exist')
+  assert.ok(
+    adoptedAt < adoptionLoadCredentialsAt && adoptionLoadCredentialsAt < adoptionReturnAt,
+    'the adoption branch must call loadCredentials() before its early return'
+  )
+
   console.log('backend supervisor verification passed')
 }
 
