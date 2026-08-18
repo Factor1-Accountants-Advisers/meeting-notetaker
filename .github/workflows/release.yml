@@ -158,6 +158,10 @@ jobs:
           # email but cannot route completed files into the firm library.
           MN_SHAREPOINT_DRIVE_ID: ${{ vars.MN_SHAREPOINT_DRIVE_ID }}
           MN_SHAREPOINT_FOLDER_PATH: ${{ vars.MN_SHAREPOINT_FOLDER_PATH }}
+          # Delivery fan-out (18 Aug 2026, David F): blank/unset = the code
+          # default, organiser-only. Set the repo variable to "attendees" to
+          # restore invitee email + SharePoint grants in the next release.
+          MN_DELIVERY_RECIPIENTS: ${{ vars.MN_DELIVERY_RECIPIENTS }}
         run: |
           $lines = @()
           if (-not $env:MN_OPENAI_API_KEY -or -not $env:MN_PYANNOTE_API_KEY) {
@@ -179,6 +183,12 @@ jobs:
           $lines += "MN_SHAREPOINT_DRIVE_ID=$env:MN_SHAREPOINT_DRIVE_ID"
           if ($env:MN_SHAREPOINT_FOLDER_PATH) {
             $lines += "MN_SHAREPOINT_FOLDER_PATH=$env:MN_SHAREPOINT_FOLDER_PATH"
+          }
+          if ($env:MN_DELIVERY_RECIPIENTS) {
+            $lines += "MN_DELIVERY_RECIPIENTS=$env:MN_DELIVERY_RECIPIENTS"
+            Write-Host "Delivery recipients mode: $env:MN_DELIVERY_RECIPIENTS"
+          } else {
+            Write-Host "Delivery recipients mode: organizer (code default; invitee fan-out OFF)"
           }
           # Central Storage API wiring (IN-379 ops gap, hit live on the first
           # clean 2.0.8 install: without the URL the packaged backend runs in

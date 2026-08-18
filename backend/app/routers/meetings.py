@@ -52,7 +52,7 @@ from app.services.failure_reasons import (
     log_delivery_failure,
 )
 from app.services.meeting_export import refresh_meeting_export
-from app.services.recipient_policy import filter_deliverable
+from app.services.recipient_policy import attendee_fan_out_enabled, filter_deliverable
 from app.services.blob_delivery import kick_blob_delivery
 from app.services.sharepoint import (
     get_sharepoint_provider,
@@ -878,7 +878,9 @@ def _email_recipients(meeting: Meeting, recorder_email: str | None) -> list[str]
         if email and email not in recipients:
             recipients.append(email)
 
-    if meeting.graph_metadata and meeting.graph_metadata.attendees:
+    # Invitee fan-out is gated (organiser-only mode, 18 Aug 2026 — see
+    # Settings.delivery_recipients). The organiser and recorder below are not.
+    if attendee_fan_out_enabled() and meeting.graph_metadata and meeting.graph_metadata.attendees:
         for attendee in meeting.graph_metadata.attendees:
             _add(attendee.email)
 
@@ -923,11 +925,17 @@ def _sharepoint_recipients(meeting: Meeting) -> list[str]:
         if email and email not in recipients:
             recipients.append(email)
 
+    # Invitee fan-out is gated (organiser-only mode, 18 Aug 2026 — see
+    # Settings.delivery_recipients). Without it, no per-file grant is issued
+    # to anyone but the organiser: a grant alone would still surface the file
+    # in an invitee's "Shared with me".
+    fan_out = attendee_fan_out_enabled()
     if meeting.graph_metadata:
-        for attendee in meeting.graph_metadata.attendees:
-            _add(attendee.email)
+        if fan_out:
+            for attendee in meeting.graph_metadata.attendees:
+                _add(attendee.email)
         _add(meeting.graph_metadata.organizer_email)
-    else:
+    elif fan_out:
         for attendee in meeting.manual_attendees:
             _add(attendee.email)
 
