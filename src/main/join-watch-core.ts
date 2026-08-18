@@ -272,7 +272,8 @@ export interface JoinWatchEngine {
   ): void
   /** The prompt's "Record now" (J3): start with trigger `'prompt'`. */
   acceptPrompt(key: string): void
-  /** After a discarded false start (J4): back to `armed`, polling resumes. */
+  /** After a discarded false start (J4) or a start that never became a
+   *  recording: back to `armed`; polling resumes one interval later. */
   rearm(key: string): void
   /** A recording for `key` started (by us or otherwise): stop polling it. */
   noteRecordingStarted(key: string): void
@@ -543,7 +544,8 @@ export function createJoinWatchEngine(deps: JoinWatchDeps): JoinWatchEngine {
   }
 
   /** Enter `armed` from `tracked` (the −3 timer) or from `recording`
-   *  (`rearm` after a discarded false start): prompt timer + poll loop. */
+   *  (`rearm` after a discarded false start or a start that never became a
+   *  recording): prompt timer + poll loop. */
   const arm = (t: Tracked, via: 'timer' | 'sync' | 'rearm'): void => {
     if (disposed) return
     t.phase = 'armed'
@@ -552,8 +554,17 @@ export function createJoinWatchEngine(deps: JoinWatchDeps): JoinWatchEngine {
     schedulePrompt(t, watched)
     // Poll only when a watch exists; otherwise the prompt is the only path
     // to a recording (J2: beyond the cap, created too late, relay down).
-    if (watched) void pollOnce(t).catch(() => undefined)
-    else deps.log('info', '[join-watch] no active watch: prompt-only', { key: t.meeting.idempotencyKey })
+    if (!watched) {
+      deps.log('info', '[join-watch] no active watch: prompt-only', { key: t.meeting.idempotencyKey })
+      return
+    }
+    // A re-arm's first poll waits one interval instead of running now: the
+    // ack-timeout re-arm (15 s) can land while the renderer's createMeeting
+    // for the previous start is still in flight (30 s budget), and an
+    // immediate poll could re-issue a start on top of it. A fresh arm polls
+    // at once so an early joiner starts at exactly −3 (s1).
+    if (via === 'rearm') schedulePoll(t)
+    else void pollOnce(t).catch(() => undefined)
   }
 
   const track = (meeting: JoinWatchMeeting): void => {

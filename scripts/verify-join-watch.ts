@@ -462,8 +462,18 @@ async function scenario8_rearmAfterFalseStart(): Promise<void> {
   await f.advance(2 * MIN)
   assert.deepEqual(f.started, [{ key: 'h', trigger: 'join' }])
   f.http.history[H('h')].push(sig('recorder_left', T(-1)))
+  const callsBeforeRearm = f.http.calls
   f.engine.rearm('h')
   assert.equal(f.engine.getPhase('h'), 'armed')
+  // A re-arm's FIRST poll waits one interval: an ack-timeout re-arm (15 s)
+  // can land while the renderer's createMeeting for the previous start is
+  // still in flight (30 s budget), and an immediate poll could re-issue a
+  // start on top of it. Not a start-time change for a real join — the
+  // signal is read one tick later.
+  await f.advance(1)
+  assert.equal(f.http.calls, callsBeforeRearm, 'rearm does not poll immediately')
+  await f.advance(POLL)
+  assert.equal(f.http.calls, callsBeforeRearm + 1, 'the first post-rearm poll runs one interval later')
   await f.advance(6 * MIN)
   assert.equal(f.started.length, 1, 'no second start while the recorder is out')
   // Re-armed and idle at +2 → the J3 prompt applies to the fresh arm.
