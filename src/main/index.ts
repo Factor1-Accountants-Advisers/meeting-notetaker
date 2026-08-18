@@ -409,7 +409,7 @@ app.whenReady().then(async () => {
     // Same signed-in-email source as getSignedInEmail above. Reconciliation is
     // awaited by the Graph runtime so auto-record cannot inspect
     // hasActiveWatch while the discovery-time POST is still in flight.
-    onSyncCompleted: async (decisions) => {
+    onSyncCompleted: async (decisions, meta) => {
       try {
         await registrar.handleSyncDecisions(decisions, getCurrentUserEmail())
       } finally {
@@ -417,7 +417,9 @@ app.whenReady().then(async () => {
         // registrar has reconciled, so its hasActiveWatch answers are current
         // (spec J1) — and it is fed even if reconciliation threw: the prompt
         // is the fail-closed path for exactly the meetings a watch never covers.
-        if (autoStartTrigger === 'join') handleJoinWatchSyncDecisions(decisions, getCurrentUserEmail())
+        // `meta` (full snapshot vs delta) gates its vanish-disarm; the
+        // registrar's planner ignores it (absence is "unchanged" for it).
+        if (autoStartTrigger === 'join') handleJoinWatchSyncDecisions(decisions, getCurrentUserEmail(), meta)
       }
     }
   })

@@ -229,12 +229,15 @@ export function configureJoinWatch(opts: { hasActiveWatch: (hash: string) => boo
   logger().info('[join-watch] configured')
 }
 
-/** Every calendar sync's unfiltered decisions (the registrar's feed). */
+/** Every calendar sync's unfiltered decisions (the registrar's feed).
+ *  `meta.fullSnapshot` comes from the graph runtime: only a full snapshot
+ *  may disarm a meeting that vanished from the decisions (J2). */
 export function handleJoinWatchSyncDecisions(
   decisions: Parameters<JoinWatchEngine['handleSyncDecisions']>[0],
-  signedInEmail?: string
+  signedInEmail?: string,
+  meta?: Parameters<JoinWatchEngine['handleSyncDecisions']>[2]
 ): void {
-  engine?.handleSyncDecisions(decisions, signedInEmail)
+  engine?.handleSyncDecisions(decisions, signedInEmail, meta)
 }
 
 /** The prompt's "Record now" (J3), routed from the argv toast handler. */

@@ -254,9 +254,22 @@ export interface JoinWatchDeps {
   isHostOwned?: (decision: GraphEventDecision, signedInEmail?: string) => boolean
 }
 
+/** Whether a sync's decisions are a complete snapshot of the calendar
+ *  window or a delta (changed events only) — `GraphSyncMeta` in
+ *  `graph/runtime.ts`, mirrored here so the core stays import-light. */
+export interface JoinWatchSyncMeta {
+  fullSnapshot: boolean
+}
+
 export interface JoinWatchEngine {
-  /** Called after EVERY calendar sync with the unfiltered decision list. */
-  handleSyncDecisions(decisions: readonly GraphEventDecision[], signedInEmail?: string): void
+  /** Called after EVERY calendar sync with the unfiltered decision list.
+   *  `meta.fullSnapshot` (default true) gates the vanish-disarm: only a full
+   *  snapshot can prove a tracked meeting is gone. */
+  handleSyncDecisions(
+    decisions: readonly GraphEventDecision[],
+    signedInEmail?: string,
+    meta?: JoinWatchSyncMeta
+  ): void
   /** The prompt's "Record now" (J3): start with trigger `'prompt'`. */
   acceptPrompt(key: string): void
   /** After a discarded false start (J4): back to `armed`, polling resumes. */
@@ -629,7 +642,7 @@ export function createJoinWatchEngine(deps: JoinWatchDeps): JoinWatchEngine {
   }
 
   return {
-    handleSyncDecisions(decisions, signedInEmail) {
+    handleSyncDecisions(decisions, signedInEmail, meta = { fullSnapshot: true }) {
       if (disposed) return
       const seen = new Set<string>()
       for (const d of decisions) {
@@ -663,11 +676,16 @@ export function createJoinWatchEngine(deps: JoinWatchDeps): JoinWatchEngine {
           metadata: d.metadata
         })
       }
-      // Cancelled = tracked but absent from this sync while still ahead of its
-      // scheduled end. Past the end Graph's calendar window no longer returns
-      // the event at all, so absence is expected there and the end + 10 timer
-      // owns that disarm (a late join inside the window still counts).
+      // Cancelled = tracked but absent from a FULL-SNAPSHOT sync while still
+      // ahead of its scheduled end. A delta sync carries changed events only,
+      // so absence there means "unchanged", never "gone" — the same contract
+      // the call-watch registrar applies to this feed (rule 2 in
+      // `call-watch-registrar-core.ts` `planRegistrarActions`); the runtime
+      // tells us which kind this was (`GraphSyncMeta.fullSnapshot`). Past the
+      // end Graph's calendar window no longer returns the event at all, so
+      // absence is expected there and the end + 10 timer owns that disarm.
       // Recording meetings are never touched: the stop machine owns them.
+      if (!meta.fullSnapshot) return
       const nowMs = deps.now()
       for (const [key, t] of [...tracked]) {
         if (seen.has(key) || t.phase === 'recording') continue

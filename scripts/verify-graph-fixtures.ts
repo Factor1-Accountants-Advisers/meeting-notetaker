@@ -709,12 +709,20 @@ async function main(): Promise<void> {
     })
     let fullFetches = 0
     let deltaFetches = 0
+    // Consumers of onSyncCompleted must be told whether the sync was a full
+    // snapshot or a delta: the join watcher's vanish-disarm (a tracked meeting
+    // absent from the decisions = cancelled) is only sound on a full snapshot,
+    // because a delta carries changed events only.
+    const snapshotFlags: boolean[] = []
     const bootstrapRuntime = startGraphDetectionRuntime({
       statePath: bootstrapPath,
       getAccessToken: async () => 'redacted-token',
       getSignedInEmail: () => signedInEmail,
       logger: { info: () => undefined, warn: () => undefined },
       now: () => now,
+      onSyncCompleted: (_decisions, meta) => {
+        snapshotFlags.push(meta.fullSnapshot)
+      },
       clientFactory: () => ({
         fetchCalendarView: async () => {
           fullFetches += 1
@@ -734,6 +742,11 @@ async function main(): Promise<void> {
     await bootstrapRuntime.syncNow()
     assert.equal(fullFetches, 1, 'only the first successful process sync should force a full snapshot')
     assert.equal(deltaFetches, 1, 'later syncs should resume from the refreshed delta cursor')
+    assert.deepEqual(
+      snapshotFlags,
+      [true, false],
+      'onSyncCompleted meta.fullSnapshot must be true for the forced full snapshot and false for the delta sync'
+    )
 
     // Discovery reconciliation owns watcher registration and must finish
     // before an eligible meeting can start recording. Otherwise the recorder

@@ -584,9 +584,20 @@ async function scenario15_windowCloseAndVanish(): Promise<void> {
 
   const g = makeFake(T(-3))
   syncOne(g, 'd2', 0, 60)
-  g.engine.handleSyncDecisions([])
-  assert.deepEqual(g.disarmed, ['d2'], 'vanished before end = cancelled → disarm')
+  // A DELTA sync carries changed events only: absence means "unchanged",
+  // never "gone" (the registrar's contract for the same feed) — so the
+  // vanish-disarm must not run on it.
+  g.engine.handleSyncDecisions([], undefined, { fullSnapshot: false })
+  assert.deepEqual(g.disarmed, [], 'absent from a DELTA sync is not cancellation')
+  assert.equal(g.engine.getPhase('d2'), 'armed')
+  g.engine.handleSyncDecisions([], undefined, { fullSnapshot: true })
+  assert.deepEqual(g.disarmed, ['d2'], 'vanished from a FULL snapshot before end = cancelled → disarm')
   assert.equal(g.pending(), 0)
+  // Default meta is a full snapshot (today every sync the watcher sees is one).
+  const g2 = makeFake(T(-3))
+  syncOne(g2, 'd2b', 0, 60)
+  g2.engine.handleSyncDecisions([])
+  assert.deepEqual(g2.disarmed, ['d2b'], 'meta defaults to fullSnapshot: true')
 
   // Already-tracked and past scheduled end: Graph's window no longer returns
   // it, so absence is not cancellation — the end+10 timer owns that disarm.
@@ -648,7 +659,7 @@ async function scenario15_windowCloseAndVanish(): Promise<void> {
   j.engine.handleSyncDecisions([])
   assert.equal(j.engine.getPhase('d5'), 'recording')
   assert.deepEqual(j.disarmed, [])
-  for (const fake of [f, g, h, h2, h3, i, j]) assertNoPii(fake)
+  for (const fake of [f, g, g2, h, h2, h3, i, j]) assertNoPii(fake)
 }
 
 /** s16 — reschedule re-tracks from scratch; a same-time re-sync is a no-op (E4-style). */
