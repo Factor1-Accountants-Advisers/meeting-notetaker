@@ -175,14 +175,17 @@ interface Fake {
   engine: JoinWatchEngine
   now: () => number
   advance: (ms: number) => Promise<void>
-  http: { history: Record<string, CallSignal[]>; fail: boolean; throws: boolean; calls: number }
+  /** `latencyMs > 0` resolves fetches via a FAKE timer instead of a microtask,
+   *  so "the first poll has not answered yet" is a reachable state. */
+  http: { history: Record<string, CallSignal[]>; fail: boolean; throws: boolean; latencyMs: number; calls: number }
   started: Array<{ key: string; trigger: string }>
   prompted: string[]
   disarmed: string[]
   recordingActive: { value: boolean }
   promptedStore: Set<string>
-  /** Effects that throw when set — the engine must survive every one (safe()). */
-  effects: { throwStart: boolean; throwPrompt: boolean; throwDisarm: boolean }
+  /** Effects that throw when set — the engine must survive every one (safe()).
+   *  `rejectNextStart` makes the next `startRecording` return false once. */
+  effects: { throwStart: boolean; throwPrompt: boolean; throwDisarm: boolean; rejectNextStart: boolean }
   /** Every log call, serialised — asserted free of URLs and emails. */
   logs: string[]
   /** Timers still scheduled — asserted zero after disarm/dispose (no leaks). */
@@ -196,27 +199,41 @@ function makeFake(nowUtc: string, hasWatch: (hash: string) => boolean = () => tr
   let nowMs = Date.parse(nowUtc)
   const timers: Array<{ at: number; fn: () => void; id: number }> = []
   let nextId = 1
-  const http = { history: {} as Record<string, CallSignal[]>, fail: false, throws: false, calls: 0 }
+  const http = { history: {} as Record<string, CallSignal[]>, fail: false, throws: false, latencyMs: 0, calls: 0 }
   const started: Fake['started'] = []
   const prompted: string[] = []
   const disarmed: string[] = []
   const recordingActive = { value: false }
   const promptedStore = new Set<string>()
-  const effects = { throwStart: false, throwPrompt: false, throwDisarm: false }
+  const effects = { throwStart: false, throwPrompt: false, throwDisarm: false, rejectNextStart: false }
   const logs: string[] = []
+  const timerHost: JoinWatchDeps['timers'] = {
+    setTimeout: (fn, ms) => { const id = nextId++; timers.push({ at: nowMs + ms, fn, id }); return id },
+    clearTimeout: (h) => { const i = timers.findIndex((t) => t.id === h); if (i >= 0) timers.splice(i, 1) }
+  }
+  const answer = (hash: string): CallSignal[] | null => {
+    if (http.throws) throw new Error('relay exploded')
+    if (http.fail) return null
+    return http.history[hash] ?? []
+  }
   const deps: JoinWatchDeps = {
     hasActiveWatch: hasWatch,
     joinUrlHash: (url) => `hash(${url})`,
-    fetchSignals: async (hash) => {
+    fetchSignals: (hash) => {
       http.calls += 1
-      if (http.throws) throw new Error('relay exploded')
-      if (http.fail) return null
-      return http.history[hash] ?? []
+      if (http.latencyMs <= 0) return Promise.resolve().then(() => answer(hash))
+      return new Promise((resolve, reject) => {
+        timerHost.setTimeout(() => {
+          try { resolve(answer(hash)) } catch (e) { reject(e) }
+        }, http.latencyMs)
+      })
     },
     isRecordingActive: () => recordingActive.value,
     startRecording: (m, trigger) => {
       started.push({ key: m.idempotencyKey, trigger })
       if (effects.throwStart) throw new Error('start effect threw')
+      if (effects.rejectNextStart) { effects.rejectNextStart = false; return false }
+      return true
     },
     showPrompt: (m) => {
       prompted.push(m.idempotencyKey)
@@ -227,10 +244,7 @@ function makeFake(nowUtc: string, hasWatch: (hash: string) => boolean = () => tr
       if (effects.throwDisarm) throw new Error('disarm effect threw')
     },
     promptedKeys: { has: (k) => promptedStore.has(k), add: (k) => { promptedStore.add(k) } },
-    timers: {
-      setTimeout: (fn, ms) => { const id = nextId++; timers.push({ at: nowMs + ms, fn, id }); return id },
-      clearTimeout: (h) => { const i = timers.findIndex((t) => t.id === h); if (i >= 0) timers.splice(i, 1) }
-    },
+    timers: timerHost,
     now: () => nowMs,
     log: (level, message, context) => { logs.push(`${level} ${message} ${JSON.stringify(context ?? {})}`) }
   }
@@ -273,6 +287,7 @@ function assertNoPii(f: Fake): void {
     assert.ok(!/https?:\/\//.test(line), `log must not carry a URL: ${line}`)
     assert.ok(!/@/.test(line), `log must not carry an email: ${line}`)
     assert.ok(!/meetup-join/.test(line), `log must not carry a join URL fragment: ${line}`)
+    assert.ok(!/Meeting \w/.test(line), `log must not carry a title: ${line}`)
   }
 }
 
@@ -399,6 +414,7 @@ async function scenario7_promptSuppressionAndPersistence(): Promise<void> {
   assert.deepEqual(f.started, [], 'a join never interrupts an active recording')
   assert.deepEqual(f.prompted, [], 'prompt suppressed while a recording is active')
   assert.equal(f.engine.getPhase('g'), 'armed', 'still armed: polling continues')
+  assert.equal(f.logs.filter((l) => /start refused/.test(l)).length, 1, 'refusal logged once per streak, not per poll')
   // The other recording ends while the recorder is still in the call → start on the next poll.
   f.recordingActive.value = false
   await f.advance(POLL)
@@ -411,14 +427,20 @@ async function scenario7_promptSuppressionAndPersistence(): Promise<void> {
   await g2.advance(5 * MIN)
   assert.deepEqual(g2.prompted, [], 'persisted prompted key suppresses the toast across restart')
 
-  // First-time arm after +2 (app started mid-meeting, never prompted) → prompt now, once.
+  // First-time arm after +2 (app started mid-meeting, never prompted) → prompt
+  // once — but a WATCHED meeting waits one poll interval so an in-call
+  // recorder starts instead of seeing a flash toast (s20 pins the in-call case).
   const g3 = makeFake(T(3))
   syncOne(g3, 'g3', 0, 60)
   await g3.advance(1)
-  assert.deepEqual(g3.prompted, ['g3'], 'late arm past +2 prompts immediately')
+  assert.deepEqual(g3.prompted, [], 'watched late arm defers the prompt past the first poll')
+  await g3.advance(POLL)
+  assert.deepEqual(g3.prompted, ['g3'], 'late arm past +2 prompts after the first poll')
   await g3.advance(10 * MIN)
   assert.deepEqual(g3.prompted, ['g3'])
   assertNoPii(f)
+  assertNoPii(g2)
+  assertNoPii(g3)
 }
 
 /** s8 — rearm after a discarded false start → later IN starts a fresh recording (J4). */
@@ -463,6 +485,13 @@ async function scenario12_overlappingMeetings(): Promise<void> {
   await f.advance(4 * MIN)
   assert.deepEqual(f.prompted, [], 'y prompt suppressed while x records')
   assert.equal(f.started.length, 1)
+  // Suppression is final for this process but does not consume the once-only
+  // key: y stays armed, un-prompted, and a restart inside the window would ask.
+  f.recordingActive.value = false
+  await f.advance(10 * MIN)
+  assert.deepEqual(f.prompted, [], 'a suppressed prompt is not re-fired later')
+  assert.equal(f.engine.getPhase('y'), 'armed')
+  assert.ok(!f.promptedStore.has('y'), 'suppression does not consume the once-only key')
   assertNoPii(f)
 }
 
@@ -519,6 +548,8 @@ async function scenario14_nonOrganizerIgnored(): Promise<void> {
   d4.idempotencyKey = undefined
   g.engine.handleSyncDecisions([d4])
   assert.equal(g.engine.getPhase('evt-q4'), 'armed')
+  assertNoPii(f)
+  assertNoPii(g)
 }
 
 /** s15 — disarm at end + 10 min; a vanished decision (cancelled) disarms; a past-end vanish waits for the window (J2). */
@@ -566,7 +597,7 @@ async function scenario15_windowCloseAndVanish(): Promise<void> {
   j.engine.handleSyncDecisions([])
   assert.equal(j.engine.getPhase('d5'), 'recording')
   assert.deepEqual(j.disarmed, [])
-  assertNoPii(f)
+  for (const fake of [f, g, h, i, j]) assertNoPii(fake)
 }
 
 /** s16 — reschedule re-tracks from scratch; a same-time re-sync is a no-op (E4-style). */
@@ -585,6 +616,29 @@ async function scenario16_rescheduleRetracks(): Promise<void> {
   f.http.history[H('k')] = [sig('recorder_rejoined', T(28))]
   await f.advance(POLL)
   assert.deepEqual(f.started, [{ key: 'k', trigger: 'join' }])
+  assertNoPii(f)
+}
+
+/** s16b — a same-key reschedule while RECORDING (organiser extends the meeting
+ *  mid-call) must not disarm or re-arm: refresh the payload and re-point only
+ *  the end + 10 GC timer. */
+async function scenario16b_rescheduleWhileRecording(): Promise<void> {
+  const f = makeFake(T(-3))
+  f.http.history[H('k')] = [sig('recorder_rejoined', T(-2))]
+  syncOne(f, 'k', 0, 60)
+  await f.advance(1)
+  assert.equal(f.engine.getPhase('k'), 'recording')
+  syncOne(f, 'k', 0, 75)
+  assert.deepEqual(f.disarmed, [], 'extending a recording meeting never disarms')
+  assert.equal(f.started.length, 1, 'never re-armed / re-started')
+  assert.equal(f.engine.getPhase('k'), 'recording')
+  await f.advance(74 * MIN)
+  assert.equal(f.engine.getPhase('k'), 'recording', 'still tracked at OLD end + 11')
+  assert.deepEqual(f.disarmed, [])
+  await f.advance(15 * MIN)
+  assert.equal(f.engine.getPhase('k'), undefined, 'GC fired at the NEW end + 10')
+  assert.deepEqual(f.disarmed, ['k'])
+  assert.equal(f.pending(), 0)
   assertNoPii(f)
 }
 
@@ -608,6 +662,7 @@ async function scenario17_noteRecordingStarted(): Promise<void> {
   assert.deepEqual(g.prompted, [])
   g.engine.noteRecordingStarted('unknown')
   assertNoPii(f)
+  assertNoPii(g)
 }
 
 /** s18 — dispose clears everything: no timers, no effects afterwards. */
@@ -631,7 +686,9 @@ async function scenario18_dispose(): Promise<void> {
   assert.equal(f.pending(), 0)
 }
 
-/** s19 — throwing effects never escape the engine; lifecycle continues (house rule). */
+/** s19 — throwing effects never escape the engine; lifecycle continues (house rule).
+ *  A start effect that throws was never accepted: the meeting stays armed and
+ *  the next poll retries. Logs name the effect and the error class only. */
 async function scenario19_effectsNeverThrow(): Promise<void> {
   const f = makeFake(T(-3))
   f.effects.throwStart = true
@@ -644,15 +701,98 @@ async function scenario19_effectsNeverThrow(): Promise<void> {
   ])
   await f.advance(1)
   assert.deepEqual(f.started, [{ key: 't', trigger: 'join' }])
-  assert.equal(f.engine.getPhase('t'), 'recording', 'phase advanced even though the start effect threw')
+  assert.equal(f.engine.getPhase('t'), 'armed', 'a throwing start was not accepted: stays armed')
+  f.effects.throwStart = false
+  await f.advance(POLL)
+  assert.deepEqual(f.started, [{ key: 't', trigger: 'join' }, { key: 't', trigger: 'join' }], 'next poll retries')
+  assert.equal(f.engine.getPhase('t'), 'recording')
   await f.advance(5 * MIN)
   assert.deepEqual(f.prompted, ['t2'])
   assert.equal(f.engine.getPhase('t2'), 'armed')
   f.engine.handleSyncDecisions([])
   assert.deepEqual(f.disarmed, ['t2'])
   assert.equal(f.engine.getPhase('t2'), undefined, 'forgotten even though onDisarm threw')
-  assert.ok(f.logs.some((l) => l.startsWith('warn') && /effect threw/.test(l)), 'throwing effects are logged')
+  const threw = f.logs.filter((l) => l.startsWith('warn') && /effect threw/.test(l))
+  for (const label of ['startRecording', 'showPrompt', 'onDisarm']) {
+    assert.ok(threw.some((l) => l.includes(`"effect":"${label}"`) && l.includes('"name":"Error"')), `${label} throw logged with effect + name`)
+  }
+  assert.ok(!f.logs.some((l) => /start effect threw|prompt effect threw|disarm effect threw/.test(l)), 'exception messages never reach the log')
   assertNoPii(f)
+}
+
+/** s20 — late arm past +2 while ALREADY in call: the first poll must win, not a
+ *  flash prompt. With a watch the prompt waits one poll interval. */
+async function scenario20_lateArmInCallNoFlashPrompt(): Promise<void> {
+  const f = makeFake(T(3))
+  f.http.latencyMs = 500
+  f.http.history[H('l')] = [sig('recorder_rejoined', T(0))]
+  syncOne(f, 'l', 0, 60)
+  await f.advance(1000)
+  assert.deepEqual(f.prompted, [], 'no flash prompt before the first poll answers')
+  assert.deepEqual(f.started, [{ key: 'l', trigger: 'join' }])
+  await f.advance(POLL)
+  assert.deepEqual(f.prompted, [], 'prompt timer was cleared by the start')
+  assertNoPii(f)
+
+  // s20b — UNWATCHED late arm keeps the immediate prompt (there is no poll to wait for).
+  const g = makeFake(T(3), () => false)
+  syncOne(g, 'l2', 0, 60)
+  await g.advance(1)
+  assert.deepEqual(g.prompted, ['l2'], 'unwatched late arm prompts immediately')
+  assert.equal(g.http.calls, 0)
+  assertNoPii(g)
+}
+
+/** s21 — a watch registered AFTER arming is picked up on the next same-times sync. */
+async function scenario21_lateWatchPickup(): Promise<void> {
+  let watch = false
+  const f = makeFake(T(-3), () => watch)
+  syncOne(f, 'w', 0, 60)
+  await f.advance(1 * MIN)
+  assert.equal(f.engine.getPhase('w'), 'armed')
+  assert.equal(f.http.calls, 0, 'prompt-only while unwatched')
+  watch = true
+  syncOne(f, 'w', 0, 60)
+  await f.advance(1)
+  assert.equal(f.http.calls, 1, 'same-times re-sync starts polling once a watch exists')
+  await f.advance(3 * POLL)
+  assert.ok(f.http.calls >= 3, 'and keeps polling')
+  syncOne(f, 'w', 0, 60)
+  await f.advance(1)
+  const calls = f.http.calls
+  await f.advance(POLL)
+  assert.ok(f.http.calls - calls <= 2, 're-sync while already polling does not double the loop')
+  f.http.history[H('w')] = [sig('recorder_rejoined', T(-1))]
+  await f.advance(POLL)
+  assert.deepEqual(f.started, [{ key: 'w', trigger: 'join' }])
+  assertNoPii(f)
+}
+
+/** s22 — startRecording returning false = not accepted: stay armed, next poll retries. */
+async function scenario22_startNotAccepted(): Promise<void> {
+  const f = makeFake(T(-3))
+  f.effects.rejectNextStart = true
+  f.http.history[H('r')] = [sig('recorder_rejoined', T(-2))]
+  syncOne(f, 'r', 0, 60)
+  await f.advance(1)
+  assert.deepEqual(f.started, [{ key: 'r', trigger: 'join' }])
+  assert.equal(f.engine.getPhase('r'), 'armed', 'a refused start does not flip to recording')
+  assert.ok(f.logs.some((l) => /start not accepted/.test(l)))
+  await f.advance(POLL)
+  assert.deepEqual(f.started, [{ key: 'r', trigger: 'join' }, { key: 'r', trigger: 'join' }], 'next poll retried')
+  assert.equal(f.engine.getPhase('r'), 'recording')
+  // Prompt path too: Record now not accepted → still armed, can be accepted again.
+  const g = makeFake(T(-5), () => false)
+  g.effects.rejectNextStart = true
+  syncOne(g, 'r2', 0, 60)
+  await g.advance(8 * MIN)
+  g.engine.acceptPrompt('r2')
+  assert.equal(g.engine.getPhase('r2'), 'armed')
+  g.engine.acceptPrompt('r2')
+  assert.equal(g.engine.getPhase('r2'), 'recording')
+  assert.equal(g.started.length, 2)
+  assertNoPii(f)
+  assertNoPii(g)
 }
 
 void (async () => {
@@ -670,9 +810,13 @@ void (async () => {
   await scenario14_nonOrganizerIgnored()
   await scenario15_windowCloseAndVanish()
   await scenario16_rescheduleRetracks()
+  await scenario16b_rescheduleWhileRecording()
   await scenario17_noteRecordingStarted()
   await scenario18_dispose()
   await scenario19_effectsNeverThrow()
+  await scenario20_lateArmInCallNoFlashPrompt()
+  await scenario21_lateWatchPickup()
+  await scenario22_startNotAccepted()
 
   // Pin the constants the live-smoke expectations (L1–L7) are written against.
   assert.equal(JOIN_WATCH_LEAD_MS, 3 * MIN)

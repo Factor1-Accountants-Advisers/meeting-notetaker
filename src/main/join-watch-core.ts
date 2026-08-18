@@ -190,7 +190,7 @@ export interface JoinWatchMeeting {
   startUtc: string
   endUtc: string
   title: string
-  metadata: unknown
+  metadata: GraphEventDecision['metadata']
 }
 
 /**
@@ -218,7 +218,10 @@ export interface JoinWatchDeps {
   fetchSignals: (joinUrlHash: string) => Promise<CallSignal[] | null>
   /** True while ANY recording is active or a start is pending. */
   isRecordingActive: () => boolean
-  startRecording: (meeting: JoinWatchMeeting, trigger: 'join' | 'prompt') => void
+  /** Issue the start request. Return true once it is ACCEPTED (queued or
+   *  sent); false — or a throw — means nothing started: the engine stays
+   *  armed and the next poll / prompt tries again. */
+  startRecording: (meeting: JoinWatchMeeting, trigger: Exclude<RecordingTrigger, 'calendar'>) => boolean
   showPrompt: (meeting: JoinWatchMeeting) => void
   onDisarm: (meeting: JoinWatchMeeting) => void
   /** Persisted "prompted for meeting X" (survives restart, J3). */
@@ -304,15 +307,16 @@ export function createJoinWatchEngine(deps: JoinWatchDeps): JoinWatchEngine {
     for (const slot of ALL_TIMERS) clear(t, slot)
   }
 
-  /** Wrap every injected effect: catch, log (message only — never the
-   *  effect's arguments), continue. The lifecycle must outlive any effect. */
+  /** Wrap every injected effect: catch, log (label + error class only — an
+   *  exception message could carry anything, so it never reaches the log),
+   *  continue. The lifecycle must outlive any effect. */
   const safe = (label: string, fn: () => void): void => {
     try {
       fn()
     } catch (err) {
       deps.log('warn', '[join-watch] effect threw', {
         effect: label,
-        message: err instanceof Error ? err.message : String(err)
+        name: err instanceof Error ? err.name : typeof err
       })
     }
   }
@@ -350,9 +354,10 @@ export function createJoinWatchEngine(deps: JoinWatchDeps): JoinWatchEngine {
     safe('onDisarm', () => deps.onDisarm(t.meeting))
   }
 
-  /** J1/J3 start. Refused (not queued) while anything records: the meeting
-   *  stays armed and the next poll / prompt decides again. */
-  const start = (t: Tracked, trigger: 'join' | 'prompt'): void => {
+  /** J1/J3 start. Refused (not queued) while anything records, and not
+   *  flipped to `recording` unless the start request is ACCEPTED: in both
+   *  cases the meeting stays armed and the next poll / prompt decides again. */
+  const start = (t: Tracked, trigger: Exclude<RecordingTrigger, 'calendar'>): void => {
     if (t.phase !== 'armed') return
     if (recordingActive()) {
       if (!t.refusalLogged) {
@@ -364,14 +369,23 @@ export function createJoinWatchEngine(deps: JoinWatchDeps): JoinWatchEngine {
       }
       return
     }
+    deps.log('info', '[join-watch] starting recording', { key: t.meeting.idempotencyKey, trigger })
+    let accepted = false
+    safe('startRecording', () => {
+      accepted = deps.startRecording(t.meeting, trigger) === true
+    })
+    if (!accepted) {
+      // Nothing started (renderer busy / not ready / effect threw): stay
+      // armed so the loop retries; the prompt window is untouched.
+      deps.log('warn', '[join-watch] start not accepted', { key: t.meeting.idempotencyKey, trigger })
+      return
+    }
     t.phase = 'recording'
     t.refusalLogged = false
     // The stop machine owns the meeting from here; the disarm timer stays as
     // the map's garbage collector (end + disarmAfterEndMs).
     clear(t, 'pollTimer')
     clear(t, 'promptTimer')
-    deps.log('info', '[join-watch] starting recording', { key: t.meeting.idempotencyKey, trigger })
-    safe('startRecording', () => deps.startRecording(t.meeting, trigger))
   }
 
   const schedulePoll = (t: Tracked): void => {
@@ -379,56 +393,65 @@ export function createJoinWatchEngine(deps: JoinWatchDeps): JoinWatchEngine {
     if (disposed || t.phase !== 'armed') return
     t.pollTimer = deps.timers.setTimeout(() => {
       t.pollTimer = null
-      void pollOnce(t)
+      void pollOnce(t).catch(() => undefined)
     }, pollIntervalMs)
   }
 
   /**
    * J5 poll tick: read the watch's FULL history, derive the recorder's
    * position (J2 "derived state, not drained events"), act, reschedule.
-   * Never throws; never rejects — a failed fetch is "unknown", and unknown is
-   * not in-call, so polling simply continues until the window closes.
+   * A failed fetch is "unknown", and unknown is not in-call, so polling
+   * simply continues until the window closes. The `finally` keeps the loop
+   * alive whatever the body did (call sites also `.catch(() => undefined)`,
+   * mirroring `call-signals-core.ts`).
    */
   const pollOnce = async (t: Tracked): Promise<void> => {
     if (disposed || t.phase !== 'armed' || t.polling) return
     t.polling = true
-    let signals: CallSignal[] | null = null
     try {
-      signals = await deps.fetchSignals(t.meeting.joinUrlHash)
-    } catch {
-      signals = null
+      let signals: CallSignal[] | null = null
+      try {
+        signals = await deps.fetchSignals(t.meeting.joinUrlHash)
+      } catch {
+        signals = null
+      }
+      // Disarmed, disposed, started manually, or rescheduled while in flight.
+      if (disposed || t.phase !== 'armed') return
+      if (signals === null) {
+        deps.log('warn', '[join-watch] signal fetch failed', { key: t.meeting.idempotencyKey })
+        return
+      }
+      const presence = deriveCallPresence(signals, t.meeting.startUtc)
+      if (presence.endedAtOrAfterStart) {
+        // The meeting is over (J2): a call_ended at/after scheduled start with
+        // no later recorder IN. A pre-start call_ended never reaches here.
+        disarm(t, 'call_ended')
+        return
+      }
+      if (presence.inCall) start(t, 'join')
+      else t.refusalLogged = false
+    } finally {
+      t.polling = false
+      if (!disposed && t.phase === 'armed') schedulePoll(t)
     }
-    t.polling = false
-    // Disarmed, disposed, started manually, or rescheduled while in flight.
-    if (disposed || t.phase !== 'armed') return
-    if (signals === null) {
-      deps.log('warn', '[join-watch] signal fetch failed', { key: t.meeting.idempotencyKey })
-      schedulePoll(t)
-      return
-    }
-    const presence = deriveCallPresence(signals, t.meeting.startUtc)
-    if (presence.endedAtOrAfterStart) {
-      // The meeting is over (J2): a call_ended at/after scheduled start with
-      // no later recorder IN. A pre-start call_ended never reaches here.
-      disarm(t, 'call_ended')
-      return
-    }
-    if (presence.inCall) start(t, 'join')
-    else t.refusalLogged = false
-    if (t.phase === 'armed') schedulePoll(t)
   }
 
   /**
-   * J3 prompt timer: once, at `start + promptOffsetMs` (immediately if that
-   * is already past — an app that wakes mid-meeting still asks), and only if
-   * the meeting is still armed, nothing is recording, and it was never
-   * prompted before (persisted, so a restart at +3 does not re-toast).
+   * J3 prompt timer: once, at `start + promptOffsetMs`, and only if the
+   * meeting is still armed, nothing is recording, and it was never prompted
+   * before (persisted, so a restart at +3 does not re-toast). If that moment
+   * is already past (an app that wakes mid-meeting), a watched meeting waits
+   * one poll interval first — an early joiner still in the call must START
+   * on the first poll, not see a flash toast — while an unwatched meeting
+   * asks at once (there is no poll to wait for). Suppression while another
+   * recording is live does NOT consume the once-only key: the toast is
+   * skipped for this process, and a restart inside the window would ask.
    */
-  const schedulePrompt = (t: Tracked): void => {
+  const schedulePrompt = (t: Tracked, watched: boolean): void => {
     clear(t, 'promptTimer')
     if (alreadyPrompted(t.meeting.idempotencyKey)) return
     const promptAt = Date.parse(t.meeting.startUtc) + promptOffsetMs
-    const untilPrompt = Math.max(0, promptAt - deps.now())
+    const untilPrompt = Math.max(promptAt - deps.now(), watched ? pollIntervalMs : 0)
     t.promptTimer = deps.timers.setTimeout(() => {
       t.promptTimer = null
       if (disposed || t.phase !== 'armed') return
@@ -452,19 +475,47 @@ export function createJoinWatchEngine(deps: JoinWatchDeps): JoinWatchEngine {
     t.phase = 'armed'
     const watched = hasWatch(t)
     deps.log('info', '[join-watch] armed', { key: t.meeting.idempotencyKey, via, hasWatch: watched })
-    schedulePrompt(t)
+    schedulePrompt(t, watched)
     // Poll only when a watch exists; otherwise the prompt is the only path
     // to a recording (J2: beyond the cap, created too late, relay down).
-    if (watched) void pollOnce(t)
+    if (watched) void pollOnce(t).catch(() => undefined)
     else deps.log('info', '[join-watch] no active watch: prompt-only', { key: t.meeting.idempotencyKey })
   }
 
   const track = (meeting: JoinWatchMeeting): void => {
     const existing = tracked.get(meeting.idempotencyKey)
     if (existing) {
+      if (existing.phase === 'recording') {
+        // The stop machine owns a recording meeting; a reschedule mid-call
+        // (the organiser extends it) must neither disarm nor re-arm. Refresh
+        // the payload and re-point ONLY the end + 10 GC timer.
+        const sameEnd = existing.meeting.endUtc === meeting.endUtc
+        existing.meeting = meeting
+        if (!sameEnd) {
+          const newEndMs = Date.parse(meeting.endUtc)
+          if (Number.isFinite(newEndMs)) {
+            clear(existing, 'disarmTimer')
+            existing.disarmTimer = deps.timers.setTimeout(() => {
+              existing.disarmTimer = null
+              disarm(existing, 'window_closed')
+            }, Math.max(0, newEndMs + disarmAfterEndMs - deps.now()))
+            deps.log('info', '[join-watch] recording meeting rescheduled; GC re-pointed', {
+              key: meeting.idempotencyKey
+            })
+          }
+        }
+        return
+      }
       if (existing.meeting.startUtc === meeting.startUtc && existing.meeting.endUtc === meeting.endUtc) {
         // Same slot: refresh the payload (title, metadata) and keep the timers.
         existing.meeting = meeting
+        // Late-watch pickup: armed as prompt-only because the registrar had no
+        // watch yet (beyond the cap, created late); if one exists now, start
+        // the poll loop — but never a second loop beside a live one.
+        if (existing.phase === 'armed' && !existing.polling && existing.pollTimer === null && hasWatch(existing)) {
+          deps.log('info', '[join-watch] watch appeared after arming; polling', { key: meeting.idempotencyKey })
+          void pollOnce(existing).catch(() => undefined)
+        }
         return
       }
       // Reschedule (E4-style): the old timers are wrong now → re-track from scratch.
