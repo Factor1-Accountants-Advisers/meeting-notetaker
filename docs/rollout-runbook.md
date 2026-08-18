@@ -113,3 +113,44 @@ keys without reinstalling, drop an override file on each machine:
 3. After the next CI release ships with the new keys bundled, the
    ProgramData overrides can be removed (optional — they'll keep
    overriding harmlessly).
+
+## Auto-record trigger (v2.0.31+)
+
+- **What changed**: a scheduled Teams meeting's recording now starts on
+  your *join* to its Teams call, not at calendar start time. The ±3 min
+  scheduling lead is unchanged; if you join late, recording still starts
+  as soon as you're in the call, however long after the scheduled start
+  that is.
+- **The prompt**: if you haven't joined by start + 2 min, a toast offers
+  **Record now**. It shows once per meeting, auto-dismisses after 60 s
+  with no action taken, and is suppressed entirely while a recording is
+  already in progress.
+- **False-start rule**: a join-triggered recording that ends via the
+  leave-grace window before start + 2 min, and lasted under 5 minutes, is
+  discarded — no email is sent, and the meeting re-arms so a later real
+  join still records normally. The paused toast's **Upload now** action
+  always delivers regardless of this rule, so a deliberate save is never
+  silently dropped.
+- **Kill switch**: set `MN_AUTO_START_TRIGGER=calendar` in
+  `%PROGRAMDATA%\Factor1\MeetingNotetaker\backend.env` and restart the
+  app to restore the legacy start-time trigger on that one machine.
+  Fleet-wide, set the `MN_AUTO_START_TRIGGER` repo variable to `calendar`
+  and cut a new release. The setting is read from `backend.env`, **not**
+  `resources\.env.production` — auto-update overwrites everything under
+  `resources\` on every install, so a `resources\.env.production` edit
+  would not survive the next update.
+- **Log lines to look for**: `[app] auto-start trigger`,
+  `[join-watch] armed`, `[join-watch] starting recording`,
+  `[join-watch] prompting`, `[recording] false start discarded; meeting
+  re-armed`, `[join-watch] start failed before ack; re-arming`.
+- **Known limits / comms**:
+  - Hybrid/in-room meetings that still carry a Teams link now need one
+    click on the "Record now" prompt — nothing starts automatically
+    unless you actually join the Teams call.
+  - **Joining from your phone with your laptop open elsewhere still
+    records the laptop** — the trigger only knows the laptop's own call
+    membership, not which device the user is actually speaking from
+    (F1; a local device check is the next feature, not yet built).
+  - A watch registered after a call has already started is blind to that
+    call's join signal — the user only gets the start+2 min prompt, not
+    an automatic start, for that meeting.

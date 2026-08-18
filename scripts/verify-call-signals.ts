@@ -13,6 +13,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 // Imports the PURE CORE only. `call-signals.ts` (the runtime half) pulls in
 // auth-msal/electron-log, which `require("electron")` at module scope; the
 // bundle-purity check at the foot of this file fails if that ever creeps back.
@@ -1818,6 +1819,21 @@ function assertBundleIsRuntimeFree(): void {
   }
 }
 
+/**
+ * J5 cadence passthrough: `armCallSignals` (the runtime half, excluded from
+ * this harness's bundle — see assertBundleIsRuntimeFree) must forward the
+ * injected pollIntervalMs into the poller it composes, not drop it on a
+ * refactor. Source-text guard since the runtime file isn't otherwise
+ * exercised here.
+ */
+function assertPollIntervalPassthrough(): void {
+  const runtimeSource = readFileSync(join(process.cwd(), 'src', 'main', 'call-signals.ts'), 'utf8')
+  assert.ok(
+    runtimeSource.includes('pollIntervalMs: deps.pollIntervalMs'),
+    'armCallSignals must forward deps.pollIntervalMs to createCallSignalPoller (J5 cadence passthrough)'
+  )
+}
+
 async function main(): Promise<void> {
   // 1-9: the pure machine (spec D5/D6/D9).
   scenarioLeaveThenGraceExpiry()
@@ -1854,6 +1870,7 @@ async function main(): Promise<void> {
   await scenarioAttachStopPreservesRegistrarWatch()
 
   assertBundleIsRuntimeFree()
+  assertPollIntervalPassthrough()
 
   // Pin the constants the live-smoke expectations are written against.
   assert.equal(CALL_SIGNAL_GRACE_MS, 60_000, 'the grace window must stay pinned at 60s')

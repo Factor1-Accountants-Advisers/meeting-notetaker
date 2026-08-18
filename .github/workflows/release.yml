@@ -162,6 +162,12 @@ jobs:
           # default, organiser-only. Set the repo variable to "attendees" to
           # restore invitee email + SharePoint grants in the next release.
           MN_DELIVERY_RECIPIENTS: ${{ vars.MN_DELIVERY_RECIPIENTS }}
+          # Auto-record trigger (18 Aug 2026 join-trigger spec, J6): blank/unset =
+          # the code default, "join" (start when the user is in the Teams call).
+          # Set the repo variable to "calendar" to restore the legacy start-time
+          # trigger fleet-wide in the next release. Read by the DESKTOP from the
+          # bundled backend.env; the %PROGRAMDATA% copy overrides per machine.
+          MN_AUTO_START_TRIGGER: ${{ vars.MN_AUTO_START_TRIGGER }}
         run: |
           $lines = @()
           if (-not $env:MN_OPENAI_API_KEY -or -not $env:MN_PYANNOTE_API_KEY) {
@@ -189,6 +195,12 @@ jobs:
             Write-Host "Delivery recipients mode: $env:MN_DELIVERY_RECIPIENTS"
           } else {
             Write-Host "Delivery recipients mode: organizer (code default; invitee fan-out OFF)"
+          }
+          if ($env:MN_AUTO_START_TRIGGER) {
+            $lines += "MN_AUTO_START_TRIGGER=$env:MN_AUTO_START_TRIGGER"
+            Write-Host "Auto-start trigger: $env:MN_AUTO_START_TRIGGER"
+          } else {
+            Write-Host "Auto-start trigger: join (code default)"
           }
           # Central Storage API wiring (IN-379 ops gap, hit live on the first
           # clean 2.0.8 install: without the URL the packaged backend runs in

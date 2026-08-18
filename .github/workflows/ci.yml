@@ -24,6 +24,7 @@ jobs:
           npm run verify:audio-routing-dryrun
           npm run verify:recording-controls
           npm run verify:capture
+          npm run verify:join-watch
 
   rust-helper:
     runs-on: windows-latest
