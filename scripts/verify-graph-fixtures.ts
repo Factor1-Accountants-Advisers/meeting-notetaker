@@ -295,6 +295,26 @@ async function main(): Promise<void> {
   assert.equal(sm.canStartAutoRecording('key-2'), true)
   assert.equal(sm.canStartAutoRecording('key-3'), true)
 
+  // join-trigger (spec J4): a discarded false start must be able to auto-record again.
+  {
+    const sm = createRecordingStateMachine()
+    sm.startAutoRecording({
+      eventId: 'e',
+      idempotencyKey: 'k',
+      startTimeUtc: 'x',
+      endTimeUtc: 'y',
+      source: 'auto',
+      trigger: 'join'
+    })
+    assert.equal(sm.getActiveRecording()?.trigger, 'join')
+    sm.stopRecording()
+    sm.completeProcessing()
+    assert.equal(sm.canStartAutoRecording('k'), false, 'completed key blocks')
+    sm.forgetCompleted('k')
+    assert.equal(sm.canStartAutoRecording('k'), true, 'forgetCompleted re-arms')
+    sm.forgetCompleted('unknown') // no-op, must not throw
+  }
+
   // Auto-start IPC must not move to recording until the renderer acknowledges capture start.
   cleanupRecordingIpc()
   setAutoStartAckTimeoutMsForTest(10)
