@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, Response, status
 from fastapi.responses import FileResponse
 
 from app import store
@@ -123,6 +123,50 @@ async def create_meeting(body: MeetingCreate, actor: str = Actor) -> Meeting:
     # Creator owns the meeting (decision #7).
     store.ACCESS[meeting.id] = [MeetingAccessEntry(user=actor, role=AccessRole.owner)]
     return meeting
+
+
+@router.delete("/{meeting_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_meeting(meeting_id: UUID, actor: str = Actor) -> Response:
+    """Delete a meeting that never received audio.
+
+    Exists for the desktop's join-trigger false-start rule (spec J4): the
+    renderer creates the meeting before capture starts, so a discarded
+    recording would otherwise leave an empty Draft. Owner-only, and refused
+    (409) once anything has been uploaded or processed -- this is a tidy-up,
+    not a data-deletion feature.
+    """
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.owner)
+    # `pending_audio` is the created-but-nothing-uploaded state; anything else
+    # means audio landed (queued/processing/ready/failed) and this tidy-up
+    # must refuse. upload_audio writes the file *before* flipping the status,
+    # so the on-disk markers close that window (merged file, either
+    # extension audio_path_for() can produce, plus the raw mic track).
+    audio_on_disk = any(
+        path.exists()
+        for path in (
+            audio_path_for(meeting_id, "audio/webm"),
+            audio_path_for(meeting_id, "application/octet-stream"),
+            mic_track_path(meeting_id),
+        )
+    )
+    if meeting.pipeline_status is not PipelineStatus.pending_audio or audio_on_disk:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Meeting already has audio or processing; cannot delete",
+        )
+    before = meeting.model_dump_json()
+    del store.MEETINGS[meeting_id]
+    # create_meeting seeds the owner access entry; nothing else can exist for
+    # a pending_audio meeting (transcript/summary/export all need audio).
+    store.ACCESS.pop(meeting_id, None)
+    store.add_audit(
+        actor, "meeting.delete", str(meeting_id), before=before, meeting_id=meeting_id
+    )
+    store.save_snapshot()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/{meeting_id}/access", response_model=list[MeetingAccessEntry])

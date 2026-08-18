@@ -296,6 +296,23 @@ export async function createMeeting(
   })
 }
 
+/** Owner-only tidy-up of a meeting that never received audio (join-trigger
+ *  false start, spec J4). Resolves true when the backend accepted the delete;
+ *  false on any error — callers must not block on it.
+ *
+ *  Uses the bridge directly rather than `call`: the backend answers 204 with
+ *  an empty body, which `call` would hand back as `null` — indistinguishable
+ *  from "request failed". `res.ok` is the only honest discriminator here. */
+export async function deleteMeeting(meetingId: string): Promise<boolean> {
+  if (typeof window.api?.request !== 'function') return false
+  try {
+    const res = await window.api.request<unknown>('DELETE', `${PREFIX}/meetings/${meetingId}`)
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
 /** One system-audio capture segment; offsetMs places it on the merge timeline (IN-468). */
 export interface SystemAudioSegmentUpload {
   audioB64: string
