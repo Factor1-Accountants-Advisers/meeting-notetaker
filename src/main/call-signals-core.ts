@@ -527,6 +527,17 @@ export interface CallSignalPollerDeps {
   graceMs?: number
   pollIntervalMs?: number
   retryDelayMs?: number
+  /**
+   * Attach mode only (join-trigger spec J5): the seq of the last signal the
+   * join watcher had already seen when it decided to start this recording.
+   * The first successful poll primes only signals with `seq <= baselineSeq`
+   * and INGESTS anything later — those arrived after the start decision and
+   * are live (a leave in the seconds before the first attach poll must open
+   * grace, not be swallowed as pre-recording noise). Absent = drain all, the
+   * original E5 behaviour (calendar/manual starts, or a watcher that never
+   * read a history). Register mode ignores it.
+   */
+  baselineSeq?: string
 }
 
 export interface CallSignalPoller {
@@ -554,13 +565,17 @@ export interface CallSignalPoller {
  * baseline ingests normally. A failed first poll does not count: the next
  * successful one still primes.
  *
- * Known accepted race (E5): a GENUINE `recorder_left` (or `call_ended`) that
- * lands in the store between recording start and the first successful poll is
- * indistinguishable from pre-recording noise and gets drained with it. If the
- * recorder never returns, no leave signal ever fires for that departure — the
- * grace window never opens — and the scheduled auto-stop remains the stop
- * path, exactly as for a machine with the feature dormant. The exposure is at
- * most one failed-poll stretch plus the seconds before the baseline lands.
+ * Known accepted race (E5), now bounded by `baselineSeq` (J5): a GENUINE
+ * `recorder_left` (or `call_ended`) that lands in the store between recording
+ * start and the first successful poll is indistinguishable from
+ * pre-recording noise and gets drained with it — UNLESS the caller supplies
+ * `baselineSeq`, in which case only signals up to that seq are drained and
+ * later ones are ingested on the very first poll. Without a baseline (the
+ * calendar-mode start, a manual start), if the recorder never returns no
+ * leave signal ever fires for that departure — the grace window never opens
+ * — and the scheduled auto-stop remains the stop path, exactly as for a
+ * machine with the feature dormant. The exposure is at most one failed-poll
+ * stretch plus the seconds before the baseline lands.
  *
  * The reverse race is equally inherent to E5: a signal generated BEFORE
  * recording started but whose webhook delivery to the store is delayed past
@@ -654,13 +669,23 @@ export function createCallSignalPoller(deps: CallSignalPollerDeps): CallSignalPo
       // defence in depth so that no future change can kill the poll loop.
       if (deps.mode === 'attach' && !baselined) {
         // E5 baseline drain: this is the first poll that both completed and
-        // parsed, so everything in it predates the recording. Mark seen, act
-        // on nothing. Failed polls never reach this line, which is exactly
-        // the retry-until-success semantics the spec asks for.
-        if (signals.length > 0) machine.primeSeen(signals)
+        // parsed. Failed polls never reach this line, which is exactly the
+        // retry-until-success semantics the spec asks for. With a
+        // `baselineSeq` (J5) only signals the join watcher had already seen
+        // predate the recording — everything later is live and is ingested
+        // in seq order right after the prime, so a leave that landed between
+        // the start decision and this poll opens grace now. Without one,
+        // everything in this poll predates the recording: mark seen, act on
+        // nothing. `seq` is lexically ordered by construction (see `ingest`).
+        const baselineSeq = deps.baselineSeq
+        const drained =
+          baselineSeq === undefined ? signals : signals.filter((signal) => signal.seq <= baselineSeq)
+        const live = baselineSeq === undefined ? [] : signals.filter((signal) => signal.seq > baselineSeq)
+        if (drained.length > 0) machine.primeSeen(drained)
         baselined = true
-        // Count only — never the signals themselves (see module doc).
-        deps.log('info', '[call-signals] baseline drained', { drained: signals.length })
+        // Counts only — never the signals themselves (see module doc).
+        deps.log('info', '[call-signals] baseline drained', { drained: drained.length, live: live.length })
+        if (live.length > 0) machine.ingest(live)
       } else if (signals.length > 0) {
         machine.ingest(signals)
       }

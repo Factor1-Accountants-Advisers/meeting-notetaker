@@ -21,6 +21,11 @@ export interface ActiveRecording {
   trigger?: 'join' | 'prompt' | 'calendar'
   /** Set when the renderer acks the start; feeds the false-start rule (J4). */
   startedAtUtc?: string
+  /** Last call-watch signal seq the join watcher had seen when it started
+   *  this recording; the attach poller drains only up to it and acts on
+   *  anything later (spec J5/E5). Absent for calendar/manual/prompt-without-
+   *  watch starts, where the poller drains everything as before. */
+  callSignalBaselineSeq?: string
   metadata?: unknown
 }
 

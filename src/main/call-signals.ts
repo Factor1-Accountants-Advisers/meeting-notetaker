@@ -230,13 +230,17 @@ export function armCallSignals(
     identityHeaders: transport.identityHeaders,
     timers: deps.timers ?? { setTimeout, clearTimeout },
     pollIntervalMs: deps.pollIntervalMs,
+    // J5: the join watcher's last-seen seq bounds the attach baseline drain;
+    // undefined (calendar/manual/prompt-without-watch) keeps drain-all.
+    baselineSeq: recording.callSignalBaselineSeq,
     log
   })
   log('info', '[call-signals] arming call-signal poller', {
     eventId: recording.eventId,
     mode,
     graceMs: CALL_SIGNAL_GRACE_MS,
-    pollIntervalMs: deps.pollIntervalMs ?? CALL_SIGNAL_POLL_INTERVAL_MS
+    pollIntervalMs: deps.pollIntervalMs ?? CALL_SIGNAL_POLL_INTERVAL_MS,
+    hasBaselineSeq: recording.callSignalBaselineSeq !== undefined
   })
   void activePoller.start().catch(() => {
     log('warn', '[call-signals] poller start failed', { status: 0 })

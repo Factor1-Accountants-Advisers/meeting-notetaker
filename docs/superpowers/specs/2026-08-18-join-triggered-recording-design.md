@@ -182,7 +182,10 @@ every **5 s** (`JOIN_WATCH_POLL_INTERVAL_MS`); otherwise it is idle. Worst
 case join → recording start ≈ webhook latency (1–3 s) + 5 s ≈ 8 s. The same
 5 s tick carries over to the attach poller for the live meeting, so
 leave-detection tightens for free. Mutating requests keep the existing 30 s
-budget (`CALL_SIGNAL_MUTATION_TIMEOUT_MS`).
+budget (`CALL_SIGNAL_MUTATION_TIMEOUT_MS`). The join watcher passes the last
+signal seq it had seen to the attach poller, which drains only up to that
+seq and acts on anything later — closing the gap between the start decision
+and the first attach poll.
 
 ### J6 — Kill switch and rollout
 

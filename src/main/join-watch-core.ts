@@ -57,6 +57,9 @@ export interface CallPresence {
   /** A `call_ended` at/after `scheduledStartUtc` with no later recorder IN. */
   endedAtOrAfterStart: boolean
   lastSignalUtc: string | null
+  /** `seq` of the last signal walked (sorted order) — what the watcher hands
+   *  the attach poller as its drain baseline (J5/E5); null for no history. */
+  lastSeq: string | null
 }
 
 /**
@@ -77,8 +80,10 @@ export function deriveCallPresence(signals: readonly CallSignal[], scheduledStar
   let inCall = false
   let endedAtOrAfterStart = false
   let lastSignalUtc: string | null = null
+  let lastSeq: string | null = null
   for (const s of ordered) {
     lastSignalUtc = s.received_utc
+    lastSeq = s.seq
     if (s.type === 'recorder_rejoined') {
       inCall = true
       endedAtOrAfterStart = false
@@ -90,7 +95,7 @@ export function deriveCallPresence(signals: readonly CallSignal[], scheduledStar
       endedAtOrAfterStart = Number.isFinite(startMs) && Number.isFinite(atMs) && atMs >= startMs
     }
   }
-  return { inCall, endedAtOrAfterStart, lastSignalUtc }
+  return { inCall, endedAtOrAfterStart, lastSignalUtc, lastSeq }
 }
 
 // ---------------------------------------------------------------------------
@@ -223,8 +228,16 @@ export interface JoinWatchDeps {
   isRecordingActive: () => boolean
   /** Issue the start request. Return true once it is ACCEPTED (queued or
    *  sent); false — or a throw — means nothing started: the engine stays
-   *  armed and the next poll / prompt tries again. */
-  startRecording: (meeting: JoinWatchMeeting, trigger: Exclude<RecordingTrigger, 'calendar'>) => boolean
+   *  armed and the next poll / prompt tries again. `baseline.lastSeenSeq` is
+   *  the seq of the last watch signal this engine had seen for the meeting
+   *  (null if it never read a history): the attach poller drains only up to
+   *  it and acts on anything later, so a leave that lands between this
+   *  decision and the first attach poll is not swallowed (J5/E5). */
+  startRecording: (
+    meeting: JoinWatchMeeting,
+    trigger: Exclude<RecordingTrigger, 'calendar'>,
+    baseline: { lastSeenSeq: string | null }
+  ) => boolean
   showPrompt: (meeting: JoinWatchMeeting) => void
   onDisarm: (meeting: JoinWatchMeeting) => void
   /** Persisted "prompted for meeting X" (survives restart, J3). */
@@ -271,6 +284,10 @@ interface Tracked {
    *  monotonic for a tracked slot (a reschedule re-tracks from scratch), so
    *  once is enough for the whole +10 tail. */
   pastEndLogged: boolean
+  /** seq of the last signal in the most recent SUCCESSFUL poll's history —
+   *  handed to `startRecording` as the attach poller's drain baseline (J5).
+   *  A failed poll leaves it untouched. */
+  lastSeenSeq: string | null
 }
 
 type TimerSlot = 'armTimer' | 'promptTimer' | 'disarmTimer' | 'pollTimer'
@@ -405,7 +422,7 @@ export function createJoinWatchEngine(deps: JoinWatchDeps): JoinWatchEngine {
     deps.log('info', '[join-watch] starting recording', { key: t.meeting.idempotencyKey, trigger })
     let accepted = false
     safe('startRecording', () => {
-      accepted = deps.startRecording(t.meeting, trigger) === true
+      accepted = deps.startRecording(t.meeting, trigger, { lastSeenSeq: t.lastSeenSeq }) === true
     })
     if (!accepted) {
       // Nothing started (renderer busy / not ready / effect threw): stay
@@ -455,6 +472,7 @@ export function createJoinWatchEngine(deps: JoinWatchDeps): JoinWatchEngine {
         return
       }
       const presence = deriveCallPresence(signals, t.meeting.startUtc)
+      t.lastSeenSeq = presence.lastSeq
       if (presence.endedAtOrAfterStart) {
         // The meeting is over (J2): a call_ended at/after scheduled start with
         // no later recorder IN. A pre-start call_ended never reaches here.
@@ -586,7 +604,8 @@ export function createJoinWatchEngine(deps: JoinWatchDeps): JoinWatchEngine {
       pollTimer: null,
       polling: false,
       refusalLogged: false,
-      pastEndLogged: false
+      pastEndLogged: false,
+      lastSeenSeq: null
     }
     tracked.set(meeting.idempotencyKey, t)
     t.disarmTimer = deps.timers.setTimeout(() => {

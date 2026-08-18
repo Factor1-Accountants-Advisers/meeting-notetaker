@@ -191,9 +191,12 @@ export function configureJoinWatch(opts: { hasActiveWatch: (hash: string) => boo
     // J2 "already recording something" guard: any state but idle, or an
     // auto-start already handed to the renderer and awaiting its ack.
     isRecordingActive: () => getRecordingStateMachine().getState() !== 'idle' || hasPendingAutoStart(),
-    startRecording: (m, trigger) => {
+    startRecording: (m, trigger, baseline) => {
       // The same request the calendar issues (J1), tagged with what started
-      // it so the J4 false-start rule can tell a join from a prompt.
+      // it so the J4 false-start rule can tell a join from a prompt, and with
+      // the last signal seq this watcher saw so the attach poller's baseline
+      // drain stops there (J5) — a leave in the seconds between this decision
+      // and its first poll must pause, not record to scheduled end.
       const accepted = sendAutoStartRequest({
         eventId: m.eventId,
         idempotencyKey: m.idempotencyKey,
@@ -201,6 +204,7 @@ export function configureJoinWatch(opts: { hasActiveWatch: (hash: string) => boo
         endTimeUtc: m.endUtc,
         source: 'auto',
         trigger,
+        callSignalBaselineSeq: baseline.lastSeenSeq ?? undefined,
         metadata: m.metadata
       })
       // Only an ACCEPTED start retires the prompt: the toast is once-only

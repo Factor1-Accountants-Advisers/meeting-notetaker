@@ -30,7 +30,7 @@ const T = (min: number): string => new Date(Date.UTC(2026, 7, 20, 10, 0, 0) + mi
 // ---- deriveCallPresence -----------------------------------------------------
 {
   const none: CallPresence = deriveCallPresence([])
-  assert.deepEqual(none, { inCall: false, endedAtOrAfterStart: false, lastSignalUtc: null })
+  assert.deepEqual(none, { inCall: false, endedAtOrAfterStart: false, lastSignalUtc: null, lastSeq: null })
 
   const early = deriveCallPresence([sig('recorder_rejoined', T(-30))])
   assert.equal(early.inCall, true, 'early joiner still in')
@@ -71,6 +71,7 @@ const T = (min: number): string => new Date(Date.UTC(2026, 7, 20, 10, 0, 0) + mi
   const shuffled = deriveCallPresence([...chrono].reverse(), T(0))
   assert.equal(shuffled.inCall, false)
   assert.equal(shuffled.lastSignalUtc, T(-10), 'lastSignalUtc follows sorted order, not input order')
+  assert.equal(shuffled.lastSeq, chrono[1].seq, 'lastSeq is the seq of the last WALKED signal (sorted order)')
 }
 
 // ---- decideFalseStart (J4) ---------------------------------------------------
@@ -179,6 +180,9 @@ interface Fake {
    *  so "the first poll has not answered yet" is a reachable state. */
   http: { history: Record<string, CallSignal[]>; fail: boolean; throws: boolean; latencyMs: number; calls: number }
   started: Array<{ key: string; trigger: string }>
+  /** The `baseline.lastSeenSeq` handed to each `startRecording` call, in
+   *  order — the seq the attach poller must drain up to (spec J5/E5). */
+  baselines: Array<string | null>
   prompted: string[]
   disarmed: string[]
   recordingActive: { value: boolean }
@@ -201,6 +205,7 @@ function makeFake(nowUtc: string, hasWatch: (hash: string) => boolean = () => tr
   let nextId = 1
   const http = { history: {} as Record<string, CallSignal[]>, fail: false, throws: false, latencyMs: 0, calls: 0 }
   const started: Fake['started'] = []
+  const baselines: Fake['baselines'] = []
   const prompted: string[] = []
   const disarmed: string[] = []
   const recordingActive = { value: false }
@@ -229,8 +234,9 @@ function makeFake(nowUtc: string, hasWatch: (hash: string) => boolean = () => tr
       })
     },
     isRecordingActive: () => recordingActive.value,
-    startRecording: (m, trigger) => {
+    startRecording: (m, trigger, baseline) => {
       started.push({ key: m.idempotencyKey, trigger })
+      baselines.push(baseline.lastSeenSeq)
       if (effects.throwStart) throw new Error('start effect threw')
       if (effects.rejectNextStart) { effects.rejectNextStart = false; return false }
       return true
@@ -268,7 +274,7 @@ function makeFake(nowUtc: string, hasWatch: (hash: string) => boolean = () => tr
     await settle()
   }
   return {
-    engine, now: () => nowMs, advance, http, started, prompted, disarmed, recordingActive, promptedStore,
+    engine, now: () => nowMs, advance, http, started, baselines, prompted, disarmed, recordingActive, promptedStore,
     effects, logs, pending: () => timers.length
   }
 }
@@ -303,6 +309,9 @@ async function scenario1_earlyJoinStillIn(): Promise<void> {
   await f.advance(1 * MIN + 1)
   assert.deepEqual(f.started, [{ key: 'a', trigger: 'join' }])
   assert.equal(f.engine.getPhase('a'), 'recording')
+  // The attach poller drains only up to what the watcher had already seen
+  // (J5): the start carries the seq of the last signal in the history.
+  assert.deepEqual(f.baselines, [f.http.history[H('a')][0].seq], 'start carries the last-seen seq as the attach baseline')
   // Once recording, polling stops: the attach poller owns the rest (J2).
   const callsAtStart = f.http.calls
   await f.advance(5 * MIN)
@@ -339,6 +348,7 @@ async function scenario3_rejoinLate(): Promise<void> {
   f.http.history[H('c')].push(sig('recorder_rejoined', T(15)))
   await f.advance(POLL)
   assert.deepEqual(f.started, [{ key: 'c', trigger: 'join' }])
+  assert.deepEqual(f.baselines, [f.http.history[H('c')][2].seq], 'baseline is the LAST signal seen at start time, not the first')
   assertNoPii(f)
 }
 
@@ -395,6 +405,7 @@ async function scenario6_noWatchPromptOnly(): Promise<void> {
   assert.equal(f.http.calls, 0, 'never polls without a watch')
   f.engine.acceptPrompt('f')
   assert.deepEqual(f.started, [{ key: 'f', trigger: 'prompt' }])
+  assert.deepEqual(f.baselines, [null], 'never polled → no baseline seq (attach poller drains everything, as before)')
   assert.equal(f.engine.getPhase('f'), 'recording')
   f.engine.acceptPrompt('f')
   assert.equal(f.started.length, 1, 'accepting twice does not start twice')
@@ -460,6 +471,11 @@ async function scenario8_rearmAfterFalseStart(): Promise<void> {
   f.http.history[H('h')].push(sig('recorder_rejoined', T(5)))
   await f.advance(POLL)
   assert.deepEqual(f.started, [{ key: 'h', trigger: 'join' }, { key: 'h', trigger: 'join' }])
+  assert.deepEqual(
+    f.baselines,
+    [f.http.history[H('h')][0].seq, f.http.history[H('h')][2].seq],
+    'each start carries the last-seen seq at THAT start (the re-armed poll saw the later signals)'
+  )
   f.engine.rearm('h')
   await f.advance(POLL)
   assert.equal(f.started.length, 3, 'rearm from recording resumes polling; still-in-call restarts')
@@ -514,6 +530,7 @@ async function scenario13_fetchFailureIsUnknown(): Promise<void> {
   f.http.throws = false
   await f.advance(POLL)
   assert.deepEqual(f.started, [{ key: 'z', trigger: 'join' }], 'recovers once the relay answers')
+  assert.deepEqual(f.baselines, [f.http.history[H('z')][0].seq], 'a failed poll never touches the baseline; the successful one sets it')
   assertNoPii(f)
 }
 
