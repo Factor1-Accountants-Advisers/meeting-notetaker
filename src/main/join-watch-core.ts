@@ -302,6 +302,11 @@ interface Tracked {
    *  handed to `startRecording` as the attach poller's drain baseline (J5).
    *  A failed poll leaves it untouched. */
   lastSeenSeq: string | null
+  /** A signal-fetch failure streak is in progress and its one "failing"
+   *  line has been logged; the next success logs "recovered" once and
+   *  resets. Same shape as `refusalLogged`: a relay outage must not write
+   *  a warning every 5 s for the length of the arm window. */
+  fetchFailing: boolean
 }
 
 type TimerSlot = 'armTimer' | 'promptTimer' | 'disarmTimer' | 'pollTimer'
@@ -482,8 +487,15 @@ export function createJoinWatchEngine(deps: JoinWatchDeps): JoinWatchEngine {
       // Disarmed, disposed, started manually, or rescheduled while in flight.
       if (disposed || t.phase !== 'armed') return
       if (signals === null) {
-        deps.log('warn', '[join-watch] signal fetch failed', { key: t.meeting.idempotencyKey })
+        if (!t.fetchFailing) {
+          t.fetchFailing = true
+          deps.log('warn', '[join-watch] signal fetch failing', { key: t.meeting.idempotencyKey })
+        }
         return
+      }
+      if (t.fetchFailing) {
+        t.fetchFailing = false
+        deps.log('info', '[join-watch] signal fetch recovered', { key: t.meeting.idempotencyKey })
       }
       const presence = deriveCallPresence(signals, t.meeting.startUtc)
       t.lastSeenSeq = presence.lastSeq
@@ -629,7 +641,8 @@ export function createJoinWatchEngine(deps: JoinWatchDeps): JoinWatchEngine {
       polling: false,
       refusalLogged: false,
       pastEndLogged: false,
-      lastSeenSeq: null
+      lastSeenSeq: null,
+      fetchFailing: false
     }
     tracked.set(meeting.idempotencyKey, t)
     t.disarmTimer = deps.timers.setTimeout(() => {

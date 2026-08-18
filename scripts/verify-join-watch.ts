@@ -531,16 +531,37 @@ async function scenario13_fetchFailureIsUnknown(): Promise<void> {
   assert.deepEqual(f.started, [])
   assert.deepEqual(f.prompted, ['z'])
   assert.ok(f.http.calls > 10, 'keeps polling through failures')
+  const failing = (): number => f.logs.filter((l) => /signal fetch failing/.test(l)).length
+  const recovered = (): number => f.logs.filter((l) => /signal fetch recovered/.test(l)).length
+  assert.equal(failing(), 1, 'a failure streak logs ONE failing line, not one per 5 s poll')
+  assert.equal(recovered(), 0)
   const before = f.http.calls
   f.http.fail = false
   f.http.throws = true
   await f.advance(3 * POLL)
   assert.ok(f.http.calls >= before + 3, 'a throwing fetch does not kill the loop')
   assert.deepEqual(f.started, [])
+  assert.equal(failing(), 1, 'a throw inside the same streak adds no line')
   f.http.throws = false
   await f.advance(POLL)
   assert.deepEqual(f.started, [{ key: 'z', trigger: 'join' }], 'recovers once the relay answers')
   assert.deepEqual(f.baselines, [f.http.history[H('z')][0].seq], 'a failed poll never touches the baseline; the successful one sets it')
+  assert.equal(recovered(), 1, 'the first success after a streak logs ONE recovered line')
+  assert.ok(!f.logs.some((l) => /signal fetch failed/.test(l)), 'the old per-poll line is gone')
+  // A second streak logs again (per streak, not per lifetime); a run of
+  // successes logs no "recovered" without a preceding failure.
+  const g = makeFake(T(-3))
+  syncOne(g, 'z2', 0, 60)
+  await g.advance(3 * POLL)
+  g.http.fail = true
+  await g.advance(3 * POLL)
+  g.http.fail = false
+  await g.advance(3 * POLL)
+  g.http.fail = true
+  await g.advance(3 * POLL)
+  assert.equal(g.logs.filter((l) => /signal fetch failing/.test(l)).length, 2, 'two streaks → two failing lines')
+  assert.equal(g.logs.filter((l) => /signal fetch recovered/.test(l)).length, 1, 'one recovery between them')
+  assertNoPii(g)
   assertNoPii(f)
 }
 
