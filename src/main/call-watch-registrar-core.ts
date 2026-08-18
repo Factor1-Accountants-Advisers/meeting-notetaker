@@ -128,7 +128,12 @@ function watchWindowContains(watch: RegistrarWatch, nowMs: number): boolean {
  *    delta syncs only carry changed events, so absence means "unchanged",
  *    never "gone". A stored end that no longer parses is treated as ended —
  *    it could never become past on its own, and dropping it is the only way
- *    that slot ever frees. One state deliberately not listed: a tracked
+ *    that slot ever frees. The join watcher (`join-watch-core.ts`
+ *    `handleSyncDecisions`) applies this same absence contract to its
+ *    vanish-disarm, with one extension this file does not make: it receives
+ *    `GraphSyncMeta.fullSnapshot` from the runtime and treats absence from a
+ *    FULL-snapshot sync as a cancellation. Change the absence semantics here
+ *    or there together. One state deliberately not listed: a tracked
  *    meeting whose decision returns as a `candidate` with a non-qualifying
  *    reason (e.g. `outside_lookahead` after a big reschedule) stays tracked
  *    until its OLD stored end passes — bounded by the server's D3 expiry,
