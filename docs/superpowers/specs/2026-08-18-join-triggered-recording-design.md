@@ -176,10 +176,19 @@ budget (`CALL_SIGNAL_MUTATION_TIMEOUT_MS`).
 `MN_AUTO_START_TRIGGER = join | calendar`, **code default `join`**.
 
 - `calendar` restores today's behaviour byte-for-byte: `handleAutoRecordEligible`
-  starts on time, the join watcher is never constructed. Per machine via the
-  `%PROGRAMDATA%\Factor1\MeetingNotetaker\backend.env` override (main reads
-  it through the same env plumbing as the backend), fleet-wide via a repo
-  variable + release — the same pattern as `MN_DELIVERY_RECIPIENTS`.
+  starts on time, the join watcher is never constructed.
+- **Where the setting lives:** in `backend.env`, read by main through the
+  supervisor's existing two-layer loader (`loadCredentials`: bundled
+  `resources/backend/backend.env`, then
+  `%PROGRAMDATA%\Factor1\MeetingNotetaker\backend.env`, which wins).
+  Precedence: `%PROGRAMDATA%` > bundled > code default. Deliberately *not*
+  `resources/.env.production` (main's other env file): `resources/` is
+  replaced on every auto-update, so an override there dies at the next
+  release, whereas the `%PROGRAMDATA%` layer survives updates and is the
+  documented per-machine path. Fleet-wide flip = repo variable written by
+  `release.yml` + release, the same pattern as `MN_DELIVERY_RECIPIENTS`. The
+  supervisor already parses both layers into a dict; exposing that dict to
+  main's own settings is the only plumbing.
 - Ships as **v2.0.31**, after the SharePoint permission hardening (v2.0.30).
   Organiser-only delivery is independent and stays until David F lifts it.
 - Release comms must state plainly: hybrid/in-room meetings with a Teams
@@ -222,6 +231,9 @@ singleton, `MN_AUTO_START_TRIGGER` gate.
   `deliver: false` on auto-stop (stop + `discardCompletedSpill`, no upload).
 - `src/main/call-signals-core.ts` — poll interval becomes injectable so the
   attach poller runs at 5 s while a meeting is live (constant, not behaviour).
+- `src/main/backend-supervisor.ts` — exposes the parsed credential layers
+  (already loaded for the backend child) so main can read
+  `MN_AUTO_START_TRIGGER` from the same two-layer file (J6).
 
 **Reused, untouched:** call-watch registrar (E1–E4), relay routes,
 storage-api, the stop machine (D5–D9), capture, upload, delivery, backend.
@@ -325,14 +337,22 @@ on 14 Aug.
 - **F4 — Restore invitee delivery** (`MN_DELIVERY_RECIPIENTS=attendees`) once
   David F is comfortable — independent of this feature.
 
+## Resolved during design review
+
+- **Signal history.** storage-api `list_signals` returns the **full history
+  for the watch's current generation**, sorted by `seq` (verified 18 Aug in
+  `app/services/call_watches.py`). J2's derivation reads it directly; the
+  join watcher keeps no cross-poll state. A watch *replacement* (new
+  generation, E4 lifecycle) empties the history → unknown → prompt path,
+  the correct fail-closed outcome.
+- **Kill-switch location.** Main's `.env.production` lives under `resources/`
+  and is overwritten by auto-update; the setting therefore uses the
+  supervisor's `backend.env` layers instead (J6).
+
 ## Open questions
 
-None blocking. Two to confirm during implementation:
+None blocking. One to confirm during implementation:
 
-- Whether the relay's `GET /call-watches/{hash}/signals` returns full history
-  or a generation window — the derivation in J2 needs the last recorder
-  signal, so if the route windows, the join watcher must keep its own last-
-  seen state per hash across polls.
 - Exact toast action plumbing for a *pre*-recording toast (today's toasts
   are all tied to an active recording); `toast-xml.ts` already carries
   action arguments, so this is expected to be wiring, not design.
