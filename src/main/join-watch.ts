@@ -22,7 +22,13 @@
 import { app, Notification } from 'electron'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createCallWatchTransport, isCallSignalsPayload, joinUrlHash, parseCallSignals } from './call-signals'
+import {
+  createCallWatchTransport,
+  isCallSignalsPayload,
+  joinUrlHash,
+  parseCallSignals,
+  type CallWatchTransport
+} from './call-signals'
 import { evaluateHostOwnership } from './graph/host-gate'
 import {
   JOIN_WATCH_PROMPT_LIFETIME_MS,
@@ -42,11 +48,20 @@ export * from './join-watch-core'
 const PROMPTED_KEYS_CAP = 200
 
 let engine: JoinWatchEngine | null = null
+/** ONE relay transport for the watcher's lifetime, resolved lazily on the
+ *  first poll (a null — not configured yet — is retried, never cached).
+ *  `createCallWatchTransport` builds a fresh identity-header provider on
+ *  every call, so resolving it per poll would defeat the 5-min header cache
+ *  and force an Entra token refresh every 5 s tick. */
+let transport: CallWatchTransport | null = null
 let promptToast: Notification | null = null
 let promptToastTimer: NodeJS.Timeout | null = null
-/** The meeting the visible prompt is about — `record-now` has no payload of
- *  its own (the toast verb is a bare protocol URI), so the accept path reads
- *  the key from here. */
+/** The meeting the prompt currently ON SCREEN is about — `record-now` has no
+ *  payload of its own (the toast verb is a bare protocol URI), so the accept
+ *  path reads the key from here. Set by `showPrompt`, cleared by
+ *  `closePrompt` (lifetime timer, accept, start, disarm, dispose), so a stale
+ *  Action Center click can never start a DIFFERENT meeting than the one it
+ *  was shown for. */
 let promptedMeeting: JoinWatchMeeting | null = null
 
 /**
@@ -97,6 +112,7 @@ function closePrompt(): void {
   }
   const toast = promptToast
   promptToast = null
+  promptedMeeting = null
   try {
     toast?.close()
   } catch {
@@ -109,12 +125,12 @@ function closePrompt(): void {
  * [Record now]". Same win32-toast / other-platform-notification split as the
  * paused toast in recording-ipc; auto-dismissed after
  * JOIN_WATCH_PROMPT_LIFETIME_MS because `scenario="reminder"` toasts are
- * sticky. `promptedMeeting` is set even when the toast fails to render so a
- * later `record-now` (e.g. from Action Center) still resolves to a meeting.
+ * sticky. `promptedMeeting` is bound only while the toast is on screen: a
+ * toast that failed to render has no Action Center entry, so there is
+ * nothing a later `record-now` could legitimately refer to.
  */
 function showPrompt(meeting: JoinWatchMeeting): void {
   closePrompt()
-  promptedMeeting = meeting
   if (!Notification?.isSupported?.()) {
     logger().warn('[join-watch] prompt toast unsupported by Electron', { key: meeting.idempotencyKey })
     return
@@ -129,9 +145,11 @@ function showPrompt(meeting: JoinWatchMeeting): void {
             silent: true
           })
     promptToast.show()
+    promptedMeeting = meeting
     logger().info('[join-watch] prompt toast requested', { key: meeting.idempotencyKey })
   } catch (err) {
     promptToast = null
+    promptedMeeting = null
     logger().warn('[join-watch] prompt toast failed', {
       key: meeting.idempotencyKey,
       message: err instanceof Error ? err.message : String(err)
@@ -153,11 +171,10 @@ export function configureJoinWatch(opts: { hasActiveWatch: (hash: string) => boo
   engine = createJoinWatchEngine({
     hasActiveWatch: opts.hasActiveWatch,
     joinUrlHash,
-    // Resolve the transport per call (cheap: it is a small object over the
-    // env) so a config change after startup is honoured on the next poll and
-    // an early `null` (not configured yet) does not stick for the session.
+    // Hold one transport (see the module-level note): the identity-header
+    // cache inside it is what keeps a 5 s poll from minting a token per tick.
     fetchSignals: async (hash) => {
-      const t = createCallWatchTransport()
+      const t = (transport ??= createCallWatchTransport())
       if (!t) return null
       try {
         const res = await t.http(`${t.apiBase}/api/v1/call-watch/${hash}/signals`, {
@@ -175,10 +192,9 @@ export function configureJoinWatch(opts: { hasActiveWatch: (hash: string) => boo
     // auto-start already handed to the renderer and awaiting its ack.
     isRecordingActive: () => getRecordingStateMachine().getState() !== 'idle' || hasPendingAutoStart(),
     startRecording: (m, trigger) => {
-      closePrompt()
       // The same request the calendar issues (J1), tagged with what started
       // it so the J4 false-start rule can tell a join from a prompt.
-      return sendAutoStartRequest({
+      const accepted = sendAutoStartRequest({
         eventId: m.eventId,
         idempotencyKey: m.idempotencyKey,
         startTimeUtc: m.startUtc,
@@ -187,6 +203,11 @@ export function configureJoinWatch(opts: { hasActiveWatch: (hash: string) => boo
         trigger,
         metadata: m.metadata
       })
+      // Only an ACCEPTED start retires the prompt: the toast is once-only
+      // (J3), so a refused start (renderer busy / not ready) must leave it
+      // up for the user to try again.
+      if (accepted) closePrompt()
+      return accepted
     },
     showPrompt,
     onDisarm: (m) => {
@@ -232,6 +253,9 @@ export function joinWatchRecordingDiscarded(key: string): void {
  *  or errored before acking): the engine believed `recording`, so re-arm and
  *  let the next poll / prompt decide again. */
 export function joinWatchRecordingStartFailed(key: string): void {
+  // The engine's own rearm line says "discarded false start"; say what
+  // actually happened here so the field log is truthful.
+  logger().info('[join-watch] start failed before ack; re-arming', { key })
   engine?.rearm(key)
 }
 
@@ -242,7 +266,7 @@ export function joinWatchRecordingStarted(key: string): void {
 
 export function disposeJoinWatch(): void {
   closePrompt()
-  promptedMeeting = null
   engine?.dispose()
   engine = null
+  transport = null
 }

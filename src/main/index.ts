@@ -310,13 +310,6 @@ app.whenReady().then(async () => {
     }
 
     for (const decision of eligible) {
-      if (autoStartTrigger === 'join') {
-        // Join-trigger mode (spec J1): the calendar only schedules. The join
-        // watcher — fed by onSyncCompleted below — arms at start−3 and starts
-        // on the recorder's roster IN. Nothing to start here.
-        continue
-      }
-
       const gate = evaluateHostGate(decision, getCurrentUserEmail())
       if (!gate.allowed) {
         logger().info('[app] auto-record skipped by host-gate', {
@@ -324,6 +317,15 @@ app.whenReady().then(async () => {
           ...decision.logContext
         })
         setTraySkipped(decision.metadata?.title ?? null)
+        continue
+      }
+
+      if (autoStartTrigger === 'join') {
+        // Join-trigger mode (spec J1): the calendar only schedules. The join
+        // watcher — fed by onSyncCompleted below — arms at start−3 and starts
+        // on the recorder's roster IN. Nothing to start here. The host gate
+        // above still runs in this mode so its tray hint and log line
+        // (IN-77/IN-84 "Skipped: X (not host)") are kept.
         continue
       }
 

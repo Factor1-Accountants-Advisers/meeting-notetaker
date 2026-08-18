@@ -837,7 +837,9 @@ void (async () => {
       'index.ts must read MN_AUTO_START_TRIGGER from the backend.env layers'
     )
     const layersReadAt = indexSource.indexOf('readAutoStartTrigger(getBackendEnvLayers(), process.env)')
-    const backendReadyAt = indexSource.indexOf('await backendStartup')
+    // Anchor on the STATEMENT, not the first mention — a comment above
+    // handleAutoRecordEligible names `await backendStartup` too.
+    const backendReadyAt = indexSource.search(/^\s*await backendStartup\s*$/m)
     assert.ok(backendReadyAt >= 0 && backendReadyAt < layersReadAt, 'the trigger mode must be read after backend startup resolves')
     // Task 7's hooks: all three wired, so a discard, a start, and a failed
     // start each steer the engine.
@@ -856,18 +858,25 @@ void (async () => {
     )
     // J1: the watcher consumes every sync's decisions; teardown disposes it.
     assert.ok(indexSource.includes('handleJoinWatchSyncDecisions('), 'onSyncCompleted must feed the join watcher')
-    assert.ok(indexSource.includes('disposeJoinWatch()'), 'shutdown must dispose the join watcher')
+    const beforeQuitAt = indexSource.indexOf("app.on('before-quit'")
+    assert.ok(beforeQuitAt >= 0, 'index.ts must have a before-quit handler')
+    assert.ok(
+      indexSource.indexOf('disposeJoinWatch()', beforeQuitAt) >= 0,
+      'the before-quit handler must dispose the join watcher'
+    )
     // J1/J6: in join mode the calendar path never starts a recording — the
     // guard sits inside handleAutoRecordEligible's per-decision loop.
     const eligibleAt = indexSource.indexOf('function handleAutoRecordEligible(')
     const eligibleEnd = indexSource.indexOf('createWindow(', eligibleAt)
     assert.ok(eligibleAt >= 0 && eligibleEnd > eligibleAt, 'handleAutoRecordEligible must precede window creation')
     const eligibleBody = indexSource.slice(eligibleAt, eligibleEnd)
-    assert.ok(eligibleBody.includes("if (autoStartTrigger === 'join')"), 'handleAutoRecordEligible must skip starts in join mode')
-    assert.ok(
-      eligibleBody.indexOf("if (autoStartTrigger === 'join')") < eligibleBody.indexOf('sendAutoStartRequest('),
-      'the join-mode guard must come before the calendar start'
-    )
+    const guardAt = eligibleBody.indexOf("if (autoStartTrigger === 'join')")
+    assert.ok(guardAt >= 0, 'handleAutoRecordEligible must skip starts in join mode')
+    assert.ok(guardAt < eligibleBody.indexOf('sendAutoStartRequest('), 'the join-mode guard must come before the calendar start')
+    // The host gate (and its IN-77/IN-84 tray hint) still runs in join mode:
+    // the guard sits AFTER the gate's continue, before canStartAutoRecording.
+    assert.ok(eligibleBody.indexOf('setTraySkipped(') < guardAt, 'the host-gate tray hint must run before the join-mode guard')
+    assert.ok(guardAt < eligibleBody.indexOf('canStartAutoRecording('), 'the join-mode guard must precede the state-machine check')
     assert.ok(eligibleBody.includes("trigger: 'calendar'"), 'calendar-mode starts must be tagged trigger: calendar')
 
     const runtimeSource = readFileSync(join(process.cwd(), 'src', 'main', 'join-watch.ts'), 'utf8')
@@ -875,8 +884,20 @@ void (async () => {
     assert.ok(runtimeSource.includes('/api/v1/call-watch/'), 'join-watch.ts must poll the singular call-watch signals route')
     assert.ok(!runtimeSource.includes('/api/v1/call-watches/'), 'join-watch.ts must not use the plural route')
     // The engine only flips to recording when the start is ACCEPTED, so the
-    // runtime must return sendAutoStartRequest's boolean, not swallow it.
-    assert.ok(runtimeSource.includes('return sendAutoStartRequest('), 'startRecording must return the accept result')
+    // runtime must return sendAutoStartRequest's boolean, not swallow it —
+    // and retire the once-only prompt (J3) only on an accepted start.
+    assert.ok(runtimeSource.includes('const accepted = sendAutoStartRequest('), 'startRecording must capture the accept result')
+    assert.ok(runtimeSource.includes('if (accepted) closePrompt()'), 'startRecording must close the prompt only on an accepted start')
+    assert.ok(runtimeSource.includes('return accepted'), 'startRecording must return the accept result')
+    // One relay transport for the watcher's lifetime: a per-poll
+    // createCallWatchTransport() would defeat its identity-header cache and
+    // force a token refresh every 5 s tick.
+    assert.ok(runtimeSource.includes('transport ??= createCallWatchTransport()'), 'fetchSignals must hold one lazily-resolved transport')
+    // A stale record-now must never target a different meeting: the prompted
+    // meeting is bound only while the toast is on screen.
+    const closePromptAt = runtimeSource.indexOf('function closePrompt(')
+    const closePromptBody = runtimeSource.slice(closePromptAt, runtimeSource.indexOf('\n}\n', closePromptAt))
+    assert.ok(closePromptBody.includes('promptedMeeting = null'), 'closePrompt must clear the prompted meeting')
     // J2 "already recording" guard counts a pending, unacked auto-start.
     assert.ok(runtimeSource.includes('hasPendingAutoStart()'), 'isRecordingActive must include a pending auto-start')
     assert.ok(!runtimeSource.includes('console.log'), 'join-watch.ts must log through electron-log only')
