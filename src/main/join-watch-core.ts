@@ -41,9 +41,10 @@ export const JOIN_WATCH_DISARM_AFTER_END_MS = 10 * 60_000
 /** J4: a join-triggered recording shorter than this counts as a false start
  *  (auto-recorded but nobody was really in the meeting). */
 export const FALSE_START_MAX_DURATION_MS = 5 * 60_000
-/** J4: only recordings that stopped within this long of their own start are
- *  eligible for the false-start check — a long-running recording that ends
- *  quickly near its natural close is not a false start. */
+/** J4: a join-triggered recording that stops (via leave-grace) before the
+ *  meeting's SCHEDULED start plus this margin can be a false start; anything
+ *  ending later is the meeting itself. Anchored on scheduled start, not on
+ *  the recording's own start — the duration guard above covers that. */
 export const FALSE_START_MAX_AFTER_START_MS = 2 * 60_000
 
 // ---------------------------------------------------------------------------

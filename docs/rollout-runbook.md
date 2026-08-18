@@ -117,8 +117,9 @@ keys without reinstalling, drop an override file on each machine:
 ## Auto-record trigger (v2.0.31+)
 
 - **What changed**: a scheduled Teams meeting's recording now starts on
-  your *join* to its Teams call, not at calendar start time. The ±3 min
-  scheduling lead is unchanged; if you join late, recording still starts
+  your *join* to its Teams call, not at calendar start time. The 3-minute
+  arming lead before scheduled start is unchanged (recording never begins
+  earlier than that); if you join late, recording still starts
   as soon as you're in the call, however long after the scheduled start
   that is.
 - **The prompt**: if you haven't joined by start + 2 min, a toast offers
@@ -130,7 +131,8 @@ keys without reinstalling, drop an override file on each machine:
   discarded — no email is sent, and the meeting re-arms so a later real
   join still records normally. The paused toast's **Upload now** action
   always delivers regardless of this rule, so a deliberate save is never
-  silently dropped.
+  silently dropped — and, unlike a discarded false start, the meeting is
+  then *not* re-armed (one recording per meeting still holds).
 - **Kill switch**: set `MN_AUTO_START_TRIGGER=calendar` in
   `%PROGRAMDATA%\Factor1\MeetingNotetaker\backend.env` and restart the
   app to restore the legacy start-time trigger on that one machine.
