@@ -1262,11 +1262,13 @@ const unsubStop = window.api.onAutoStopRequest((data) => void stopFlight.invoke(
           autoGraphMetadataRef.current = null
           setCaptureStatus(null)
           setAutoRecordingState('idle')
-          window.api.notifyRecordingStopped()
+          window.api.notifyRecordingStopped({ discarded: true })
           return
         }
 ```
-Import `deleteMeeting` from `./lib/api`.
+Import `deleteMeeting` from `./lib/api`. **Contract (Task 7 review):** the renderer reports what it actually did — `notifyRecordingStopped({ discarded: true })` ONLY on this path; every delivering path calls `notifyRecordingStopped()` with no payload. Main forgets/re-arms the meeting only on renderer confirmation, so a coalesced or late `deliver:false` can never re-arm a recording that was in fact delivered.
+
+**Ref hazard:** do NOT reset the option ref on entry to `finishActiveRecording`. Read it at the moment `stopFlight.invoke()` is called and only set it when NO stop is in flight (`stopFlight.isRunning()` false); if a `deliver:false` arrives while a stop is already running, ignore it (log) — the running stop delivers, and main will see `discarded` absent and keep the key completed. Reset the ref to `{ deliver: true }` after each completed stop.
 
 - [ ] **Step 3: Typecheck (web) and build**
 
@@ -1512,7 +1514,7 @@ Confirm `isCallSignalsPayload` and `parseCallSignals` are exported by `call-sign
 Imports:
 ```ts
 import { getBackendEnvLayers } from './backend-supervisor'
-import { configureRecordingDiscardHook } from './recording-ipc'
+import { configureJoinWatchHooks } from './recording-ipc'
 import {
   configureJoinWatch, disposeJoinWatch, handleJoinWatchSyncDecisions,
   joinWatchPromptAccepted, joinWatchRecordingDiscarded, joinWatchRecordingStarted, readAutoStartTrigger
@@ -1547,10 +1549,15 @@ and, before the runtime starts:
 ```ts
   if (autoStartTrigger === 'join') {
     configureJoinWatch({ hasActiveWatch: (hash) => registrar.hasActiveWatch(hash) })
-    configureRecordingDiscardHook(joinWatchRecordingDiscarded)
+    // Task 7 landed these as one hook object (not the plan's single discard hook):
+    configureJoinWatchHooks({
+      onRecordingDiscarded: joinWatchRecordingDiscarded,   // engine.rearm(key)
+      onRecordingStarted: joinWatchRecordingStarted,       // engine.noteRecordingStarted(key)
+      onRecordingStartFailed: joinWatchRecordingDiscarded  // ack timeout / pre-start error → engine.rearm(key)
+    })
   }
 ```
-Where the renderer acks a start (`handleRendererRecordingStarted` is in recording-ipc; call from there is cleaner — add in recording-ipc a second hook `onRecordingStartedHook(key)` mirroring the discard hook, and wire it in index.ts to `joinWatchRecordingStarted`). This lets a *manual* recording of the same meeting stop the join watcher polling.
+(`onRecordingStarted` already exists from Task 7 — no new hook needed. Note the caveat from the Task 7 review: a LATE renderer ack after an ack-timeout could make the engine re-arm and then be refused every 5 s; the engine's `refusalLogged` throttles the log, and `isRecordingActive()` keeps it from double-starting.)
 
 Toast handler in the second-instance/argv branch (near `toastAction === 'upload-now'`):
 ```ts
