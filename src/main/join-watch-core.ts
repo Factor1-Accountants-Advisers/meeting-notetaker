@@ -16,7 +16,7 @@
  * Every "no" is silent and fails closed: no positive signal, no recording.
  */
 
-import type { CallSignal } from './call-signals-core'
+import type { CallSignal, CallSignalStopReason } from './call-signals-core'
 import type { GraphEventDecision } from './graph/types'
 
 // ---------------------------------------------------------------------------
@@ -112,7 +112,7 @@ export type RecordingTrigger = 'join' | 'prompt' | 'calendar'
  * `scheduled_end` comes from the scheduled-end auto-stop timer. `manual`
  * comes from a user/tray stop.
  */
-export type AutoStopReason = 'grace_expired' | 'call_ended' | 'upload_now' | 'scheduled_end' | 'manual'
+export type AutoStopReason = CallSignalStopReason | 'scheduled_end' | 'manual'
 
 export interface FalseStartInput {
   trigger: RecordingTrigger | undefined

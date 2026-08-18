@@ -17,6 +17,7 @@ import { evaluateHostGate } from '../src/main/graph/host-gate.ts'
 import { createRecordingStateMachine } from '../src/main/recording-state.ts'
 import {
   cleanupRecordingIpc,
+  configureJoinWatchHooks,
   getEndReminderPlan,
   getRecordingStateMachine,
   handleRendererRecordingReady,
@@ -24,6 +25,7 @@ import {
   handleRendererRecordingStopped,
   registerManualRecording,
   sendAutoStartRequest,
+  sendAutoStopRequest,
   sendTrayRecordingControl,
   setAutoStartAckTimeoutMsForTest,
   setMainWindow
@@ -321,20 +323,26 @@ async function main(): Promise<void> {
   const firstWindow = fakeWindow()
   setMainWindow(firstWindow.window)
   handleRendererRecordingReady()
-  sendAutoStartRequest({
+  const firstRequest = {
     eventId: 'ipc-event-1',
     idempotencyKey: 'ipc-key-1',
     startTimeUtc: '2026-06-26T01:00:00.000Z',
     endTimeUtc: '2026-06-26T02:00:00.000Z',
-    source: 'auto'
-  })
+    source: 'auto' as const
+  }
+  // Task 7 step 2b: the join watcher needs to know whether the start was
+  // accepted, so it stays armed (keeps polling) on a refusal.
+  assert.equal(sendAutoStartRequest(firstRequest), true, 'accepted start returns true')
   assert.equal(firstWindow.sent.length, 1)
   assert.equal(firstWindow.sent[0].channel, 'recording:auto-start-request')
   assert.equal(getRecordingStateMachine().getState(), 'idle')
+  assert.equal(sendAutoStartRequest(firstRequest), false, 'duplicate while pending ack returns false')
   handleRendererRecordingStarted()
   assert.equal(getRecordingStateMachine().getState(), 'recording')
   handleRendererRecordingStopped()
   assert.equal(getRecordingStateMachine().getState(), 'idle')
+  assert.equal(sendAutoStartRequest(firstRequest), false, 'completed key: state machine rejects -> false')
+  assert.equal(firstWindow.sent.length, 1, 'rejected start sends nothing')
 
   // If the renderer misses the message, the pending start times out and does not wedge the session.
   sendAutoStartRequest({
@@ -393,6 +401,128 @@ async function main(): Promise<void> {
   assert.deepEqual(getRecordingStateMachine().getActiveRecording()?.metadata, { title: 'Manual client meeting' })
   assert.equal(getRecordingStateMachine().canStartAutoRecording('auto-during-manual'), false)
   handleRendererRecordingStopped()
+
+  // Join-triggered recording, spec J4 (Task 7): the auto-stop carries a
+  // reason; a `grace_expired` stop shortly after a join-triggered start is a
+  // false start -> `deliver: false`, the key is forgotten (re-armed) and the
+  // join watcher is told so it can go back to polling. Every other reason and
+  // every other trigger delivers and stays blocked.
+  {
+    const discarded: string[] = []
+    const started: string[] = []
+    configureJoinWatchHooks({
+      onRecordingDiscarded: (key) => discarded.push(key),
+      onRecordingStarted: (key) => started.push(key)
+    })
+    const joinRequest = (key: string, trigger: 'join' | 'calendar') => ({
+      eventId: `${key}-event`,
+      idempotencyKey: key,
+      // Scheduled start 1 min out and a start "now": inside J4's start+2min /
+      // <5min window, so only the reason/trigger decide the outcome.
+      startTimeUtc: new Date(Date.now() + 60_000).toISOString(),
+      endTimeUtc: new Date(Date.now() + 3_600_000).toISOString(),
+      source: 'auto' as const,
+      trigger
+    })
+    const lastAutoStop = (sent: { channel: string; data: unknown }[]): unknown => {
+      const msg = sent.at(-1)
+      assert.equal(msg?.channel, 'recording:auto-stop-request')
+      return msg?.data
+    }
+
+    // (ii) join + grace_expired -> discard, re-arm, hook fired.
+    cleanupRecordingIpc()
+    const joinWindow = fakeWindow()
+    setMainWindow(joinWindow.window)
+    handleRendererRecordingReady()
+    assert.equal(sendAutoStartRequest(joinRequest('join-discard-key', 'join')), true)
+    handleRendererRecordingStarted()
+    // (vi) the renderer ack fires onRecordingStarted with the key.
+    assert.deepEqual(started, ['join-discard-key'], 'ack fires onRecordingStarted')
+    assert.ok(getRecordingStateMachine().getActiveRecording()?.startedAtUtc, 'ack stamps startedAtUtc')
+    assert.equal(getRecordingStateMachine().getActiveRecording()?.trigger, 'join')
+    sendAutoStopRequest({ reason: 'grace_expired' })
+    assert.deepEqual(lastAutoStop(joinWindow.sent), {
+      eventId: 'join-discard-key-event',
+      idempotencyKey: 'join-discard-key',
+      deliver: false
+    })
+    assert.deepEqual(discarded, [], 'hook waits for the renderer to confirm the stop')
+    handleRendererRecordingStopped()
+    assert.equal(getRecordingStateMachine().getState(), 'idle')
+    assert.equal(getRecordingStateMachine().canStartAutoRecording('join-discard-key'), true, 'false start re-arms the key')
+    assert.deepEqual(discarded, ['join-discard-key'], 'onRecordingDiscarded fired with the key')
+    // A later join really can start it again (J4 "re-armed").
+    assert.equal(sendAutoStartRequest(joinRequest('join-discard-key', 'join')), true, 're-armed key starts again')
+    handleRendererRecordingStarted()
+    assert.deepEqual(started, ['join-discard-key', 'join-discard-key'])
+
+    // (iii) join + upload_now (human override) -> deliver, stays blocked, no hook.
+    sendAutoStopRequest({ reason: 'upload_now' })
+    assert.deepEqual(lastAutoStop(joinWindow.sent), {
+      eventId: 'join-discard-key-event',
+      idempotencyKey: 'join-discard-key',
+      deliver: true
+    })
+    handleRendererRecordingStopped()
+    assert.equal(getRecordingStateMachine().canStartAutoRecording('join-discard-key'), false, 'upload_now keeps the key blocked')
+    assert.deepEqual(discarded, ['join-discard-key'], 'no discard hook for a delivered stop')
+
+    // (iv) default reason (scheduled end) -> deliver.
+    assert.equal(sendAutoStartRequest(joinRequest('join-sched-key', 'join')), true)
+    handleRendererRecordingStarted()
+    sendAutoStopRequest()
+    assert.deepEqual(lastAutoStop(joinWindow.sent), {
+      eventId: 'join-sched-key-event',
+      idempotencyKey: 'join-sched-key',
+      deliver: true
+    })
+    handleRendererRecordingStopped()
+    assert.equal(getRecordingStateMachine().canStartAutoRecording('join-sched-key'), false)
+    assert.deepEqual(discarded, ['join-discard-key'])
+
+    // (v) calendar trigger + grace_expired -> deliver (never discarded).
+    assert.equal(sendAutoStartRequest(joinRequest('cal-key', 'calendar')), true)
+    handleRendererRecordingStarted()
+    sendAutoStopRequest({ reason: 'grace_expired' })
+    assert.deepEqual(lastAutoStop(joinWindow.sent), {
+      eventId: 'cal-key-event',
+      idempotencyKey: 'cal-key',
+      deliver: true
+    })
+    handleRendererRecordingStopped()
+    assert.equal(getRecordingStateMachine().canStartAutoRecording('cal-key'), false)
+    assert.deepEqual(discarded, ['join-discard-key'])
+
+    // (vi) a manual start of the same meeting also fires onRecordingStarted so
+    // the join watcher stops polling/prompting for it.
+    registerManualRecording({
+      eventId: 'manual-join-event',
+      idempotencyKey: 'manual-join-key',
+      startTimeUtc: new Date().toISOString(),
+      endTimeUtc: new Date(Date.now() + 3_600_000).toISOString(),
+      source: 'manual'
+    })
+    assert.equal(started.at(-1), 'manual-join-key', 'manual start fires onRecordingStarted')
+    handleRendererRecordingStopped()
+
+    // A throwing hook must never break the recording lifecycle.
+    configureJoinWatchHooks({
+      onRecordingDiscarded: () => {
+        throw new Error('hook boom')
+      },
+      onRecordingStarted: () => {
+        throw new Error('hook boom')
+      }
+    })
+    assert.equal(sendAutoStartRequest(joinRequest('join-throw-key', 'join')), true)
+    handleRendererRecordingStarted()
+    assert.equal(getRecordingStateMachine().getState(), 'recording')
+    sendAutoStopRequest({ reason: 'grace_expired' })
+    handleRendererRecordingStopped()
+    assert.equal(getRecordingStateMachine().canStartAutoRecording('join-throw-key'), true)
+    configureJoinWatchHooks(null)
+  }
 
   // IN-120: tray commands are forwarded to the active renderer only; the
   // automatic recording lifecycle retains ownership of start and stop state.

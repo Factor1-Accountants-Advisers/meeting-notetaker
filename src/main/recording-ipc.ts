@@ -3,6 +3,7 @@ import { createRecordingStateMachine, type ActiveRecording, type RecordingStateM
 import { logger } from './logger'
 import { buildEndingSoonToastXml, buildRecordingPausedToastXml } from './toast-xml'
 import { armCallSignals, disarmCallSignals } from './call-signals'
+import { decideFalseStart, type AutoStopReason } from './join-watch-core'
 
 // IN-129: while recording, hold the system awake so an idle timeout can't
 // sleep the machine mid-meeting. (Lid-close sleep is OS power policy and
@@ -92,6 +93,42 @@ export function configureCallWatchRegistrarHooks(hooks: CallWatchRegistrarHooks 
   registrarHooks = hooks
 }
 
+/** Join-watch hooks (spec J1/J4). `onRecordingDiscarded` fires after a false
+ *  start was discarded so the meeting can re-arm; `onRecordingStarted` fires
+ *  when the renderer acks ANY start (auto or manual) so the join watcher
+ *  stops polling/prompting that meeting. Null when the join trigger is off. */
+export interface JoinWatchHooks {
+  onRecordingDiscarded?: (idempotencyKey: string) => void
+  onRecordingStarted?: (idempotencyKey: string) => void
+}
+
+let joinWatchHooks: JoinWatchHooks | null = null
+
+/** Same handover direction as `configureCallWatchRegistrarHooks`: set once
+ *  from index.ts at startup; `null` clears (test/teardown seam). */
+export function configureJoinWatchHooks(hooks: JoinWatchHooks | null): void {
+  joinWatchHooks = hooks
+}
+
+/** Fire a join-watch hook without letting it break the recording lifecycle
+ *  — the hooks are advisory (they only steer the watcher), never load-bearing. */
+function notifyJoinWatch(hook: keyof JoinWatchHooks, idempotencyKey: string): void {
+  try {
+    joinWatchHooks?.[hook]?.(idempotencyKey)
+  } catch (err) {
+    logger().warn('[recording] join-watch hook failed', {
+      hook,
+      idempotencyKey,
+      message: err instanceof Error ? err.message : String(err)
+    })
+  }
+}
+
+/** Key of the recording we asked the renderer to discard (J4 false start);
+ *  consumed when the renderer confirms the stop, cleared on every terminal
+ *  path so a stale value can never forget a real recording later. */
+let pendingDiscardKey: string | null = null
+
 let mainWindow: BrowserWindow | null = null
 let recordingSM: RecordingStateMachine | null = null
 let autoStopTimer: ReturnType<typeof setTimeout> | null = null
@@ -161,10 +198,16 @@ export function setAutoStartAckTimeoutMsForTest(timeoutMs: number): void {
   autoStartAckTimeoutMs = timeoutMs
 }
 
-export function sendAutoStartRequest(recording: ActiveRecording): void {
+/**
+ * Hand an auto-start to the renderer. Returns `true` when the request was
+ * accepted (queued for a not-yet-ready renderer, or sent), `false` on any
+ * refusal — the join watcher (spec J1) must stay armed and keep polling on a
+ * refusal rather than believe a recording began.
+ */
+export function sendAutoStartRequest(recording: ActiveRecording): boolean {
   if (!mainWindow || mainWindow.isDestroyed()) {
     logger().warn('[recording] cannot send auto-start: no main window')
-    return
+    return false
   }
 
   const sm = getRecordingStateMachine()
@@ -174,14 +217,14 @@ export function sendAutoStartRequest(recording: ActiveRecording): void {
       recordingKey: recording.idempotencyKey,
       pendingKey: pendingAutoStart.idempotencyKey
     })
-    return
+    return false
   }
   if (!sm.canStartAutoRecording(recording.idempotencyKey)) {
     logger().info('[recording] auto-start skipped', {
       reason: 'state machine rejected',
       recordingKey: recording.idempotencyKey
     })
-    return
+    return false
   }
 
   pendingAutoStart = { ...recording, source: 'auto' }
@@ -190,13 +233,22 @@ export function sendAutoStartRequest(recording: ActiveRecording): void {
       eventId: recording.eventId,
       idempotencyKey: recording.idempotencyKey
     })
-    return
+    return true
   }
   sendPendingAutoStart('sending auto-start to renderer')
   scheduleAutoStartAckTimeout()
+  return true
 }
 
-export function sendAutoStopRequest(): void {
+/**
+ * Ask the renderer to stop the active recording. `reason` is why we are
+ * stopping (the call-signal machine's `stop(reason)`, the scheduled-end
+ * timer's `scheduled_end`, or `manual`); it feeds the J4 false-start rule,
+ * which alone decides `deliver`. A discard (`deliver: false`) is remembered
+ * in `pendingDiscardKey` so the renderer's stop confirmation can re-arm the
+ * meeting instead of blocking the key as completed.
+ */
+export function sendAutoStopRequest(opts: { reason: AutoStopReason } = { reason: 'scheduled_end' }): void {
   if (!mainWindow || mainWindow.isDestroyed()) {
     logger().warn('[recording] cannot send auto-stop: no main window')
     return
@@ -211,14 +263,27 @@ export function sendAutoStopRequest(): void {
 
   resetAutoStopState()
 
+  const decision = decideFalseStart({
+    trigger: active.trigger,
+    stopReason: opts.reason,
+    scheduledStartUtc: active.startTimeUtc,
+    startedAtUtc: active.startedAtUtc,
+    nowUtc: new Date().toISOString()
+  })
+  const deliver = decision === 'deliver'
+  if (!deliver) pendingDiscardKey = active.idempotencyKey
+
   logger().info('[recording] sending auto-stop to renderer', {
     eventId: active.eventId,
-    idempotencyKey: active.idempotencyKey
+    idempotencyKey: active.idempotencyKey,
+    reason: opts.reason,
+    deliver
   })
 
   mainWindow.webContents.send('recording:auto-stop-request', {
     eventId: active.eventId,
-    idempotencyKey: active.idempotencyKey
+    idempotencyKey: active.idempotencyKey,
+    deliver
   })
 }
 
@@ -236,7 +301,10 @@ export function handleRendererRecordingStarted(): void {
     pendingAutoStart = null
     clearAutoStartAckTimer()
     recordingPaused = false
-    sm.startAutoRecording(recording)
+    // startedAtUtc is stamped at the renderer's ack — the moment capture
+    // really began — because the J4 false-start rule measures recording
+    // duration from here, not from the scheduled start.
+    sm.startAutoRecording({ ...recording, startedAtUtc: new Date().toISOString() })
     blockSleepWhileRecording()
     scheduleAutoStop(recording)
     // Attach-aware arm (spec E5): when the registrar already parked a watch
@@ -245,6 +313,7 @@ export function handleRendererRecordingStarted(): void {
     // default (`undefined` selects it).
     armCallSignals(recording, undefined, (hash) => registrarHooks?.hasActiveWatch(hash) ?? false)
     notifyAutoRecordingStarted(recording)
+    notifyJoinWatch('onRecordingStarted', recording.idempotencyKey)
   }
   logger().info('[recording] renderer confirmed recording started', {
     state: sm.getState()
@@ -272,6 +341,9 @@ export function registerManualRecording(recording: ActiveRecording & { title?: s
     eventId: recording.eventId,
     idempotencyKey: recording.idempotencyKey
   })
+  // A manual recording of a watched meeting must also stop the join watcher
+  // polling/prompting for it (spec J1) — the human already chose to record.
+  notifyJoinWatch('onRecordingStarted', recording.idempotencyKey)
 }
 
 export function handleRendererRecordingStopped(): void {
@@ -292,6 +364,17 @@ export function handleRendererRecordingStopped(): void {
 
   // Transition back to idle after processing
   sm.completeProcessing()
+
+  if (finished && pendingDiscardKey === finished.idempotencyKey) {
+    // J4 false start: the renderer dropped the spill, so the key must not
+    // stay "completed" — forget it so a later real join records afresh.
+    pendingDiscardKey = null
+    sm.forgetCompleted(finished.idempotencyKey)
+    logger().info('[recording] false start discarded; meeting re-armed', { idempotencyKey: finished.idempotencyKey })
+    notifyJoinWatch('onRecordingDiscarded', finished.idempotencyKey)
+  } else {
+    pendingDiscardKey = null
+  }
 }
 
 export function handleRendererRecordingError(message: string): void {
@@ -302,6 +385,7 @@ export function handleRendererRecordingError(message: string): void {
   unblockSleep()
   clearAutoStartAckTimer()
   pendingAutoStart = null
+  pendingDiscardKey = null
 
   const sm = getRecordingStateMachine()
   sm.stopRecording()
@@ -377,7 +461,7 @@ function rescheduleAutoStopTimers(recording: ActiveRecording): void {
   autoStopTimer = setTimeout(() => {
     autoStopTimer = null
     logger().info('[recording] auto-stop timer fired', { eventId: recording.eventId })
-    sendAutoStopRequest()
+    sendAutoStopRequest({ reason: 'scheduled_end' })
   }, delayMs)
 
   const reminderPlan = getEndReminderPlan(autoStopEndMs)
@@ -604,6 +688,7 @@ export function cleanupRecordingIpc(): void {
   unblockSleep()
   clearAutoStartAckTimer()
   pendingAutoStart = null
+  pendingDiscardKey = null
   rendererRecordingReady = false
   mainWindow = null
   recordingSM = null

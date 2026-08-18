@@ -35,6 +35,9 @@ export interface GraphMeetingMetadata {
 export interface AutoStopRequest {
   eventId: string
   idempotencyKey: string
+  /** false = discard (join-trigger false start, spec J4): stop capture,
+   *  drop the spill, delete the empty backend meeting, no upload. */
+  deliver: boolean
 }
 
 // Crash-safe capture spill (IN-129).

@@ -130,7 +130,7 @@ configureCallSignals({
   actions: {
     pause: () => sendTrayRecordingControl('pause'),
     resume: () => sendTrayRecordingControl('resume'),
-    stop: () => sendAutoStopRequest(),
+    stop: (reason) => sendAutoStopRequest({ reason }),
     showPausedToast: showRecordingPausedToast,
     closePausedToast: closeRecordingPausedToast,
     isPaused: isRecordingPaused
