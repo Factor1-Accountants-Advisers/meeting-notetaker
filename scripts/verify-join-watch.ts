@@ -38,15 +38,26 @@ const T = (min: number): string => new Date(Date.UTC(2026, 7, 20, 10, 0, 0) + mi
   assert.equal(postEnd.inCall, false)
   assert.equal(postEnd.endedAtOrAfterStart, true)
 
+  // Boundary: call_ended AT scheduledStartUtc counts as ended (>=, not >).
+  // A mutation of >= to > must make this fail.
+  const atBoundary = deriveCallPresence([sig('recorder_rejoined', T(-5)), sig('call_ended', T(0))], T(0))
+  assert.equal(atBoundary.endedAtOrAfterStart, true, 'call_ended exactly at scheduledStartUtc must count as ended')
+
   // Post-start call_ended followed by a fresh IN → back in call, not ended.
   const restarted = deriveCallPresence([sig('recorder_rejoined', T(0)), sig('call_ended', T(30)), sig('recorder_rejoined', T(35))], T(0))
   assert.equal(restarted.inCall, true)
   assert.equal(restarted.endedAtOrAfterStart, false)
 
+  // A late-delivered recorder_left after call_ended must not reset "ended".
+  const endedThenLeft = deriveCallPresence([sig('recorder_rejoined', T(0)), sig('call_ended', T(30)), sig('recorder_left', T(31))], T(0))
+  assert.equal(endedThenLeft.inCall, false)
+  assert.equal(endedThenLeft.endedAtOrAfterStart, true)
+
   // Out-of-order input is sorted by seq before walking.
   const chrono = [sig('recorder_rejoined', T(-30)), sig('recorder_left', T(-10))]
   const shuffled = deriveCallPresence([...chrono].reverse(), T(0))
   assert.equal(shuffled.inCall, false)
+  assert.equal(shuffled.lastSignalUtc, T(-10), 'lastSignalUtc follows sorted order, not input order')
 }
 
 // ---- bundle purity ---------------------------------------------------------
