@@ -66,8 +66,8 @@ Startup must show, in order: `[app] auto-start trigger { mode: 'join' }`,
 `[join-watch] configured`. Then prove the NEW backend is the one on 8787:
 
 ```powershell
-curl.exe -s -o NUL -w "%{http_code}`n" -X DELETE http://127.0.0.1:8787/api/v1/meetings/nope -H "X-MN-User: x"
-# 404 = new route present.  405 = you adopted the old backend → go back to step 1.
+curl.exe -s -o NUL -w "%{http_code}`n" -X DELETE http://127.0.0.1:8787/api/v1/meetings/00000000-0000-0000-0000-000000000000 -H "X-MN-User: x"
+# 404 = new route present (a non-UUID id gives 422, also new).  405 = you adopted the old backend → back to step 1.
 ```
 
 **Force a calendar sync any time:** lock + unlock the screen (Win+L) →
@@ -84,7 +84,9 @@ cd C:\Projects\meeting-notetaker-2
 ```
 
 It prints every `recorder_rejoined` / `recorder_left` / `call_ended` the
-relay stored, per meeting, the instant it lands. If you join and it prints
+relay stored, per meeting, the instant it lands. It enumerates meetings
+(±3 h) ONCE at startup — after creating a test meeting, restart it
+(Ctrl+C; if launched via the wrapper window it restarts itself in 5 s). If you join and it prints
 nothing within ~10 s, the watch isn't there — check `hasWatch` below before
 blaming the trigger.
 
