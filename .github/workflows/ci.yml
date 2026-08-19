@@ -18,12 +18,22 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - name: Renderer and main-process fixtures
+        # bash so a failing harness fails the step (default pwsh only gates
+        # the LAST command's exit code in a multi-line run block).
+        shell: bash
         run: |
+          set -e
           npm run verify:audio-endpoint-protocol
           npm run verify:audio-endpoint-service
           npm run verify:audio-routing-dryrun
           npm run verify:recording-controls
           npm run verify:capture
+          npm run verify:join-watch
+          npm run verify:call-signals
+          npm run verify:call-watch-registrar
+          npm run verify:graph
+          npm run verify:toast-xml
+          npm run verify:backend-supervisor
 
   rust-helper:
     runs-on: windows-latest

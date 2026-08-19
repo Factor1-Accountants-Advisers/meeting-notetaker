@@ -37,6 +37,12 @@ function pidFilePath(): string {
   return join(app.getPath('userData'), 'backend-data', 'backend.pid')
 }
 
+// Shared by spawnChild() (exe path, cwd) and the adoption path (credentials
+// load only) so both agree on where the bundled backend.env lives.
+function backendBundleDir(): string {
+  return join(process.resourcesPath, 'backend')
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -66,6 +72,10 @@ export async function startBackendSupervisor(): Promise<void> {
     if (shouldAdoptExistingBackend(existingHealth, app.getVersion())) {
       adoptedPid = readPidFile()
       logger().info('[supervisor] same-version backend on 8787 — adopting', { adoptedPid })
+      // Main reads getBackendEnvLayers() once backendStartup resolves (J6
+      // kill switch) — adoption must still populate lastLoadedLayers or the
+      // %PROGRAMDATA% override becomes invisible even though we never spawn.
+      loadCredentials(backendBundleDir())
       return
     }
     logger().warn('[supervisor] stale or foreign backend on 8787 — replacing', {
@@ -247,14 +257,14 @@ async function spawnAndWait(): Promise<void> {
 
 function spawnChild(): void {
   backendHealthy = false
-  const exePath = join(process.resourcesPath, 'backend', 'notetaker-backend.exe')
+  const exePath = join(backendBundleDir(), 'notetaker-backend.exe')
   if (!existsSync(exePath)) {
     logger().error('[supervisor] backend executable not found', { path: exePath })
     showBackendFailure('Backend executable not found', exePath)
     return
   }
 
-  const cwd = join(process.resourcesPath, 'backend')
+  const cwd = backendBundleDir()
   const dataDir = join(app.getPath('userData'), 'backend-data')
 
   // Seed initial voiceprints on first launch — bundled in extraResources.
@@ -270,7 +280,7 @@ function spawnChild(): void {
 
   // Two-layer credentials: bundled team keys (shipped in installer) then
   // %PROGRAMDATA% per-machine overrides (key-rotation path, wins on conflict).
-  const credsEnv = loadCredentials(join(process.resourcesPath, 'backend'))
+  const credsEnv = loadCredentials(backendBundleDir())
   Object.assign(env, credsEnv)
 
   logger().info('[supervisor] spawning backend', { exePath, cwd, dataDir })
@@ -387,6 +397,12 @@ async function restartWithBackoff(): Promise<void> {
 // Credentials — two-layer loading (C5)
 // ---------------------------------------------------------------------------
 
+// The most recent merged layers from loadCredentials(), so main-process code
+// (join-watch-core's readAutoStartTrigger, spec J6) can read the same
+// PROGRAMDATA-wins backend.env the backend child was spawned with, without
+// re-parsing the files itself. See getBackendEnvLayers() below.
+let lastLoadedLayers: Record<string, string> = {}
+
 /**
  * Parse a KEY=VALUE env file (``#`` comments, CRLF-tolerant).
  * Returns parsed entries; never logs values or key names with values.
@@ -467,7 +483,19 @@ function loadCredentials(bundleDir: string): Record<string, string> {
     layers: layers.map((l) => ({ path: l.path, found: l.found })),
   })
 
+  lastLoadedLayers = { ...result }
   return result
+}
+
+/** The merged two-layer backend.env (bundled, then %PROGRAMDATA%; PROGRAMDATA
+ *  wins) as last loaded for the backend child. Main-process settings that
+ *  must survive auto-update read from here — the join-trigger kill switch
+ *  MN_AUTO_START_TRIGGER (spec J6) — because main's own resources/.env.production
+ *  is replaced on every update. Empty until the supervisor has loaded (and
+ *  in dev, where no supervisor runs — callers fall back to process.env).
+ *  Returns a copy; never log its values (it carries the API keys). */
+export function getBackendEnvLayers(): Record<string, string> {
+  return { ...lastLoadedLayers }
 }
 
 // ---------------------------------------------------------------------------

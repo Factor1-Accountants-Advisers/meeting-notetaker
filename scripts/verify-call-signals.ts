@@ -13,6 +13,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 // Imports the PURE CORE only. `call-signals.ts` (the runtime half) pulls in
 // auth-msal/electron-log, which `require("electron")` at module scope; the
 // bundle-purity check at the foot of this file fails if that ever creeps back.
@@ -30,6 +31,7 @@ import {
   type CallSignal,
   type CallSignalActions,
   type CallSignalHttpResponse,
+  type CallSignalStopReason,
   type CallSignalTimers
 } from '../src/main/call-signals-core'
 
@@ -89,6 +91,11 @@ function createFakeClock(): FakeClock {
 interface Recorder {
   actions: CallSignalActions
   calls: string[]
+  /** The `reason` of every `stop()` in arrival order. The join-trigger
+   *  false-start rule (J4) discards a short recording ONLY on
+   *  `grace_expired`; `call_ended` and the human "Upload now" must always
+   *  deliver, so each of the three stop paths pins its reason here. */
+  stopReasons: CallSignalStopReason[]
   reset(): void
   setPaused(paused: boolean): void
   isPaused(): boolean
@@ -98,9 +105,11 @@ interface Recorder {
  *  deliberately absent from the call log. */
 function createRecorder(): Recorder {
   const calls: string[] = []
+  const stopReasons: CallSignalStopReason[] = []
   let paused = false
   return {
     calls,
+    stopReasons,
     actions: {
       pause(): void {
         calls.push('pause')
@@ -110,8 +119,9 @@ function createRecorder(): Recorder {
         calls.push('resume')
         paused = false
       },
-      stop(): void {
+      stop(reason: CallSignalStopReason): void {
         calls.push('stop')
+        stopReasons.push(reason)
       },
       showPausedToast(): void {
         calls.push('showPausedToast')
@@ -123,6 +133,7 @@ function createRecorder(): Recorder {
     },
     reset(): void {
       calls.length = 0
+      stopReasons.length = 0
     },
     setPaused(value: boolean): void {
       paused = value
@@ -262,6 +273,11 @@ function scenarioLeaveThenGraceExpiry(): void {
     'grace expiry must close the toast and stop the recording'
   )
   assert.equal(machine.getState(), 'done', 'grace expiry ends the machine')
+  assert.deepEqual(
+    recorder.stopReasons.at(-1),
+    'grace_expired',
+    'a grace-expiry stop must carry reason grace_expired (the only J4-discardable reason)'
+  )
   assert.equal(clock.pendingCount(), 0, 'no timer may survive the grace expiry')
   assert.equal(machine.isPausedToastVisible(), false, 'the toast flag must clear on expiry')
   assert.equal(machine.getActionErrorCount(), 0, 'a healthy run must swallow nothing')
@@ -379,6 +395,11 @@ function scenarioCallEnded(): void {
     'call_ended from watching must stop the recording immediately'
   )
   assert.equal(machineA.getState(), 'done', 'call_ended ends the machine')
+  assert.deepEqual(
+    recorderA.stopReasons.at(-1),
+    'call_ended',
+    'a call_ended stop must carry reason call_ended (never J4-discardable)'
+  )
   assert.equal(clockA.pendingCount(), 0, 'call_ended leaves no timers behind')
 
   // From grace.
@@ -392,6 +413,11 @@ function scenarioCallEnded(): void {
     recorderB.calls,
     ['closePausedToast', 'stop'],
     'call_ended during grace must cancel the timer and stop once'
+  )
+  assert.deepEqual(
+    recorderB.stopReasons.at(-1),
+    'call_ended',
+    'call_ended during grace is still reason call_ended, not grace_expired'
   )
   assert.equal(clockB.pendingCount(), 0, 'the grace timer must be cancelled by call_ended')
   clockB.tick(CALL_SIGNAL_GRACE_MS * 2)
@@ -542,7 +568,9 @@ function scenarioPrimeSeen(): void {
 }
 
 function scenarioToastActions(): void {
-  // Upload now during grace behaves exactly like grace expiry.
+  // Upload now during grace behaves exactly like grace expiry — same effects,
+  // same terminal state — except that the stop reason is `upload_now`, the
+  // one the join-trigger false-start rule (J4) must never discard.
   const clockA = createFakeClock()
   const recorderA = createRecorder()
   const machineA = createCallSignalMachine(recorderA.actions, CALL_SIGNAL_GRACE_MS, clockA.timers)
@@ -555,6 +583,11 @@ function scenarioToastActions(): void {
     'Upload now must stop the recording immediately'
   )
   assert.equal(machineA.getState(), 'done', 'Upload now ends the machine')
+  assert.deepEqual(
+    recorderA.stopReasons.at(-1),
+    'upload_now',
+    'the human Upload now override must carry reason upload_now — J4 must never discard it'
+  )
   assert.equal(clockA.pendingCount(), 0, 'Upload now cancels the grace timer')
 
   // Keep recording during grace resumes and returns to watching.
@@ -681,8 +714,8 @@ function scenarioThrowingActions(): void {
   const recorderC = createRecorder()
   const throwingStop: CallSignalActions = {
     ...recorderC.actions,
-    stop(): void {
-      recorderC.actions.stop()
+    stop(reason: CallSignalStopReason): void {
+      recorderC.actions.stop(reason)
       throw new Error('no window')
     }
   }
@@ -1287,6 +1320,59 @@ async function scenarioPollerHappyPath(): Promise<void> {
   assertNoPii(logs.entries, 'happy path')
 }
 
+/**
+ * Task 12 / join-trigger spec J5: index.ts injects the 5s join-watch cadence
+ * (`JOIN_WATCH_POLL_INTERVAL_MS`) as `pollIntervalMs` so the live-meeting
+ * attach poller's leave-detection tightens along with join-detection. Pins
+ * that an explicit `pollIntervalMs` actually drives the tick — not just the
+ * documented default (`CALL_SIGNAL_POLL_INTERVAL_MS`, asserted pinned at 10s
+ * below).
+ */
+async function scenarioPollerHonoursInjectedPollInterval(): Promise<void> {
+  const clock = createFakeClock()
+  const recorder = createRecorder()
+  const logs = createFakeLog()
+  const leave = signal('001', 'recorder_left')
+  const http = createFakeHttp((call) =>
+    call.method === 'GET' ? jsonResponse(200, { signals: [leave] }) : jsonResponse(200, { watch_id: 'w1' })
+  )
+  const injectedIntervalMs = 5_000
+  assert.ok(
+    injectedIntervalMs < CALL_SIGNAL_POLL_INTERVAL_MS,
+    'the injected interval must be shorter than the default for this scenario to be meaningful'
+  )
+  const poller = createCallSignalPoller({
+    ...pollerDeps(clock, http, logs, recorder),
+    pollIntervalMs: injectedIntervalMs
+  })
+  await poller.start()
+
+  clock.tick(injectedIntervalMs - 1)
+  await flush()
+  assert.equal(
+    http.calls.filter((call) => call.method === 'GET').length,
+    0,
+    'no poll may fire before the injected interval elapses'
+  )
+
+  clock.tick(1)
+  await flush()
+  assert.equal(
+    http.calls.filter((call) => call.method === 'GET').length,
+    1,
+    'an injected pollIntervalMs must drive the tick cadence, not the core default'
+  )
+  assert.deepEqual(
+    recorder.calls,
+    ['pause', 'showPausedToast'],
+    'the poll fired at the injected cadence must still drive the machine'
+  )
+
+  poller.stop()
+  await flush()
+  assertNoPii(logs.entries, 'injected poll interval')
+}
+
 async function scenarioPollerRegistrationRetry(): Promise<void> {
   // Failure then success: exactly one retry at +30s, then normal polling.
   const clock = createFakeClock()
@@ -1554,8 +1640,8 @@ async function scenarioAttachBaselineDrain(): Promise<void> {
   assert.equal(baselineLog?.level, 'info', 'the baseline-drained log is informational, not a warning')
   assert.deepEqual(
     baselineLog?.context,
-    { drained: baseline.length },
-    'the baseline-drained log must carry only the count — never the signals themselves'
+    { drained: baseline.length, live: 0 },
+    'the baseline-drained log must carry only counts — never the signals themselves'
   )
   assert.equal(
     logs.entries.filter((entry) => entry.message === '[call-signals] baseline drained').length,
@@ -1634,7 +1720,7 @@ async function scenarioAttachFailedFirstPollRetriesBaseline(): Promise<void> {
   assert.equal(baselineLogs.length, 1, 'the first successful poll must log the drain exactly once')
   assert.deepEqual(
     baselineLogs[0]?.context,
-    { drained: 1 },
+    { drained: 1, live: 0 },
     'the baseline-drained log counts only the signals actually primed'
   )
 
@@ -1704,6 +1790,108 @@ async function scenarioAttachStopPreservesRegistrarWatch(): Promise<void> {
   assertNoPii(logs2.entries, 'attach stop (never-started poller)')
 }
 
+
+/**
+ * Join-trigger spec J5 (closing the E5 gap): the join watcher hands the
+ * attach poller the seq of the LAST signal it had seen when it decided to
+ * start (`baselineSeq`). The first successful poll then drains only up to
+ * that seq and INGESTS anything later — so a `recorder_left` that lands
+ * between the start decision and the first attach poll (a join-then-leave in
+ * seconds) opens the grace window instead of being swallowed as
+ * "pre-recording noise" and recording to scheduled end.
+ */
+async function scenarioAttachBaselineSeqIngestsLaterSignals(): Promise<void> {
+  const clock = createFakeClock()
+  const recorder = createRecorder()
+  const logs = createFakeLog()
+  // Watcher last saw seq 002 (a call_ended from a camera check — if wrongly
+  // ingested it would END the machine, which makes it a sharp probe). 003 is
+  // a genuine leave that landed after the start decision.
+  const first = [
+    signal('001', 'recorder_left'),
+    signal('002', 'call_ended'),
+    signal('003', 'recorder_left')
+  ]
+  let get = 0
+  const http = createFakeHttp((call) => {
+    if (call.method !== 'GET') return jsonResponse(204)
+    get += 1
+    return jsonResponse(200, { signals: first })
+  })
+  const poller = createCallSignalPoller({
+    ...pollerDeps(clock, http, logs, recorder),
+    mode: 'attach',
+    baselineSeq: '002'
+  })
+  await poller.start()
+  await flush()
+  assert.equal(get, 1, 'the immediate baseline poll ran')
+  assert.deepEqual(
+    recorder.calls,
+    ['pause', 'showPausedToast'],
+    'a signal AFTER the watcher baseline is ingested on the first poll — the leave opens grace'
+  )
+  assert.equal(poller.machine.getState(), 'grace', 'seq 003 (> baseline) drove the machine into grace')
+  const baselineLog = logs.entries.find((entry) => entry.message === '[call-signals] baseline drained')
+  assert.deepEqual(
+    baselineLog?.context,
+    { drained: 2, live: 1 },
+    'the drain log counts primed vs live — never the signals themselves'
+  )
+
+  // The next tick replays all three: 001/002 were primed, 003 was ingested —
+  // nothing fires again (a replayed call_ended must not end the machine).
+  recorder.reset()
+  clock.tick(CALL_SIGNAL_POLL_INTERVAL_MS)
+  await flush()
+  assert.deepEqual(recorder.calls, [], 'replayed signals stay deduped, primed and ingested alike')
+  assert.equal(poller.machine.getState(), 'grace', 'still in grace — the drained call_ended never acts')
+  poller.stop()
+  await flush()
+  assertNoPii(logs.entries, 'attach baselineSeq ingest')
+
+  // A baseline AT or beyond the newest seq drains everything (equal seq is
+  // "already seen" — the boundary is <=).
+  const clock2 = createFakeClock()
+  const recorder2 = createRecorder()
+  const logs2 = createFakeLog()
+  const http2 = createFakeHttp((call) =>
+    call.method === 'GET' ? jsonResponse(200, { signals: first }) : jsonResponse(204)
+  )
+  const poller2 = createCallSignalPoller({
+    ...pollerDeps(clock2, http2, logs2, recorder2),
+    mode: 'attach',
+    baselineSeq: '003'
+  })
+  await poller2.start()
+  await flush()
+  assert.deepEqual(recorder2.calls, [], 'baseline == newest seq → everything drained, nothing acts')
+  assert.equal(poller2.machine.getState(), 'watching')
+  poller2.stop()
+  await flush()
+
+  // Register mode never baselines, with or without a baselineSeq: a fresh
+  // registration is a new watch generation with no prior signals.
+  const clock3 = createFakeClock()
+  const recorder3 = createRecorder()
+  const logs3 = createFakeLog()
+  const http3 = createFakeHttp((call) =>
+    call.method === 'GET' ? jsonResponse(200, { signals: [signal('001', 'recorder_left')] }) : jsonResponse(200, { watch_id: 'w1' })
+  )
+  const poller3 = createCallSignalPoller({
+    ...pollerDeps(clock3, http3, logs3, recorder3),
+    baselineSeq: '005'
+  })
+  await poller3.start()
+  clock3.tick(CALL_SIGNAL_POLL_INTERVAL_MS)
+  await flush()
+  assert.deepEqual(recorder3.calls, ['pause', 'showPausedToast'], 'register mode ignores baselineSeq and ingests normally')
+  poller3.stop()
+  await flush()
+  assertNoPii(logs2.entries, 'attach baselineSeq drain-all')
+  assertNoPii(logs3.entries, 'register mode ignores baselineSeq')
+}
+
 /**
  * The harness must bundle the pure core ONLY. `call-signals.ts` reaches
  * auth-msal / the log module, both of which require the Electron runtime at
@@ -1733,6 +1921,36 @@ function assertBundleIsRuntimeFree(): void {
   }
 }
 
+/**
+ * J5 cadence passthrough: `armCallSignals` (the runtime half, excluded from
+ * this harness's bundle — see assertBundleIsRuntimeFree) must forward the
+ * injected pollIntervalMs into the poller it composes, not drop it on a
+ * refactor. Source-text guard since the runtime file isn't otherwise
+ * exercised here.
+ */
+function assertPollIntervalPassthrough(): void {
+  const runtimeSource = readFileSync(join(process.cwd(), 'src', 'main', 'call-signals.ts'), 'utf8')
+  assert.ok(
+    runtimeSource.includes('pollIntervalMs: deps.pollIntervalMs'),
+    'armCallSignals must forward deps.pollIntervalMs to createCallSignalPoller (J5 cadence passthrough)'
+  )
+}
+
+/**
+ * J5 baseline passthrough: `armCallSignals` must forward the recording's
+ * `callSignalBaselineSeq` (stamped by the join watcher at start) into the
+ * poller it composes — without it the attach poller silently reverts to
+ * drain-all and the join-then-leave gap reopens. Source-text guard, same
+ * reason as assertPollIntervalPassthrough.
+ */
+function assertBaselineSeqPassthrough(): void {
+  const runtimeSource = readFileSync(join(process.cwd(), 'src', 'main', 'call-signals.ts'), 'utf8')
+  assert.ok(
+    runtimeSource.includes('baselineSeq: recording.callSignalBaselineSeq'),
+    'armCallSignals must forward recording.callSignalBaselineSeq to createCallSignalPoller (J5 baseline passthrough)'
+  )
+}
+
 async function main(): Promise<void> {
   // 1-9: the pure machine (spec D5/D6/D9).
   scenarioLeaveThenGraceExpiry()
@@ -1757,6 +1975,7 @@ async function main(): Promise<void> {
 
   // Poller core with injected HTTP/timers/identity/log (spec D7).
   await scenarioPollerHappyPath()
+  await scenarioPollerHonoursInjectedPollInterval()
   await scenarioPollerRegistrationRetry()
   await scenarioPollerFailuresAreSkips()
   await scenarioPollerSurvivesThrowingActions()
@@ -1766,8 +1985,11 @@ async function main(): Promise<void> {
   await scenarioAttachBaselineDrain()
   await scenarioAttachFailedFirstPollRetriesBaseline()
   await scenarioAttachStopPreservesRegistrarWatch()
+  await scenarioAttachBaselineSeqIngestsLaterSignals()
 
   assertBundleIsRuntimeFree()
+  assertPollIntervalPassthrough()
+  assertBaselineSeqPassthrough()
 
   // Pin the constants the live-smoke expectations are written against.
   assert.equal(CALL_SIGNAL_GRACE_MS, 60_000, 'the grace window must stay pinned at 60s')

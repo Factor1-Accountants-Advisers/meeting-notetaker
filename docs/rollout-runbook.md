@@ -113,3 +113,57 @@ keys without reinstalling, drop an override file on each machine:
 3. After the next CI release ships with the new keys bundled, the
    ProgramData overrides can be removed (optional — they'll keep
    overriding harmlessly).
+
+## Auto-record trigger (v2.0.30+)
+
+- **What changed**: a scheduled Teams meeting's recording now starts on
+  your *join* to its Teams call, not at calendar start time. The 3-minute
+  arming lead before scheduled start is unchanged (recording never begins
+  earlier than that); if you join late, recording still starts
+  as soon as you're in the call, at any point up to the meeting's scheduled
+  end (a join after the scheduled end is not recorded — start manually).
+- **The prompt**: if you haven't joined by start + 2 min, a toast offers
+  **Record now**. It shows once per meeting, auto-dismisses after 2 min
+  with no action taken, and is suppressed entirely while a recording is
+  already in progress.
+- **Notifications (19 Aug, with DA)**: every auto-started recording now
+  shows a sticky **Recording started** toast naming the meeting, with the
+  reminder to tell everyone it is being recorded — no toast means the
+  trigger did not fire (you joined early, or you're in the room without
+  clicking Join): start manually or wait for the prompt. Toasts stay on
+  screen 2 min (the 5-minutes-to-go warning stays 5 min) and disappear as
+  soon as the recording stops or is extended.
+- **False-start rule**: a join-triggered recording that ends via the
+  leave-grace window before start + 2 min, and lasted under 5 minutes, is
+  discarded — no email is sent, and the meeting re-arms so a later real
+  join still records normally. The paused toast's **Upload now** action
+  always delivers regardless of this rule, so a deliberate save is never
+  silently dropped — and, unlike a discarded false start, the meeting is
+  then *not* re-armed (one recording per meeting still holds).
+- **Kill switch**: set `MN_AUTO_START_TRIGGER=calendar` in
+  `%PROGRAMDATA%\Factor1\MeetingNotetaker\backend.env` and restart the
+  app to restore the legacy start-time trigger on that one machine.
+  Fleet-wide, set the `MN_AUTO_START_TRIGGER` repo variable to `calendar`
+  and cut a new release. The setting is read from `backend.env`, **not**
+  `resources\.env.production` — auto-update overwrites everything under
+  `resources\` on every install, so a `resources\.env.production` edit
+  would not survive the next update. Note that `calendar` restores the
+  *start* behaviour only: the live meeting's attach poller keeps the 5 s
+  cadence introduced with this feature (previously 10 s). That is
+  harmless — leave-detection is simply a little quicker — and needs no
+  separate switch.
+- **Log lines to look for**: `[app] auto-start trigger`,
+  `[join-watch] armed`, `[join-watch] starting recording`,
+  `[join-watch] prompting`, `[recording] false start discarded; meeting
+  re-armed`, `[join-watch] start failed before ack; re-arming`.
+- **Known limits / comms**:
+  - Hybrid/in-room meetings that still carry a Teams link now need one
+    click on the "Record now" prompt — nothing starts automatically
+    unless you actually join the Teams call.
+  - **Joining from your phone with your laptop open elsewhere still
+    records the laptop** — the trigger only knows the laptop's own call
+    membership, not which device the user is actually speaking from
+    (F1; a local device check is the next feature, not yet built).
+  - A watch registered after a call has already started is blind to that
+    call's join signal — the user only gets the start+2 min prompt, not
+    an automatic start, for that meeting.

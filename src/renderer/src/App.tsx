@@ -8,6 +8,7 @@ import { LoginScreen, type User } from './screens/LoginScreen'
 import { RecordingScreen, type RecordingSession } from './screens/RecordingScreen'
 import {
   createMeeting,
+  deleteMeeting,
   emailNotes,
   ensureCurrentPerson,
   fetchEnrolmentStatus,
@@ -173,6 +174,11 @@ function App(): JSX.Element {
     resume: () => {},
     stop: () => {}
   })
+  // Options for the NEXT stop run (join-trigger spec J4). Only the auto-stop
+  // subscription writes it, and only when no stop is in flight; tray/manual
+  // stops never touch it, so they always deliver. Reset to the default after
+  // every completed stop, never on entry.
+  const stopOptsRef = useRef<{ deliver: boolean }>({ deliver: true })
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null)
   // Mirror for mount-once subscriptions (the endpoint-change listener) so they
   // read current recording state instead of a stale closure.
@@ -489,11 +495,25 @@ function App(): JSX.Element {
       }
     })
 
+    // Shared tail of a COMPLETED stop (delivered or discarded): drop the
+    // session and re-arm the stop option so the next stop delivers by default.
+    const clearRecordingState = (): void => {
+      recordingRef.current = null
+      setRecording(null)
+      autoGraphMetadataRef.current = null
+      setCaptureStatus(null)
+      setAutoRecordingState('idle')
+      stopOptsRef.current = { deliver: true }
+    }
+
     // Single-flight, self-re-arming stop (field incident 3 Aug: a manual
     // `stopping` flag was never reset on the success path, so after one
     // successful stop the auto-stop timer, tray Stop, and on-screen Stop were
     // all silently swallowed for the rest of the session).
     const finishActiveRecording = async (): Promise<void> => {
+      // Read, don't reset: a coalesced request must not flip the option of the
+      // run already in flight, and a failed run resets it in the catch below.
+      const { deliver } = stopOptsRef.current
       try {
         setAutoRecordingState('processing')
         // Leave the active controls immediately. Capture finalization and upload
@@ -518,6 +538,30 @@ function App(): JSX.Element {
           segmentOffsetsMs: systemSegments.map((s) => s.offsetMs),
           durationSeconds
         })
+        // covered by: scripts/verify-graph-fixtures.ts (main-side discard-ack
+        // contract), spec section J4 in
+        // docs/superpowers/specs/2026-08-18-join-triggered-recording-design.md,
+        // and live check L4 in
+        // docs/superpowers/plans/2026-08-18-join-triggered-recording.md. The
+        // renderer harness never mounts App, so this branch is not unit-tested here.
+        if (!deliver) {
+          // Join-trigger false start (spec J4): the recording ended before the
+          // meeting was really under way. Nothing is kept — no local save, no
+          // upload, no email — and the empty backend meeting is removed so it
+          // never shows as a Draft. Main re-arms the meeting only on this
+          // confirmation, so we must report exactly what we did.
+          window.api.debugLog('recording discarded as false start', { meetingId, durationSeconds })
+          capture.discardCompletedSpill()
+          if (meetingId) {
+            const deleted = await deleteMeeting(meetingId)
+            if (!deleted) {
+              window.api.debugLog('false-start meeting delete failed; empty draft may remain', { meetingId })
+            }
+          }
+          clearRecordingState()
+          window.api.notifyRecordingStopped({ discarded: true })
+          return
+        }
         if (result) {
           let savedLocally = false
           const name = `${meetingId ?? `auto-${Date.now()}`}.webm`
@@ -584,13 +628,12 @@ function App(): JSX.Element {
             }
           }
         }
-        recordingRef.current = null
-        setRecording(null)
-        autoGraphMetadataRef.current = null
-        setCaptureStatus(null)
-        setAutoRecordingState('idle')
+        clearRecordingState()
         window.api.notifyRecordingStopped()
       } catch (err) {
+        // A failed stop must never leave a stale deliver:false for the next
+        // (manual or auto) stop to pick up.
+        stopOptsRef.current = { deliver: true }
         setAutoRecordingState(recordingRef.current ? 'recording' : 'idle')
         window.api.notifyRecordingError(err instanceof Error ? err.message : String(err))
       }
@@ -633,7 +676,19 @@ function App(): JSX.Element {
     }
     controlHandlersRef.current = controls
 
-    const unsubStop = window.api.onAutoStopRequest(controls.stop)
+    // Auto-stop carries `deliver` (spec J4). Set the option only when no stop
+    // is in flight: if one is already running it delivers, and main will see
+    // no `discarded` ack and keep the key completed (the safe direction).
+    const unsubStop = window.api.onAutoStopRequest((data) => {
+      if (stopFlight.isRunning()) {
+        window.api.debugLog('auto-stop received while a stop is in flight; the running stop delivers', {
+          deliver: data.deliver
+        })
+        return
+      }
+      stopOptsRef.current = { deliver: data.deliver !== false }
+      void stopFlight.invoke()
+    })
     const unsubTrayControl = window.api.onTrayRecordingControl((action) => {
       controls[action]()
     })

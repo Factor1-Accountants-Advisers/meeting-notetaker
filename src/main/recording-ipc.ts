@@ -1,8 +1,15 @@
 import { BrowserWindow, Notification, powerSaveBlocker } from 'electron'
 import { createRecordingStateMachine, type ActiveRecording, type RecordingStateMachine } from './recording-state'
 import { logger } from './logger'
-import { buildEndingSoonToastXml, buildRecordingPausedToastXml } from './toast-xml'
+import {
+  ENDING_SOON_TOAST_LIFETIME_MS,
+  TOAST_LIFETIME_MS,
+  buildEndingSoonToastXml,
+  buildRecordingPausedToastXml,
+  buildRecordingStartedToastXml
+} from './toast-xml'
 import { armCallSignals, disarmCallSignals } from './call-signals'
+import { decideFalseStart, type AutoStopReason } from './join-watch-core'
 
 // IN-129: while recording, hold the system awake so an idle timeout can't
 // sleep the machine mid-meeting. (Lid-close sleep is OS power policy and
@@ -41,24 +48,62 @@ export function meetingTitleFrom(metadata: unknown): string | null {
   return null
 }
 
-/** Toast the user that auto-recording began (Jira IN-83). */
+// "Recording started" toast handle + lifetime timer, module-level so every
+// terminal transition (resetAutoStopState) can close it early — a toast that
+// outlives its recording is noise.
+let startedToastNotification: Notification | null = null
+let startedToastTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * Toast the user that auto-recording began (Jira IN-83; reworked with DA on
+ * 19 Aug 2026). Every auto-triggered start — join, prompt, calendar — gets a
+ * sticky reminder-scenario toast: it confirms the trigger fired and cues the
+ * privacy reminder to tell the room. Closed after TOAST_LIFETIME_MS or when
+ * the recording ends, whichever is first. Manual starts are not toasted.
+ */
 function notifyAutoRecordingStarted(recording: ActiveRecording): void {
   // Notification is undefined outside the Electron runtime (e.g. the
   // esbuild-bundled verify:graph harness runs under plain Node).
   if (!Notification?.isSupported?.()) return
+  closeRecordingStartedToast()
   const title = meetingTitleFrom(recording.metadata)
   try {
-    // Silent: the renderer plays the Notetaker chime instead (IN-477).
-    new Notification({
-      title: 'Meeting Notetaker',
-      body: title ? `Recording: ${title}` : 'Auto-recording started',
-      silent: true
-    }).show()
+    startedToastNotification =
+      process.platform === 'win32'
+        ? new Notification({ toastXml: buildRecordingStartedToastXml(title ?? '') })
+        : // Silent: the renderer plays the Notetaker chime instead (IN-477).
+          new Notification({
+            title: 'Meeting Notetaker',
+            body: title ? `Recording: ${title}` : 'Auto-recording started',
+            silent: true
+          })
+    startedToastNotification.show()
+    startedToastTimer = setTimeout(closeRecordingStartedToast, TOAST_LIFETIME_MS)
+    logger().info('[recording] recording-started toast requested', {
+      idempotencyKey: recording.idempotencyKey,
+      trigger: recording.trigger
+    })
     playNotificationChime()
   } catch (err) {
+    startedToastNotification = null
     logger().warn('[recording] could not show auto-record notification', {
       message: err instanceof Error ? err.message : String(err)
     })
+  }
+}
+
+/** Close the "Recording started" toast if showing. Safe when none is. */
+function closeRecordingStartedToast(): void {
+  if (startedToastTimer) {
+    clearTimeout(startedToastTimer)
+    startedToastTimer = null
+  }
+  const notification = startedToastNotification
+  startedToastNotification = null
+  try {
+    notification?.close()
+  } catch {
+    // Already gone (dismissed by the user or by Windows) — nothing to do.
   }
 }
 
@@ -91,6 +136,47 @@ let registrarHooks: CallWatchRegistrarHooks | null = null
 export function configureCallWatchRegistrarHooks(hooks: CallWatchRegistrarHooks | null): void {
   registrarHooks = hooks
 }
+
+/** Join-watch hooks (spec J1/J4). `onRecordingDiscarded` fires after a false
+ *  start was discarded so the meeting can re-arm; `onRecordingStarted` fires
+ *  when the renderer acks ANY start (auto or manual) so the join watcher
+ *  stops polling/prompting that meeting. Null when the join trigger is off. */
+export interface JoinWatchHooks {
+  onRecordingDiscarded?: (idempotencyKey: string) => void
+  onRecordingStarted?: (idempotencyKey: string) => void
+  /** An accepted auto-start never became a recording (renderer ack timed
+   *  out, or the renderer errored before acking) — the watcher must re-arm
+   *  instead of believing a recording is under way. */
+  onRecordingStartFailed?: (idempotencyKey: string) => void
+}
+
+let joinWatchHooks: JoinWatchHooks | null = null
+
+/** Same handover direction as `configureCallWatchRegistrarHooks`: set once
+ *  from index.ts at startup; `null` clears (test/teardown seam). */
+export function configureJoinWatchHooks(hooks: JoinWatchHooks | null): void {
+  joinWatchHooks = hooks
+}
+
+/** Fire a join-watch hook without letting it break the recording lifecycle
+ *  — the hooks are advisory (they only steer the watcher), never load-bearing. */
+function notifyJoinWatch(hook: keyof JoinWatchHooks, idempotencyKey: string): void {
+  try {
+    joinWatchHooks?.[hook]?.(idempotencyKey)
+  } catch (err) {
+    logger().warn('[recording] join-watch hook failed', {
+      hook,
+      idempotencyKey,
+      message: err instanceof Error ? err.message : String(err)
+    })
+  }
+}
+
+/** Key of the recording we asked the renderer to discard (J4 false start).
+ *  A cross-check only: the renderer's own `discarded` report decides the
+ *  re-arm (see handleRendererRecordingStopped). Cleared on every terminal
+ *  path so a stale value can never confuse a later recording. */
+let pendingDiscardKey: string | null = null
 
 let mainWindow: BrowserWindow | null = null
 let recordingSM: RecordingStateMachine | null = null
@@ -161,10 +247,16 @@ export function setAutoStartAckTimeoutMsForTest(timeoutMs: number): void {
   autoStartAckTimeoutMs = timeoutMs
 }
 
-export function sendAutoStartRequest(recording: ActiveRecording): void {
+/**
+ * Hand an auto-start to the renderer. Returns `true` when the request was
+ * accepted (queued for a not-yet-ready renderer, or sent), `false` on any
+ * refusal — the join watcher (spec J1) must stay armed and keep polling on a
+ * refusal rather than believe a recording began.
+ */
+export function sendAutoStartRequest(recording: ActiveRecording): boolean {
   if (!mainWindow || mainWindow.isDestroyed()) {
     logger().warn('[recording] cannot send auto-start: no main window')
-    return
+    return false
   }
 
   const sm = getRecordingStateMachine()
@@ -174,14 +266,14 @@ export function sendAutoStartRequest(recording: ActiveRecording): void {
       recordingKey: recording.idempotencyKey,
       pendingKey: pendingAutoStart.idempotencyKey
     })
-    return
+    return false
   }
   if (!sm.canStartAutoRecording(recording.idempotencyKey)) {
     logger().info('[recording] auto-start skipped', {
       reason: 'state machine rejected',
       recordingKey: recording.idempotencyKey
     })
-    return
+    return false
   }
 
   pendingAutoStart = { ...recording, source: 'auto' }
@@ -190,13 +282,22 @@ export function sendAutoStartRequest(recording: ActiveRecording): void {
       eventId: recording.eventId,
       idempotencyKey: recording.idempotencyKey
     })
-    return
+    return true
   }
   sendPendingAutoStart('sending auto-start to renderer')
   scheduleAutoStartAckTimeout()
+  return true
 }
 
-export function sendAutoStopRequest(): void {
+/**
+ * Ask the renderer to stop the active recording. `reason` is why we are
+ * stopping (the call-signal machine's `stop(reason)`, the scheduled-end
+ * timer's `scheduled_end`, or `manual`); it feeds the J4 false-start rule,
+ * which alone decides `deliver`. A discard (`deliver: false`) is remembered
+ * in `pendingDiscardKey` so the renderer's stop confirmation can re-arm the
+ * meeting instead of blocking the key as completed.
+ */
+export function sendAutoStopRequest(opts: { reason: AutoStopReason } = { reason: 'scheduled_end' }): void {
   if (!mainWindow || mainWindow.isDestroyed()) {
     logger().warn('[recording] cannot send auto-stop: no main window')
     return
@@ -211,14 +312,27 @@ export function sendAutoStopRequest(): void {
 
   resetAutoStopState()
 
+  const decision = decideFalseStart({
+    trigger: active.trigger,
+    stopReason: opts.reason,
+    scheduledStartUtc: active.startTimeUtc,
+    startedAtUtc: active.startedAtUtc,
+    nowUtc: new Date().toISOString()
+  })
+  const deliver = decision === 'deliver'
+  if (!deliver) pendingDiscardKey = active.idempotencyKey
+
   logger().info('[recording] sending auto-stop to renderer', {
     eventId: active.eventId,
-    idempotencyKey: active.idempotencyKey
+    idempotencyKey: active.idempotencyKey,
+    reason: opts.reason,
+    deliver
   })
 
   mainWindow.webContents.send('recording:auto-stop-request', {
     eventId: active.eventId,
-    idempotencyKey: active.idempotencyKey
+    idempotencyKey: active.idempotencyKey,
+    deliver
   })
 }
 
@@ -236,7 +350,10 @@ export function handleRendererRecordingStarted(): void {
     pendingAutoStart = null
     clearAutoStartAckTimer()
     recordingPaused = false
-    sm.startAutoRecording(recording)
+    // startedAtUtc is stamped at the renderer's ack — the moment capture
+    // really began — because the J4 false-start rule measures recording
+    // duration from here, not from the scheduled start.
+    sm.startAutoRecording({ ...recording, startedAtUtc: new Date().toISOString() })
     blockSleepWhileRecording()
     scheduleAutoStop(recording)
     // Attach-aware arm (spec E5): when the registrar already parked a watch
@@ -245,6 +362,7 @@ export function handleRendererRecordingStarted(): void {
     // default (`undefined` selects it).
     armCallSignals(recording, undefined, (hash) => registrarHooks?.hasActiveWatch(hash) ?? false)
     notifyAutoRecordingStarted(recording)
+    notifyJoinWatch('onRecordingStarted', recording.idempotencyKey)
   }
   logger().info('[recording] renderer confirmed recording started', {
     state: sm.getState()
@@ -272,9 +390,24 @@ export function registerManualRecording(recording: ActiveRecording & { title?: s
     eventId: recording.eventId,
     idempotencyKey: recording.idempotencyKey
   })
+  // Fired for symmetry with the auto path. Manual keys are backend meeting
+  // ids / `manual-<ts>`, never the calendar idempotency key, so the join
+  // engine's per-meeting `noteRecordingStarted` no-ops on them; the real
+  // suppression of polling/prompting while a manual recording runs is the
+  // engine's `isRecordingActive()` check.
+  notifyJoinWatch('onRecordingStarted', recording.idempotencyKey)
 }
 
-export function handleRendererRecordingStopped(): void {
+/**
+ * The renderer confirmed the stop. `opts.discarded` is the renderer's own
+ * report of what it did (preload `notifyRecordingStopped`): only a
+ * renderer-confirmed discard forgets the key and re-arms the meeting (J4).
+ * Main's send-time `deliver` decision is a cross-check, not the authority —
+ * a user Stop during grace may already be uploading when grace expires, in
+ * which case the renderer coalesces the discard request and delivers; had
+ * main re-armed on its own decision the meeting could record twice.
+ */
+export function handleRendererRecordingStopped(opts?: { discarded?: boolean }): void {
   closePausedToastAndDisarm()
 
   recordingPaused = false
@@ -292,6 +425,30 @@ export function handleRendererRecordingStopped(): void {
 
   // Transition back to idle after processing
   sm.completeProcessing()
+
+  const expectedDiscard = finished !== null && pendingDiscardKey === finished.idempotencyKey
+  const rendererDiscarded = opts?.discarded === true
+  pendingDiscardKey = null
+  if (!finished) return
+
+  if (expectedDiscard !== rendererDiscarded) {
+    // The renderer knows what it did; follow it, but say so — a mismatch is
+    // either the coalesced-upload race above or a contract drift worth seeing.
+    logger().warn('[recording] discard confirmation mismatch', {
+      idempotencyKey: finished.idempotencyKey,
+      expectedDiscard,
+      rendererDiscarded
+    })
+  }
+  if (rendererDiscarded) {
+    // J4 false start: the renderer dropped the spill, so the key must not
+    // stay "completed" — forget it so a later real join records afresh.
+    sm.forgetCompleted(finished.idempotencyKey)
+    logger().info('[recording] false start discarded; meeting re-armed', {
+      idempotencyKey: finished.idempotencyKey
+    })
+    notifyJoinWatch('onRecordingDiscarded', finished.idempotencyKey)
+  }
 }
 
 export function handleRendererRecordingError(message: string): void {
@@ -301,13 +458,18 @@ export function handleRendererRecordingError(message: string): void {
   resetAutoStopState()
   unblockSleep()
   clearAutoStartAckTimer()
+  // An error before the start was acked means the auto-start never became a
+  // recording; an error on a running recording is an ordinary stop.
+  const unackedStartKey = pendingAutoStart?.idempotencyKey ?? null
   pendingAutoStart = null
+  pendingDiscardKey = null
 
   const sm = getRecordingStateMachine()
   sm.stopRecording()
   sm.completeProcessing()
 
   logger().warn('[recording] renderer reported error', { message })
+  if (unackedStartKey) notifyJoinWatch('onRecordingStartFailed', unackedStartKey)
 }
 
 function sendPendingAutoStart(logMessage: string): void {
@@ -347,6 +509,7 @@ function scheduleAutoStartAckTimeout(): void {
     })
     pendingAutoStart = null
     autoStartAckTimer = null
+    notifyJoinWatch('onRecordingStartFailed', pending.idempotencyKey)
   }, autoStartAckTimeoutMs)
 }
 
@@ -366,6 +529,9 @@ function scheduleAutoStop(recording: ActiveRecording): void {
 function rescheduleAutoStopTimers(recording: ActiveRecording): void {
   clearAutoStopTimer()
   clearAutoStopReminder()
+  // A visible "ends in 5 minutes" no longer holds once the end moves (Extend);
+  // the new end gets its own reminder below if it is still due.
+  closeEndingSoonToast()
   if (autoStopEndMs === null) return
 
   const delayMs = Math.max(0, autoStopEndMs - Date.now())
@@ -377,7 +543,7 @@ function rescheduleAutoStopTimers(recording: ActiveRecording): void {
   autoStopTimer = setTimeout(() => {
     autoStopTimer = null
     logger().info('[recording] auto-stop timer fired', { eventId: recording.eventId })
-    sendAutoStopRequest()
+    sendAutoStopRequest({ reason: 'scheduled_end' })
   }, delayMs)
 
   const reminderPlan = getEndReminderPlan(autoStopEndMs)
@@ -455,11 +621,18 @@ function sendEndingSoonReminder(
   notifyMeetingEndingSoon(recording)
 }
 
+// Ending-soon toast handle + lifetime timer (19 Aug 2026 with DA): the toast
+// stays the full 5 min it talks about, but is closed early when the recording
+// stops or is extended — a stale "ends in 5 minutes" is worse than none.
+let endingSoonToastNotification: Notification | null = null
+let endingSoonToastTimer: ReturnType<typeof setTimeout> | null = null
+
 function notifyMeetingEndingSoon(recording: ActiveRecording): void {
   if (!Notification?.isSupported?.()) {
     logger().warn('[recording] ending-soon notification unsupported by Electron')
     return
   }
+  closeEndingSoonToast()
   const title = meetingTitleFrom(recording.metadata)
   const body = title
     ? `"${title}" is scheduled to end in 5 minutes.`
@@ -469,18 +642,37 @@ function notifyMeetingEndingSoon(recording: ActiveRecording): void {
       // Sticky reminder toast with Extend/Dismiss buttons (IN-124, IN-477).
       // The Extend button activates the app with `mn-extend`, handled by the
       // single-instance hook in index.ts.
-      new Notification({ toastXml: buildEndingSoonToastXml(body) }).show()
+      endingSoonToastNotification = new Notification({ toastXml: buildEndingSoonToastXml(body) })
       logger().info('[recording] ending-soon Windows toast requested')
     } else {
       // Silent: the renderer plays the Notetaker chime instead (IN-477).
-      new Notification({ title: 'Meeting Notetaker', body, silent: true }).show()
+      endingSoonToastNotification = new Notification({ title: 'Meeting Notetaker', body, silent: true })
       logger().info('[recording] ending-soon notification requested')
     }
+    endingSoonToastNotification.show()
+    endingSoonToastTimer = setTimeout(closeEndingSoonToast, ENDING_SOON_TOAST_LIFETIME_MS)
     playNotificationChime()
   } catch (err) {
+    endingSoonToastNotification = null
     logger().warn('[recording] could not show ending-soon notification', {
       message: err instanceof Error ? err.message : String(err)
     })
+  }
+}
+
+/** Close the ending-soon toast if showing. Safe when none is — called on
+ *  every terminal transition and on Extend (the toast's premise is gone). */
+function closeEndingSoonToast(): void {
+  if (endingSoonToastTimer) {
+    clearTimeout(endingSoonToastTimer)
+    endingSoonToastTimer = null
+  }
+  const notification = endingSoonToastNotification
+  endingSoonToastNotification = null
+  try {
+    notification?.close()
+  } catch {
+    // Already gone (dismissed by the user or by Windows) — nothing to do.
   }
 }
 
@@ -590,10 +782,14 @@ function clearAutoStopReminder(): void {
   }
 }
 
-/** Tear down all auto-stop scheduling — used at every terminal transition. */
+/** Tear down all auto-stop scheduling — used at every terminal transition.
+ *  Also closes the recording's own toasts (started, ending-soon): none of
+ *  them may outlive the recording they describe. */
 function resetAutoStopState(): void {
   clearAutoStopTimer()
   clearAutoStopReminder()
+  closeRecordingStartedToast()
+  closeEndingSoonToast()
   reminderNotifiedForEndMs = null
   autoStopEndMs = null
 }
@@ -604,6 +800,7 @@ export function cleanupRecordingIpc(): void {
   unblockSleep()
   clearAutoStartAckTimer()
   pendingAutoStart = null
+  pendingDiscardKey = null
   rendererRecordingReady = false
   mainWindow = null
   recordingSM = null

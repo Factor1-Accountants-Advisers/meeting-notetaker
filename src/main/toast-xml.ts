@@ -24,6 +24,7 @@ export type ToastAction =
   | 'update-defer'
   | 'upload-now'
   | 'resume-recording'
+  | 'record-now'
 
 export function toastUri(action: ToastAction): string {
   return `${TOAST_PROTOCOL_SCHEME}://${action}`
@@ -33,8 +34,9 @@ export function toastUri(action: ToastAction): string {
  * Extract the toast action from a process argv. Understands the current
  * `notetaker://<action>` URIs and the legacy `mn-*` foreground arguments
  * (still emitted by toasts shown by app versions before the IN-483 fix,
- * which can outlive the update that fixes them). `upload-now` and
- * `resume-recording` postdate that fix, so they have no legacy `mn-*` form.
+ * which can outlive the update that fixes them). `upload-now`,
+ * `resume-recording`, and `record-now` postdate that fix, so they have no
+ * legacy `mn-*` form.
  */
 export function toastActionFromArgv(argv: readonly string[]): ToastAction | null {
   for (const raw of argv) {
@@ -45,6 +47,7 @@ export function toastActionFromArgv(argv: readonly string[]): ToastAction | null
     if (arg === toastUri('open') || arg === 'mn-open') return 'open'
     if (arg === toastUri('upload-now')) return 'upload-now'
     if (arg === toastUri('resume-recording')) return 'resume-recording'
+    if (arg === toastUri('record-now')) return 'record-now'
   }
   return null
 }
@@ -140,6 +143,70 @@ export function buildUpdateCountdownToastXml(version: string, seconds: number): 
     '<audio silent="true"/>' +
     '<actions>' +
     `<action content="Not now" activationType="protocol" arguments="${toastUri('update-defer')}"/>` +
+    '</actions>' +
+    '</toast>'
+  )
+}
+
+/**
+ * Join-trigger prompt (spec J3): shown once at start + 2 min when the
+ * meeting is armed and nothing is recording — the fail-closed path for
+ * hybrid/in-room meetings and blind watches. `scenario="reminder"` keeps
+ * it on screen; the runtime closes it after JOIN_WATCH_PROMPT_LIFETIME_MS
+ * (transient toasts slide into Action Center after ~5 s, same rationale as
+ * the paused toast). An empty `title` (Graph gave no subject) gets plain
+ * wording rather than "Meeting  has started" with a hole in it.
+ */
+export function buildJoinPromptToastXml(title: string): string {
+  const headline = title ? `Meeting ${xmlEscape(title)} has started` : 'Your meeting has started'
+  return (
+    `<toast scenario="reminder" activationType="protocol" launch="${toastUri('open')}">` +
+    '<visual><binding template="ToastGeneric">' +
+    `<text>${headline}</text>` +
+    '<text>Recording will begin when you join.</text>' +
+    '</binding></visual>' +
+    '<audio silent="true"/>' +
+    '<actions>' +
+    `<action content="Record now" activationType="protocol" arguments="${toastUri('record-now')}"/>` +
+    '</actions>' +
+    '</toast>'
+  )
+}
+
+/**
+ * On-screen lifetimes for the app's `scenario="reminder"` toasts (notifications
+ * review with DA, 19 Aug 2026). Reminder toasts are sticky by design — the
+ * transient default slid into the Action Center after ~5 s and was routinely
+ * missed — so the runtime closes them itself: 2 min as the standard, and the
+ * full 5 min for the ending-soon warning, which also goes the moment the
+ * recording stops or is extended (a stale "ends in 5 minutes" is worse than
+ * none). The join prompt (`JOIN_WATCH_PROMPT_LIFETIME_MS`) follows the
+ * standard.
+ */
+export const TOAST_LIFETIME_MS = 2 * 60_000
+export const ENDING_SOON_TOAST_LIFETIME_MS = 5 * 60_000
+
+/**
+ * "Recording started" (IN-83 reworked, 19 Aug 2026 with DA): shown on every
+ * auto-triggered start — join, prompt, or calendar — as the confirmation that
+ * the trigger fired (an early joiner learns from its absence) and as the cue
+ * to tell everyone the meeting is being recorded. Sticky like the others;
+ * recording-ipc closes it after TOAST_LIFETIME_MS or when the recording ends.
+ * Manual starts are not toasted: the user is in the app window when they
+ * click Record.
+ */
+export function buildRecordingStartedToastXml(title: string): string {
+  const what = title ? `Recording ${xmlEscape(title)}.` : 'Meeting Notetaker is recording.'
+  return (
+    `<toast scenario="reminder" activationType="protocol" launch="${toastUri('open')}">` +
+    '<visual><binding template="ToastGeneric">' +
+    '<text>Recording started</text>' +
+    `<text>${what}</text>` +
+    '<text>Let everyone in the meeting know it is being recorded.</text>' +
+    '</binding></visual>' +
+    '<audio silent="true"/>' +
+    '<actions>' +
+    '<action content="Dismiss" activationType="system" arguments="dismiss"/>' +
     '</actions>' +
     '</toast>'
   )

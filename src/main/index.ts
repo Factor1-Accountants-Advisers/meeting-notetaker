@@ -14,6 +14,7 @@ import {
   cleanupRecordingIpc,
   closeRecordingPausedToast,
   configureCallWatchRegistrarHooks,
+  configureJoinWatchHooks,
   extendActiveRecordingFromMain,
   extendAutoStop,
   getRecordingStateMachine,
@@ -45,7 +46,19 @@ import {
   startUpdaterLifecycle,
   stopUpdaterTimers
 } from './updater'
-import { startBackendSupervisor, stopBackendSupervisor } from './backend-supervisor'
+import { getBackendEnvLayers, startBackendSupervisor, stopBackendSupervisor } from './backend-supervisor'
+import {
+  configureJoinWatch,
+  disposeJoinWatch,
+  handleJoinWatchSyncDecisions,
+  JOIN_WATCH_POLL_INTERVAL_MS,
+  joinWatchPromptAccepted,
+  joinWatchRecordingDiscarded,
+  joinWatchRecordingStartFailed,
+  joinWatchRecordingStarted,
+  readAutoStartTrigger,
+  type AutoStartTrigger
+} from './join-watch'
 import { createWindow, registerWindowSizingIpc } from './window'
 import { AudioEndpointService, resolveAudioEndpointHelperPath } from './audio-endpoint-service'
 import type { GraphEventDecision } from './graph/types'
@@ -100,8 +113,8 @@ function registerRecordingIpcHandlers(): void {
     registerManualRecording(recording)
     updateTrayMenu()
   })
-  ipcMain.on('recording:stopped', () => {
-    handleRendererRecordingStopped()
+  ipcMain.on('recording:stopped', (_event, opts?: { discarded?: boolean }) => {
+    handleRendererRecordingStopped(opts)
     updateTrayMenu()
   })
   ipcMain.on('recording:error', (_event, message: string) => {
@@ -130,11 +143,14 @@ configureCallSignals({
   actions: {
     pause: () => sendTrayRecordingControl('pause'),
     resume: () => sendTrayRecordingControl('resume'),
-    stop: () => sendAutoStopRequest(),
+    stop: (reason) => sendAutoStopRequest({ reason }),
     showPausedToast: showRecordingPausedToast,
     closePausedToast: closeRecordingPausedToast,
     isPaused: isRecordingPaused
-  }
+  },
+  // Join-trigger spec J5: the same 5s tick that drives the join watcher
+  // carries over to the attach poller, so leave-detection tightens for free.
+  pollIntervalMs: JOIN_WATCH_POLL_INTERVAL_MS
 })
 
 // IN-469: earliest known auto-record-eligible meeting start (UTC ms) for the
@@ -204,6 +220,13 @@ app.on('second-instance', (_event, argv) => {
     callSignalsToastAction('resume-recording')
     return
   }
+  if (toastAction === 'record-now') {
+    // Join-trigger prompt (spec J3): start the prompted meeting in place,
+    // without stealing focus (same rationale as extend/upload-now above).
+    logger().info('[app] record-now requested from join prompt')
+    joinWatchPromptAccepted()
+    return
+  }
   if (toastAction === 'update-restart') {
     logger().info('[app] update restart requested from toast notification')
     restartNowRequested()
@@ -267,6 +290,12 @@ app.whenReady().then(async () => {
   })
   registerMediaPermissions()
 
+  // Auto-record trigger mode (spec J6): read from the supervisor's backend.env
+  // layers once they are loaded (after `await backendStartup` below). Nothing
+  // can reach handleAutoRecordEligible before then — the Graph runtime that
+  // calls it starts after the await — so the placeholder is never observed.
+  let autoStartTrigger: AutoStartTrigger = 'join'
+
   function handleAutoRecordEligible(decisions: GraphEventDecision[]): void {
     const eligible = decisions.filter((d) => d.autoRecordEligible && d.status === 'candidate')
 
@@ -295,6 +324,15 @@ app.whenReady().then(async () => {
         continue
       }
 
+      if (autoStartTrigger === 'join') {
+        // Join-trigger mode (spec J1): the calendar only schedules. The join
+        // watcher — fed by onSyncCompleted below — arms at start−3 and starts
+        // on the recorder's roster IN. Nothing to start here. The host gate
+        // above still runs in this mode so its tray hint and log line
+        // (IN-77/IN-84 "Skipped: X (not host)") are kept.
+        continue
+      }
+
       const key = decision.idempotencyKey ?? decision.eventId
       const sm = getRecordingStateMachine()
       if (!sm.canStartAutoRecording(key)) {
@@ -317,6 +355,7 @@ app.whenReady().then(async () => {
         startTimeUtc: decision.logContext.startUtc ?? '',
         endTimeUtc: decision.logContext.endUtc ?? '',
         source: 'auto',
+        trigger: 'calendar',
         metadata: decision.metadata
       })
     }
@@ -328,6 +367,11 @@ app.whenReady().then(async () => {
   createWindow({ showOnReady: !isBackgroundLaunch() })
   createTray(showMainWindow)
   await backendStartup
+  // The two-layer backend.env is parsed by now (spawn and adoption paths both
+  // populate it before backendStartup resolves) — PROGRAMDATA > bundled >
+  // code default `join` (spec J6).
+  autoStartTrigger = readAutoStartTrigger(getBackendEnvLayers(), process.env)
+  logger().info('[app] auto-start trigger', { mode: autoStartTrigger })
 
   // Per-meeting call watches (call-watch-per-meeting spec): one registrar for
   // the app's lifetime, created before the graph runtime so even the startup
@@ -344,6 +388,18 @@ app.whenReady().then(async () => {
     hasActiveWatch: (hash) => registrar.hasActiveWatch(hash)
   })
 
+  // Join-triggered recording (spec J1–J3): built only in join mode — under
+  // `calendar` the watcher is never constructed (J6). Same handover direction
+  // as the registrar hooks: index.ts pushes the callbacks into recording-ipc.
+  if (autoStartTrigger === 'join') {
+    configureJoinWatch({ hasActiveWatch: (hash) => registrar.hasActiveWatch(hash) })
+    configureJoinWatchHooks({
+      onRecordingDiscarded: joinWatchRecordingDiscarded,
+      onRecordingStarted: joinWatchRecordingStarted,
+      onRecordingStartFailed: joinWatchRecordingStartFailed
+    })
+  }
+
   const graphRuntime = startGraphDetectionRuntime({
     statePath: join(app.getPath('userData'), 'graph', 'scheduler-state.json'),
     getAccessToken: getGraphAccessToken,
@@ -353,7 +409,19 @@ app.whenReady().then(async () => {
     // Same signed-in-email source as getSignedInEmail above. Reconciliation is
     // awaited by the Graph runtime so auto-record cannot inspect
     // hasActiveWatch while the discovery-time POST is still in flight.
-    onSyncCompleted: (decisions) => registrar.handleSyncDecisions(decisions, getCurrentUserEmail())
+    onSyncCompleted: async (decisions, meta) => {
+      try {
+        await registrar.handleSyncDecisions(decisions, getCurrentUserEmail())
+      } finally {
+        // The join watcher consumes the same unfiltered feed AFTER the
+        // registrar has reconciled, so its hasActiveWatch answers are current
+        // (spec J1) — and it is fed even if reconciliation threw: the prompt
+        // is the fail-closed path for exactly the meetings a watch never covers.
+        // `meta` (full snapshot vs delta) gates its vanish-disarm; the
+        // registrar's planner ignores it (absence is "unchanged" for it).
+        if (autoStartTrigger === 'join') handleJoinWatchSyncDecisions(decisions, getCurrentUserEmail(), meta)
+      }
+    }
   })
 
   onMsalSignedIn(() => {
@@ -401,6 +469,8 @@ let callWatchRegistrar: ReturnType<typeof createCallWatchRegistrar> | null = nul
 let quitFailsafeArmed = false
 app.on('before-quit', () => {
   cleanupRecordingIpc()
+  // Join watcher: clear its timers and any visible prompt (no-op in calendar mode).
+  disposeJoinWatch()
   // Flush any registrar state writes already in flight before shutdown.
   void callWatchRegistrar?.flushState()
   audioEndpointService?.stop()

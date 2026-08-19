@@ -14,6 +14,18 @@ export interface ActiveRecording {
   startTimeUtc: string
   endTimeUtc: string
   source: 'auto' | 'manual'
+  /** What started it (join-trigger spec): the recorder's join signal, the
+   *  prompt's Record now, or the legacy calendar timer. Absent for manual.
+   *  Mirrors `RecordingTrigger` in join-watch-core.ts (kept inline so this
+   *  module stays dependency-free). */
+  trigger?: 'join' | 'prompt' | 'calendar'
+  /** Set when the renderer acks the start; feeds the false-start rule (J4). */
+  startedAtUtc?: string
+  /** Last call-watch signal seq the join watcher had seen when it started
+   *  this recording; the attach poller drains only up to it and acts on
+   *  anything later (spec J5/E5). Absent for calendar/manual/prompt-without-
+   *  watch starts, where the poller drains everything as before. */
+  callSignalBaselineSeq?: string
   metadata?: unknown
 }
 
@@ -25,6 +37,9 @@ export interface RecordingStateMachine {
   startManualRecording(recording: ActiveRecording): void
   stopRecording(): ActiveRecording | null
   completeProcessing(): void
+  /** Drop a completed key so the meeting can auto-record again — a discarded
+   *  join-trigger false start (spec J4). No-op if the key is unknown. */
+  forgetCompleted(idempotencyKey: string): void
 }
 
 export function createRecordingStateMachine(): RecordingStateMachine {
@@ -71,6 +86,10 @@ export function createRecordingStateMachine(): RecordingStateMachine {
       if (state === 'processing') {
         state = 'idle'
       }
+    },
+
+    forgetCompleted(idempotencyKey: string): void {
+      completedKeys.delete(idempotencyKey)
     }
   }
 }

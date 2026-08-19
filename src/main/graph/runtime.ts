@@ -36,8 +36,21 @@ export interface GraphRuntimeOptions {
    * passes alike — with ALL of that sync's decisions, candidates and excluded
    * both. Deliberately unfiltered: the watch registrar's planner needs the
    * excluded decisions to reap watches for cancelled meetings.
+   *
+   * `meta.fullSnapshot` says whether the decisions came from a complete
+   * calendar-view fetch (true) or a delta fetch (false — changed events
+   * only). Consumers that treat "absent from this sync" as "gone" (the join
+   * watcher's vanish-disarm, spec J2) must act only on a full snapshot; the
+   * registrar's planner already treats absence as "unchanged" regardless.
    */
-  onSyncCompleted?: (decisions: GraphEventDecision[]) => void | Promise<void>
+  onSyncCompleted?: (decisions: GraphEventDecision[], meta: GraphSyncMeta) => void | Promise<void>
+}
+
+/** What kind of fetch produced a sync's decisions (see `onSyncCompleted`). */
+export interface GraphSyncMeta {
+  /** True for a calendar-view fetch (no delta cursor yet, or a forced full
+   *  snapshot); false for a delta fetch that carries changed events only. */
+  fullSnapshot: boolean
 }
 
 export interface GraphCalendarClient {
@@ -187,9 +200,12 @@ export async function syncGraphDetectionOnce(
     new GraphClient({ getAccessToken: async () => accessToken })
 
   try {
-    const response = state.deltaLink && !syncOptions.forceFullSnapshot
-      ? await client.fetchDeltaLink(state.deltaLink)
-      : await client.fetchCalendarView({ startUtc: windowStartUtc, endUtc: windowEndUtc })
+    // Same predicate as the fetch below, so `meta.fullSnapshot` can never
+    // disagree with which endpoint actually answered.
+    const fullSnapshot = !(state.deltaLink && !syncOptions.forceFullSnapshot)
+    const response = fullSnapshot
+      ? await client.fetchCalendarView({ startUtc: windowStartUtc, endUtc: windowEndUtc })
+      : await client.fetchDeltaLink(state.deltaLink as string)
 
     const detection = detectGraphMeetings(response.value, {
       signedInEmail: options.getSignedInEmail?.(),
@@ -223,7 +239,7 @@ export async function syncGraphDetectionOnce(
     // error status (the state above is already persisted at this point).
     if (options.onSyncCompleted) {
       try {
-        await options.onSyncCompleted(detection.decisions)
+        await options.onSyncCompleted(detection.decisions, { fullSnapshot })
       } catch (err) {
         options.logger.warn('[graph] onSyncCompleted callback failed', {
           message: err instanceof Error ? err.message : String(err)
