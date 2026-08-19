@@ -1,7 +1,13 @@
 import { BrowserWindow, Notification, powerSaveBlocker } from 'electron'
 import { createRecordingStateMachine, type ActiveRecording, type RecordingStateMachine } from './recording-state'
 import { logger } from './logger'
-import { buildEndingSoonToastXml, buildRecordingPausedToastXml } from './toast-xml'
+import {
+  ENDING_SOON_TOAST_LIFETIME_MS,
+  TOAST_LIFETIME_MS,
+  buildEndingSoonToastXml,
+  buildRecordingPausedToastXml,
+  buildRecordingStartedToastXml
+} from './toast-xml'
 import { armCallSignals, disarmCallSignals } from './call-signals'
 import { decideFalseStart, type AutoStopReason } from './join-watch-core'
 
@@ -42,24 +48,62 @@ export function meetingTitleFrom(metadata: unknown): string | null {
   return null
 }
 
-/** Toast the user that auto-recording began (Jira IN-83). */
+// "Recording started" toast handle + lifetime timer, module-level so every
+// terminal transition (resetAutoStopState) can close it early — a toast that
+// outlives its recording is noise.
+let startedToastNotification: Notification | null = null
+let startedToastTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * Toast the user that auto-recording began (Jira IN-83; reworked with DA on
+ * 19 Aug 2026). Every auto-triggered start — join, prompt, calendar — gets a
+ * sticky reminder-scenario toast: it confirms the trigger fired and cues the
+ * privacy reminder to tell the room. Closed after TOAST_LIFETIME_MS or when
+ * the recording ends, whichever is first. Manual starts are not toasted.
+ */
 function notifyAutoRecordingStarted(recording: ActiveRecording): void {
   // Notification is undefined outside the Electron runtime (e.g. the
   // esbuild-bundled verify:graph harness runs under plain Node).
   if (!Notification?.isSupported?.()) return
+  closeRecordingStartedToast()
   const title = meetingTitleFrom(recording.metadata)
   try {
-    // Silent: the renderer plays the Notetaker chime instead (IN-477).
-    new Notification({
-      title: 'Meeting Notetaker',
-      body: title ? `Recording: ${title}` : 'Auto-recording started',
-      silent: true
-    }).show()
+    startedToastNotification =
+      process.platform === 'win32'
+        ? new Notification({ toastXml: buildRecordingStartedToastXml(title ?? '') })
+        : // Silent: the renderer plays the Notetaker chime instead (IN-477).
+          new Notification({
+            title: 'Meeting Notetaker',
+            body: title ? `Recording: ${title}` : 'Auto-recording started',
+            silent: true
+          })
+    startedToastNotification.show()
+    startedToastTimer = setTimeout(closeRecordingStartedToast, TOAST_LIFETIME_MS)
+    logger().info('[recording] recording-started toast requested', {
+      idempotencyKey: recording.idempotencyKey,
+      trigger: recording.trigger
+    })
     playNotificationChime()
   } catch (err) {
+    startedToastNotification = null
     logger().warn('[recording] could not show auto-record notification', {
       message: err instanceof Error ? err.message : String(err)
     })
+  }
+}
+
+/** Close the "Recording started" toast if showing. Safe when none is. */
+function closeRecordingStartedToast(): void {
+  if (startedToastTimer) {
+    clearTimeout(startedToastTimer)
+    startedToastTimer = null
+  }
+  const notification = startedToastNotification
+  startedToastNotification = null
+  try {
+    notification?.close()
+  } catch {
+    // Already gone (dismissed by the user or by Windows) — nothing to do.
   }
 }
 
@@ -485,6 +529,9 @@ function scheduleAutoStop(recording: ActiveRecording): void {
 function rescheduleAutoStopTimers(recording: ActiveRecording): void {
   clearAutoStopTimer()
   clearAutoStopReminder()
+  // A visible "ends in 5 minutes" no longer holds once the end moves (Extend);
+  // the new end gets its own reminder below if it is still due.
+  closeEndingSoonToast()
   if (autoStopEndMs === null) return
 
   const delayMs = Math.max(0, autoStopEndMs - Date.now())
@@ -574,11 +621,18 @@ function sendEndingSoonReminder(
   notifyMeetingEndingSoon(recording)
 }
 
+// Ending-soon toast handle + lifetime timer (19 Aug 2026 with DA): the toast
+// stays the full 5 min it talks about, but is closed early when the recording
+// stops or is extended — a stale "ends in 5 minutes" is worse than none.
+let endingSoonToastNotification: Notification | null = null
+let endingSoonToastTimer: ReturnType<typeof setTimeout> | null = null
+
 function notifyMeetingEndingSoon(recording: ActiveRecording): void {
   if (!Notification?.isSupported?.()) {
     logger().warn('[recording] ending-soon notification unsupported by Electron')
     return
   }
+  closeEndingSoonToast()
   const title = meetingTitleFrom(recording.metadata)
   const body = title
     ? `"${title}" is scheduled to end in 5 minutes.`
@@ -588,18 +642,37 @@ function notifyMeetingEndingSoon(recording: ActiveRecording): void {
       // Sticky reminder toast with Extend/Dismiss buttons (IN-124, IN-477).
       // The Extend button activates the app with `mn-extend`, handled by the
       // single-instance hook in index.ts.
-      new Notification({ toastXml: buildEndingSoonToastXml(body) }).show()
+      endingSoonToastNotification = new Notification({ toastXml: buildEndingSoonToastXml(body) })
       logger().info('[recording] ending-soon Windows toast requested')
     } else {
       // Silent: the renderer plays the Notetaker chime instead (IN-477).
-      new Notification({ title: 'Meeting Notetaker', body, silent: true }).show()
+      endingSoonToastNotification = new Notification({ title: 'Meeting Notetaker', body, silent: true })
       logger().info('[recording] ending-soon notification requested')
     }
+    endingSoonToastNotification.show()
+    endingSoonToastTimer = setTimeout(closeEndingSoonToast, ENDING_SOON_TOAST_LIFETIME_MS)
     playNotificationChime()
   } catch (err) {
+    endingSoonToastNotification = null
     logger().warn('[recording] could not show ending-soon notification', {
       message: err instanceof Error ? err.message : String(err)
     })
+  }
+}
+
+/** Close the ending-soon toast if showing. Safe when none is — called on
+ *  every terminal transition and on Extend (the toast's premise is gone). */
+function closeEndingSoonToast(): void {
+  if (endingSoonToastTimer) {
+    clearTimeout(endingSoonToastTimer)
+    endingSoonToastTimer = null
+  }
+  const notification = endingSoonToastNotification
+  endingSoonToastNotification = null
+  try {
+    notification?.close()
+  } catch {
+    // Already gone (dismissed by the user or by Windows) — nothing to do.
   }
 }
 
@@ -709,10 +782,14 @@ function clearAutoStopReminder(): void {
   }
 }
 
-/** Tear down all auto-stop scheduling — used at every terminal transition. */
+/** Tear down all auto-stop scheduling — used at every terminal transition.
+ *  Also closes the recording's own toasts (started, ending-soon): none of
+ *  them may outlive the recording they describe. */
 function resetAutoStopState(): void {
   clearAutoStopTimer()
   clearAutoStopReminder()
+  closeRecordingStartedToast()
+  closeEndingSoonToast()
   reminderNotifiedForEndMs = null
   autoStopEndMs = null
 }

@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict'
 import {
+  ENDING_SOON_TOAST_LIFETIME_MS,
+  TOAST_LIFETIME_MS,
   buildEndingSoonToastXml,
   buildJoinPromptToastXml,
   buildRecordingPausedToastXml,
+  buildRecordingStartedToastXml,
   buildUpdateCountdownToastXml,
   buildUpdateReadyToastXml,
   toastActionFromArgv,
   toastUri
 } from '../src/main/toast-xml'
+import { JOIN_WATCH_PROMPT_LIFETIME_MS } from '../src/main/join-watch-core'
 
 // IN-477: the 5-minute warning was easy to miss — Windows toasts auto-dismiss
 // after ~5 s. The warning toast must now stay on screen until acknowledged
@@ -131,7 +135,7 @@ assert.equal(toastActionFromArgv(['exe', '--background']), null, 'unrelated argv
   assert.match(xml, /Recording will begin when you join\./)
   assert.match(xml, /arguments="notetaker:\/\/record-now"/)
   assert.match(xml, /content="Record now"/)
-  assert.match(xml, /scenario="reminder"/, 'sticky so our own 60 s close() governs lifetime')
+  assert.match(xml, /scenario="reminder"/, 'sticky so our own close() (TOAST_LIFETIME_MS) governs lifetime')
   assert.match(xml, /<audio silent="true"\/>/)
   // XML-escaping of the title, same rule as the other builders
   assert.match(buildJoinPromptToastXml('Q&A <Board>'), /Meeting Q&amp;A &lt;Board&gt; has started/)
@@ -144,6 +148,32 @@ assert.equal(toastActionFromArgv(['exe', '--background']), null, 'unrelated argv
   assert.match(untitled, /arguments="notetaker:\/\/record-now"/, 'Record now still wired')
   assert.equal(toastActionFromArgv(['notetaker://record-now']), 'record-now')
   assert.equal(toastActionFromArgv(['notetaker://record-now/']), 'record-now', 'trailing slash tolerated like the others')
+}
+
+// Notifications review with DA (19 Aug 2026): a "Recording started" toast on
+// every auto-triggered start (join / prompt / calendar) — confirmation the
+// trigger fired, and the cue to tell the room it is being recorded — and
+// longer on-screen lifetimes: 2 min standard, 5 min for the ending-soon
+// warning (it also goes when the recording stops or is extended).
+{
+  const xml = buildRecordingStartedToastXml('Weekly 1:1 with Kristel')
+  assert.match(xml, /<toast[^>]*scenario="reminder"/, 'sticky; the runtime closes it after TOAST_LIFETIME_MS')
+  assert.match(xml, /<text>Recording started<\/text>/, 'headline')
+  assert.match(xml, /Weekly 1:1 with Kristel/, 'names the meeting')
+  assert.match(xml, /being recorded/, 'privacy reminder line (DA)')
+  assert.match(xml, /launch="notetaker:\/\/open"/, 'body click opens the app')
+  assert.match(xml, /<audio silent="true"\/>/, 'silent — the chime comes from the renderer')
+  assert.match(xml, /<action content="Dismiss" activationType="system" arguments="dismiss"\/>/, 'reminder toasts need an action')
+  assert.doesNotMatch(xml, /activationType="foreground"/, 'IN-483: no dead foreground buttons')
+  assert.match(buildRecordingStartedToastXml('Q&A <Board>'), /Q&amp;A &lt;Board&gt;/, 'title is XML-escaped')
+  const untitled = buildRecordingStartedToastXml('')
+  assert.match(untitled, /<text>Recording started<\/text>/)
+  assert.doesNotMatch(untitled, /""/, 'no empty quoted title')
+  assert.match(untitled, /being recorded/)
+
+  assert.equal(TOAST_LIFETIME_MS, 2 * 60_000, 'standard toast lifetime is 2 min')
+  assert.equal(ENDING_SOON_TOAST_LIFETIME_MS, 5 * 60_000, 'ending-soon warning stays 5 min')
+  assert.equal(JOIN_WATCH_PROMPT_LIFETIME_MS, TOAST_LIFETIME_MS, 'join prompt follows the standard lifetime')
 }
 
 console.log('Toast XML verification passed')

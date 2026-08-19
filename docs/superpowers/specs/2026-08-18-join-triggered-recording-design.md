@@ -135,7 +135,8 @@ Windows toast:
 > **Meeting X has started**
 > Recording will begin when you join. — **[Record now]**
 
-- Auto-dismisses after 60 s. Fires **once per meeting**, including across an
+- Auto-dismisses after 2 min (`JOIN_WATCH_PROMPT_LIFETIME_MS`, the standard
+  toast lifetime — see N1). Fires **once per meeting**, including across an
   app restart (the join watcher persists only "prompted for meeting X").
 - **Record now** → `sendAutoStartRequest`, `trigger: 'prompt'`. A join signal
   arriving afterwards changes nothing — recording is already active.
@@ -205,11 +206,37 @@ and the first attach poll.
   `release.yml` + release, the same pattern as `MN_DELIVERY_RECIPIENTS`. The
   supervisor already parses both layers into a dict; exposing that dict to
   main's own settings is the only plumbing.
-- Ships as **v2.0.31**, after the SharePoint permission hardening (v2.0.30).
-  Organiser-only delivery is independent and stays until David F lifts it.
+- Ships as **v2.0.30** (swapped with the SharePoint permission hardening on
+  19 Aug: hardening still waits on IT/DA, so it follows as v2.0.31; DA's
+  team announcement already names 2.0.30). Organiser-only delivery is
+  independent and stays until David F lifts it.
 - Release comms must state plainly: hybrid/in-room meetings with a Teams
   link now need one click on the prompt; and phone-join still records the
   desktop (F1) until the device check ships.
+
+### N1 — Notifications (added 19 Aug 2026 after the live test with DA)
+
+Agreed in the L1 call (transcript "Test", 19 Aug) and announced by DA to
+the team the same afternoon:
+
+- **"Recording started" toast** on every auto-triggered start (join, prompt,
+  calendar): headline *Recording started*, the meeting title, and the line
+  *Let everyone in the meeting know it is being recorded.* It is the
+  confirmation that the trigger fired — an early joiner learns from its
+  absence that they must start manually — and the privacy cue DA asked for.
+  IN-83's plain 5-second toast was routinely missed; this one is a sticky
+  `scenario="reminder"` toast like the others. Manual starts are not
+  toasted (the user is in the app window when they click Record).
+- **Lifetimes.** Reminder toasts are sticky, so the runtime closes them:
+  **2 min** standard (`TOAST_LIFETIME_MS`: recording-started, join prompt),
+  **5 min** for the ending-soon warning (`ENDING_SOON_TOAST_LIFETIME_MS`).
+  Every toast belonging to a recording is closed the moment that recording
+  stops, and the ending-soon toast also closes on **Extend** — a stale
+  "ends in 5 minutes" is worse than none. The paused (grace) toast already
+  closes on resume/stop and is bounded by the 60 s grace; unchanged.
+- **Parked**: a "recording stopped at scheduled end while you were still in
+  the call" notice. DA raised it, flagged the race with the leave flow, and
+  ranked it below the above; revisit with the scheduled-end-stop question.
 
 ### J7 — Named constants
 

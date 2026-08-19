@@ -114,7 +114,7 @@ keys without reinstalling, drop an override file on each machine:
    ProgramData overrides can be removed (optional — they'll keep
    overriding harmlessly).
 
-## Auto-record trigger (v2.0.31+)
+## Auto-record trigger (v2.0.30+)
 
 - **What changed**: a scheduled Teams meeting's recording now starts on
   your *join* to its Teams call, not at calendar start time. The 3-minute
@@ -123,9 +123,16 @@ keys without reinstalling, drop an override file on each machine:
   as soon as you're in the call, at any point up to the meeting's scheduled
   end (a join after the scheduled end is not recorded — start manually).
 - **The prompt**: if you haven't joined by start + 2 min, a toast offers
-  **Record now**. It shows once per meeting, auto-dismisses after 60 s
+  **Record now**. It shows once per meeting, auto-dismisses after 2 min
   with no action taken, and is suppressed entirely while a recording is
   already in progress.
+- **Notifications (19 Aug, with DA)**: every auto-started recording now
+  shows a sticky **Recording started** toast naming the meeting, with the
+  reminder to tell everyone it is being recorded — no toast means the
+  trigger did not fire (you joined early, or you're in the room without
+  clicking Join): start manually or wait for the prompt. Toasts stay on
+  screen 2 min (the 5-minutes-to-go warning stays 5 min) and disappear as
+  soon as the recording stops or is extended.
 - **False-start rule**: a join-triggered recording that ends via the
   leave-grace window before start + 2 min, and lasted under 5 minutes, is
   discarded — no email is sent, and the meeting re-arms so a later real

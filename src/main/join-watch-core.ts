@@ -33,8 +33,11 @@ export const JOIN_WATCH_LEAD_MS = 3 * 60_000
 /** J3: how long into the armed window with no in-call signal before the
  *  "start recording?" prompt is shown. */
 export const JOIN_WATCH_PROMPT_OFFSET_MS = 2 * 60_000
-/** J3: how long the prompt stays on screen before it auto-dismisses. */
-export const JOIN_WATCH_PROMPT_LIFETIME_MS = 60_000
+/** J3: how long the prompt stays on screen before it auto-dismisses. Equals
+ *  `TOAST_LIFETIME_MS` in `toast-xml.ts` (the standard 2 min agreed with DA
+ *  on 19 Aug 2026); kept as its own constant so this module stays free of
+ *  toast imports and the harness can pin the two together. */
+export const JOIN_WATCH_PROMPT_LIFETIME_MS = 2 * 60_000
 /** J5: how often an armed meeting polls its call-watch signal history. */
 export const JOIN_WATCH_POLL_INTERVAL_MS = 5_000
 /** J2: how long after the meeting's scheduled end an unstarted watch stays
