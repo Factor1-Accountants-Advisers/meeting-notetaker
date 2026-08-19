@@ -84,9 +84,9 @@ cd C:\Projects\meeting-notetaker-2
 ```
 
 It prints every `recorder_rejoined` / `recorder_left` / `call_ended` the
-relay stored, per meeting, the instant it lands. It enumerates meetings
-(±3 h) ONCE at startup — after creating a test meeting, restart it
-(Ctrl+C; if launched via the wrapper window it restarts itself in 5 s). If you join and it prints
+relay stored, per meeting, the instant it lands. It re-scans your calendar
+(±3 h) every 60 s and prints `+++ NEW MEETING +++` when a test meeting
+appears, so no restart is needed; it runs for 4 h (Up-arrow + Enter to rerun). If you join and it prints
 nothing within ~10 s, the watch isn't there — check `hasWatch` below before
 blaming the trigger.
 
