@@ -126,7 +126,7 @@ you should see; **backend** = the app's Meetings list, or
 `curl.exe -s http://127.0.0.1:8787/api/v1/meetings -H "X-MN-User: <your signed-in email>"`.
 
 ### L1 — join late, stay, then leave (happy path)
-**RESULT 19 Aug 13:00 "Test" (Joseph + DA): PASS for the join half — armed 12:57:00, `starting recording` 13:00:07.9 (~8 s), delivered at scheduled end 13:30. Leave half not exercised (both stayed in the call) — covered by L4/L9.**
+**RESULT 19 Aug 13:00 "Test" (Joseph + DA): PASS — armed 12:57:00, `starting recording` 13:00:07.9 (~8 s); a drop at 13:03:47 paused (+ paused toast) and the rejoin at 13:04:04 resumed; delivered at scheduled end 13:30 (minutes + transcript). Note: the signal-driven pause/resume logs as `[recording] tray recording control { action: 'pause'|'resume' }` — same path as the tray menu.**
 Meeting 30 min long, created ≥ 10 min out, synced.
 1. Don't join before −1. Expect at −3: `armed … hasWatch: true`.
 2. Join at −1.
@@ -168,6 +168,7 @@ Meeting **15 min** long, created ≥ 30 min out, synced.
 | fail if | anything records at any point; a second toast; refusal line repeats every 5 s |
 
 ### L4 — false start, discard, re-arm, real join
+**RESULT 19 Aug 15:00 (Joseph + DA holding the call, variant (a)): PASS — armed 14:57:00; join −2 → `starting recording` 14:58:05; leave −1 → pause 14:59:17 + paused toast; grace 60.02 s → `auto-stop { reason: 'grace_expired', deliver: false }` 15:00:17.5; spill discarded, backend `DELETE … 204`, `false start discarded; meeting re-armed`, `armed { via: 'rearm', hasWatch: true }`; +2 prompt toast shown and ignored; rejoin +5 → `starting recording` 15:05:11, `baseline drained { 3, live 0 }`.**
 Meeting 30 min, created ≥ 10 min out, synced. Two ways to run it:
 
 **(a) with a second participant** (phone joined from −5 and stays; recommended,
