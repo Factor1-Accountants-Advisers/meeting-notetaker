@@ -126,12 +126,13 @@ you should see; **backend** = the app's Meetings list, or
 `curl.exe -s http://127.0.0.1:8787/api/v1/meetings -H "X-MN-User: <your signed-in email>"`.
 
 ### L1 — join late, stay, then leave (happy path)
+**RESULT 19 Aug 13:00 "Test" (Joseph + DA): PASS for the join half — armed 12:57:00, `starting recording` 13:00:07.9 (~8 s), delivered at scheduled end 13:30. Leave half not exercised (both stayed in the call) — covered by L4/L9.**
 Meeting 30 min long, created ≥ 10 min out, synced.
 1. Don't join before −1. Expect at −3: `armed … hasWatch: true`.
 2. Join at −1.
 3. Leave at ≈ +3 (after `start + 2 min`, so it must deliver).
 
-| log | `[join-watch] starting recording { trigger: 'join' }` ≤ 8 s after join → `[join-watch] recording noted; stepping aside` → `[call-signals] arming call-signal poller` → `[call-signals] attached to pre-registered call watch` → `[call-signals] baseline drained { drained: N, live: 0 }` → after leave: `[recording] paused notification requested` (≤ 5 s) → +60 s `[recording] sending auto-stop to renderer { reason: 'grace_expired', deliver: true }` |
+| log | `[join-watch] starting recording { trigger: 'join' }` ≤ 8 s after join → `[recording] renderer confirmed recording started` → `[call-signals] arming call-signal poller` → `[call-signals] attached to pre-registered call watch` → `[call-signals] baseline drained { drained: N, live: 0 }` → after leave: `[recording] paused notification requested` (≤ 5 s) → +60 s `[recording] sending auto-stop to renderer { reason: 'grace_expired', deliver: true }` |
 |---|---|
 | probe | `recorder_rejoined` at −1, `recorder_left` at +3 (then `call_ended` ~80 s later) |
 | backend | ONE meeting, processed and delivered — organiser-only email to you (v2.0.29 rule), SharePoint as usual |
