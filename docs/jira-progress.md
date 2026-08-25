@@ -1174,3 +1174,34 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   and invalid/non-gzip payloads omit the attachment but still send. Suite:
   426 tests, same 11 pre-existing recipient/delivery failures only.
   Typecheck + build green.
+
+## 25 Aug 2026 — Resurface-on-restart recovery for failed uploads
+
+Motivated by both of today's incidents: the failed-upload retry notice is
+session state, so a restart (which an auto-update forces) orphaned Gabby's
+and nearly Regina's saved captures invisibly. Three layers, guarded against
+double-transcription per Joseph's review:
+
+- [x] Layer 1 — API invariant: `upload_audio` now 409s ("already has a
+  processed recording") when `pipeline_status` is `ready`; `failed` and
+  `pending_audio` stay uploadable. Red-first in new
+  `test_upload_reprocess_guard.py` (3) — the ready-reupload hole was proven
+  live before the fix. No UI can double-run pyannote/OpenAI from this route.
+- [x] Layer 2 — startup scan + recovery card: main IPC `recording:list-saved`
+  / `recording:delete-saved` (pure helpers `primarySavedMeetingId` /
+  `savedCaptureSetNames`, new red-first `verify:saved-captures` harness, added
+  to CI). On launch the renderer lists saved sets and gates on the BACKEND
+  record: `pending_audio` → warning card on Home ("recorded but never
+  uploaded", Upload for transcription / Discard, red-first markup asserts in
+  `verify:ad-hoc-attendees`); `ready` → redundant local copy deleted quietly
+  (drains historical leftovers fleet-wide); anything else untouched. Retry
+  funnels into the existing `retrySavedUpload`.
+- [x] Layer 3 — cleanup on success: both upload paths (initial stop-flow and
+  saved-retry) delete the meeting's capture set once the server owns the
+  audio, keeping the scan honest and recordings-dir growth bounded.
+- [x] `recording-storage.ts` dropped `@electron-toolkit/utils` (`is.dev` reads
+  electron at import time and broke the node-run harness) for a lazy
+  `isDev()` — behaviour identical in-app.
+- [x] Gates: typecheck, `verify:saved-captures`, `verify:ad-hoc-attendees`,
+  `verify:graph`, `verify:recording-controls`, `build`, `git diff --check`
+  green; backend 429 tests with only the known pre-existing failures.

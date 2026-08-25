@@ -76,6 +76,14 @@ const api = {
   readRecording: (name: string): Promise<{ exists: boolean; data?: ArrayBuffer }> =>
     ipcRenderer.invoke('recording:read', name),
 
+  /** List saved capture sets for upload recovery (resurface on restart). */
+  listSavedRecordings: (): Promise<{ meetingId: string; savedAtUtc: string }[]> =>
+    ipcRenderer.invoke('recording:list-saved'),
+
+  /** Remove a meeting's saved capture set after successful upload or discard. */
+  deleteSavedRecording: (meetingId: string): Promise<void> =>
+    ipcRenderer.invoke('recording:delete-saved', meetingId),
+
   /** Open a crash-safe spill session before capture starts (IN-129). */
   spillOpen: (key: string, meta: SpillMeta): Promise<void> =>
     ipcRenderer.invoke('recording:spill-open', key, meta),

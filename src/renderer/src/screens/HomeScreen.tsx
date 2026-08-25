@@ -26,6 +26,15 @@ export interface InterruptedRecording {
   interruptedAtUtc: string
 }
 
+/** A saved capture whose upload never succeeded, resurfaced after restart
+ *  (25 Aug 2026). Offered only when the backend still marks the meeting
+ *  pending_audio — the server record, not the files, gates the card. */
+export interface UnuploadedRecording {
+  meetingId: string
+  title: string
+  savedAtUtc: string
+}
+
 // IN-479: every ad-hoc recording carries a planned duration so the
 // scheduled-end auto-stop and 5-minute extension reminder arm for it.
 export const ADHOC_DURATION_DEFAULT_MINUTES = 30
@@ -53,6 +62,9 @@ interface HomeProps {
   interruptedRecordings?: InterruptedRecording[]
   onRecoverInterrupted?: (key: string) => void
   onDiscardInterrupted?: (key: string) => void
+  unuploadedRecordings?: UnuploadedRecording[]
+  onRetryUnuploaded?: (meetingId: string, title: string) => void
+  onDiscardUnuploaded?: (meetingId: string) => void
   postCaptureNotice?: {
     state: 'processing' | 'emailing' | 'ready' | 'upload_failed' | 'processing_failed' | 'email_failed'
     meetingId: string
@@ -86,6 +98,9 @@ export function HomeScreen({
   interruptedRecordings,
   onRecoverInterrupted,
   onDiscardInterrupted,
+  unuploadedRecordings,
+  onRetryUnuploaded,
+  onDiscardUnuploaded,
   postCaptureNotice,
   onDismissPostCaptureNotice,
   onRetryPostCapture,
@@ -106,6 +121,14 @@ export function HomeScreen({
           entry={entry}
           onRecover={onRecoverInterrupted}
           onDiscard={onDiscardInterrupted}
+        />
+      ))}
+      {unuploadedRecordings?.map((entry) => (
+        <UnuploadedRecordingNotice
+          key={entry.meetingId}
+          entry={entry}
+          onRetry={onRetryUnuploaded}
+          onDiscard={onDiscardUnuploaded}
         />
       ))}
       {postCaptureNotice &&
@@ -253,6 +276,62 @@ function InterruptedRecordingNotice({
               type="button"
               className="text-[12px] opacity-80 hover:opacity-100"
               onClick={() => onDiscard(entry.key)}
+            >
+              Discard
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function UnuploadedRecordingNotice({
+  entry,
+  onRetry,
+  onDiscard
+}: {
+  entry: UnuploadedRecording
+  onRetry?: (meetingId: string, title: string) => void
+  onDiscard?: (meetingId: string) => void
+}): JSX.Element {
+  const savedAt = new Date(entry.savedAtUtc)
+  const when = Number.isNaN(savedAt.getTime())
+    ? null
+    : savedAt.toLocaleString('en-GB', {
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit'
+      })
+
+  return (
+    <div className="rounded-md border-[0.5px] border-edge-secondary bg-bg-warning px-3 py-2.5 text-content-warning">
+      <div className="flex items-start gap-2">
+        <AlertTriangle className="mt-0.5 shrink-0" size={16} strokeWidth={1.75} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[13px] font-medium">{entry.title}</div>
+          <div className="mt-0.5 text-[12px] opacity-90">
+            This meeting was recorded but never uploaded{when ? ` (saved ${when})` : ''}. The
+            audio is safe on this computer and can still be transcribed.
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {onRetry && (
+            <button
+              type="button"
+              className="rounded-sm border-[0.5px] border-current px-2 py-1 text-[12px] opacity-85 hover:opacity-100"
+              onClick={() => onRetry(entry.meetingId, entry.title)}
+            >
+              Upload for transcription
+            </button>
+          )}
+          {onDiscard && (
+            <button
+              type="button"
+              className="text-[12px] opacity-80 hover:opacity-100"
+              onClick={() => onDiscard(entry.meetingId)}
             >
               Discard
             </button>

@@ -223,6 +223,12 @@ function App(): JSX.Element {
   const blobDeliveryEpochsRef = useRef(new Map<string, number>())
   const blobDeliveryTimersRef = useRef(new Map<string, number>())
   const [interrupted, setInterrupted] = useState<SpillEntry[]>([])
+  // Saved captures whose upload never succeeded, resurfaced after restart
+  // (25 Aug 2026). Gated on the backend's pending_audio record, never on
+  // files alone — see the startup scan effect.
+  const [unuploaded, setUnuploaded] = useState<
+    { meetingId: string; title: string; savedAtUtc: string }[]
+  >([])
   const { theme, setTheme } = useTheme()
 
   useEffect(() => {
@@ -323,6 +329,48 @@ function App(): JSX.Element {
         if (!cancelled && orphans.length) setInterrupted(orphans)
       })
       .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [user])
+
+  // Resurface saved captures whose upload never succeeded (25 Aug 2026): the
+  // failed-upload retry notice dies with the session that showed it, but the
+  // capture files and the backend's meeting record survive. The backend
+  // record is the gate — only pending_audio meetings get a recovery card
+  // (the upload route additionally 409s re-uploads to processed meetings, so
+  // double-transcription is impossible even if this filter is ever wrong).
+  // Sets whose meeting is already ready are redundant local copies: cleaned
+  // up quietly, which also drains the fleet's historical leftovers over time.
+  useEffect(() => {
+    if (!user || typeof window.api?.listSavedRecordings !== 'function') return
+    let cancelled = false
+    void (async () => {
+      try {
+        const saved = await window.api.listSavedRecordings()
+        if (!saved.length || cancelled) return
+        const meetings = await fetchMeetings()
+        if (cancelled || !meetings) return
+        const byId = new Map(meetings.map((meeting) => [meeting.id, meeting]))
+        const cards: { meetingId: string; title: string; savedAtUtc: string }[] = []
+        for (const entry of saved) {
+          const meeting = byId.get(entry.meetingId)
+          if (!meeting) continue
+          if (meeting.pipelineStatus === 'pending_audio') {
+            cards.push({
+              meetingId: entry.meetingId,
+              title: meeting.title,
+              savedAtUtc: entry.savedAtUtc
+            })
+          } else if (meeting.pipelineStatus === 'ready') {
+            void window.api.deleteSavedRecording(entry.meetingId)
+          }
+        }
+        if (!cancelled && cards.length) setUnuploaded(cards)
+      } catch {
+        // Best-effort; the scan simply runs again on the next launch.
+      }
+    })()
     return () => {
       cancelled = true
     }
@@ -614,6 +662,10 @@ function App(): JSX.Element {
             })
             if (uploadedMeeting && !savedLocally) capture.discardCompletedSpill()
             if (uploadedMeeting) {
+              // The server owns the audio now — the saved capture set is
+              // redundant, and removing it keeps the restart recovery scan
+              // (and the disk) honest.
+              void window.api.deleteSavedRecording?.(meetingId)
               watchProcessing(meetingId, session?.title ?? graphMetadata?.title ?? 'Recording')
             } else {
               setPostCaptureNotice({
@@ -1254,6 +1306,7 @@ function App(): JSX.Element {
 
     window.api.debugLog('retry saved upload finished', { meetingId, ok: Boolean(uploaded) })
     if (uploaded) {
+      void window.api.deleteSavedRecording?.(meetingId)
       watchProcessing(meetingId, title)
     } else {
       setPostCaptureNotice({
@@ -1297,6 +1350,19 @@ function App(): JSX.Element {
     } else {
       await retryTranscriptEmail(meetingId, title)
     }
+  }
+
+  // Resurface-on-restart recovery card actions. Retry funnels into the same
+  // saved-upload path the in-session notice uses; the card entry leaves the
+  // list immediately and the post-capture notice flow takes over from there.
+  const retryUnuploaded = (meetingId: string, title: string): void => {
+    setUnuploaded((list) => list.filter((entry) => entry.meetingId !== meetingId))
+    void retrySavedUpload(meetingId, title)
+  }
+
+  const discardUnuploaded = (meetingId: string): void => {
+    setUnuploaded((list) => list.filter((entry) => entry.meetingId !== meetingId))
+    void window.api.deleteSavedRecording?.(meetingId)
   }
 
   // IN-129: upload a spilled (interrupted) recording through the normal pipeline.
@@ -1583,6 +1649,9 @@ function App(): JSX.Element {
           }))}
           onRecoverInterrupted={(key) => void recoverInterrupted(key)}
           onDiscardInterrupted={(key) => void discardInterrupted(key)}
+          unuploadedRecordings={unuploaded}
+          onRetryUnuploaded={retryUnuploaded}
+          onDiscardUnuploaded={discardUnuploaded}
           postCaptureNotice={postCaptureNotice}
           onDismissPostCaptureNotice={() => setPostCaptureNotice(null)}
           onRetryPostCapture={(meetingId, title) => void retryPostCapture(meetingId, title)}

@@ -28,6 +28,7 @@ jobs:
           npm run verify:audio-routing-dryrun
           npm run verify:recording-controls
           npm run verify:capture
+          npm run verify:saved-captures
           npm run verify:join-watch
           npm run verify:call-signals
           npm run verify:call-watch-registrar

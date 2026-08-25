@@ -156,6 +156,34 @@ assert.equal(
 )
 assert.match(home, /Planned duration/, 'the capture card offers a duration field')
 assert.match(home, /value="30"/, 'the duration field defaults to 30 minutes')
+
+// Resurface on restart (25 Aug): a saved capture whose upload never succeeded
+// gets a recovery card after the session that owned the retry notice is gone.
+const homeWithUnuploaded = renderToStaticMarkup(
+  <HomeScreen
+    previewMode
+    onStartRecording={() => undefined}
+    onUploadRecording={() => undefined}
+    unuploadedRecordings={[
+      {
+        meetingId: 'd579bc13-17eb-48ac-94e9-fe2ffbb079b4',
+        title: 'Projects',
+        savedAtUtc: '2026-08-24T01:34:38.000Z'
+      }
+    ]}
+    onRetryUnuploaded={() => undefined}
+    onDiscardUnuploaded={() => undefined}
+  />
+)
+assert.match(homeWithUnuploaded, /Projects/, 'the recovery card names the meeting')
+assert.match(
+  homeWithUnuploaded,
+  /recorded but never uploaded/,
+  'the recovery card explains the state'
+)
+assert.match(homeWithUnuploaded, /Upload for transcription/, 'the recovery card offers retry')
+assert.match(homeWithUnuploaded, /Discard/, 'the recovery card offers discard')
+assert.doesNotMatch(home, /never uploaded/, 'no card renders without entries')
 // 25 Aug follow-up: no native number spinner — people type the value, and the
 // up/down buttons fought the flat design system. Clamping still guards input.
 assert.doesNotMatch(

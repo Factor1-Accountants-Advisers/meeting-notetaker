@@ -524,6 +524,15 @@ async def upload_audio(
         raise HTTPException(status.HTTP_409_CONFLICT, "Finalized meetings cannot be modified")
     if meeting.pipeline_status in (PipelineStatus.queued, PipelineStatus.processing):
         raise HTTPException(status.HTTP_409_CONFLICT, "Audio is already being processed")
+    # Double-transcription guard (25 Aug 2026, resurface-recovery design): a
+    # completed pipeline means this audio already went through pyannote +
+    # OpenAI and was delivered. No caller — recovery card, double-click, or
+    # future UI — may re-run it from here. `failed` stays retryable.
+    if meeting.pipeline_status is PipelineStatus.ready:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This meeting already has a processed recording",
+        )
 
     system_segments = _decode_system_segments(body)
     audio: bytes | None = _decode_audio_b64(body.audio_b64, "Audio", min_bytes=0)

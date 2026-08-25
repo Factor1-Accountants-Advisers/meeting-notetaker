@@ -1,15 +1,21 @@
 import { app, ipcMain } from 'electron'
 import { appendFile, mkdir, readdir, readFile, rm, stat, writeFile } from 'fs/promises'
 import { join } from 'path'
-import { is } from '@electron-toolkit/utils'
 import { logger } from './logger'
+
+// Lazy (not @electron-toolkit/utils `is.dev`, which reads app.isPackaged at
+// import time): this module's pure helpers run under plain node in
+// verify:saved-captures, where electron exports are undefined.
+function isDev(): boolean {
+  return !app.isPackaged
+}
 
 function recordingDir(): string {
   // Dev: save inside the repo — when the app is launched from a sandboxed
   // shell (e.g. Claude's MSIX package), AppData writes get virtualized into
   // the package's LocalCache and become invisible in Explorer. Repo paths
   // are not redirected. Production keeps userData.
-  return is.dev ? join(app.getAppPath(), 'recordings') : join(app.getPath('userData'), 'recordings')
+  return isDev() ? join(app.getAppPath(), 'recordings') : join(app.getPath('userData'), 'recordings')
 }
 
 function safeRecordingName(name: string): string {
@@ -45,6 +51,35 @@ export interface SpillEntry extends SpillMeta {
   sysBytes: number
   /** Last chunk write time — approximates when the recording was interrupted. */
   endedAtUtc: string
+}
+
+// ---------------------------------------------------------------------------
+// Saved-capture recovery (resurface on restart, 25 Aug 2026).
+//
+// A failed upload's retry notice dies with the renderer session, but the
+// saved capture set and the backend's pending_audio meeting record survive.
+// These helpers let the startup scan find the sets, and retry/cleanup treat
+// a meeting's files as one unit. The backend record — never the files — is
+// the gate that decides whether a recovery card is offered.
+// ---------------------------------------------------------------------------
+
+export interface SavedCaptureEntry {
+  meetingId: string
+  savedAtUtc: string
+}
+
+const PRIMARY_CAPTURE_NAME =
+  /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.webm$/i
+
+/** The meeting id when `name` is a primary saved capture (`{uuid}.webm`). */
+export function primarySavedMeetingId(name: string): string | null {
+  const match = name.match(PRIMARY_CAPTURE_NAME)
+  return match ? match[1] : null
+}
+
+/** Every file in a meeting's saved capture set (mic, system tracks, manifest). */
+export function savedCaptureSetNames(names: string[], meetingId: string): string[] {
+  return names.filter((name) => name.startsWith(`${meetingId}.`))
 }
 
 function spillDir(): string {
@@ -89,7 +124,7 @@ export function registerRecordingStorageIpc(): void {
       logger().info('[recording] saved local capture', {
         fileName: safe,
         bytes: data.byteLength,
-        devMode: is.dev
+        devMode: isDev()
       })
       return { path: filePath }
     }
@@ -106,7 +141,7 @@ export function registerRecordingStorageIpc(): void {
         logger().info('[recording] loaded local capture for retry', {
           fileName: safe,
           bytes: data.byteLength,
-          devMode: is.dev
+          devMode: isDev()
         })
         return {
           exists: true,
@@ -115,7 +150,7 @@ export function registerRecordingStorageIpc(): void {
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code
         if (code === 'ENOENT') {
-          logger().warn('[recording] local capture missing for retry', { fileName: safe, devMode: is.dev })
+          logger().warn('[recording] local capture missing for retry', { fileName: safe, devMode: isDev() })
           return { exists: false }
         }
         throw err
@@ -123,12 +158,63 @@ export function registerRecordingStorageIpc(): void {
     }
   )
 
+  // List saved capture sets so the startup scan can offer recovery for
+  // meetings the backend still marks pending_audio (resurface on restart).
+  ipcMain.handle('recording:list-saved', async (): Promise<SavedCaptureEntry[]> => {
+    let names: string[]
+    try {
+      names = await readdir(recordingDir())
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw err
+    }
+    const entries: SavedCaptureEntry[] = []
+    for (const name of names) {
+      const meetingId = primarySavedMeetingId(name)
+      if (!meetingId) continue
+      try {
+        const info = await stat(join(recordingDir(), name))
+        entries.push({ meetingId, savedAtUtc: new Date(info.mtimeMs).toISOString() })
+      } catch {
+        // Raced deletion — skip.
+      }
+    }
+    if (entries.length) {
+      logger().info('[recording] saved capture sets found', { count: entries.length })
+    }
+    return entries
+  })
+
+  // Remove a meeting's whole capture set — after a successful upload (the
+  // server owns the audio now) or an explicit discard from the recovery card.
+  ipcMain.handle('recording:delete-saved', async (_event, meetingId: string): Promise<void> => {
+    if (!primarySavedMeetingId(`${meetingId}.webm`)) {
+      logger().warn('[recording] delete-saved refused non-uuid id', { meetingId })
+      return
+    }
+    let names: string[]
+    try {
+      names = await readdir(recordingDir())
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw err
+    }
+    const targets = savedCaptureSetNames(names, meetingId)
+    for (const name of targets) {
+      await rm(join(recordingDir(), name), { force: true })
+    }
+    logger().info('[recording] saved capture set removed', {
+      meetingId,
+      files: targets.length
+    })
+  })
+
   // --- Spill IPC (IN-129) ---
 
   ipcMain.handle('recording:spill-open', async (_event, key: string, meta: SpillMeta): Promise<void> => {
     await mkdir(spillDir(), { recursive: true })
     await writeFile(spillMetaPath(key), JSON.stringify(meta, null, 2))
-    logger().info('[recording] spill session opened', { key, meetingId: meta.meetingId, devMode: is.dev })
+    logger().info('[recording] spill session opened', { key, meetingId: meta.meetingId, devMode: isDev() })
   })
 
   ipcMain.handle(
