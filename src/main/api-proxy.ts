@@ -1,6 +1,7 @@
 import { app, ipcMain } from 'electron'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
+import { gzipSync } from 'zlib'
 import {
   getCurrentUser,
   getCurrentUserEmail,
@@ -23,6 +24,12 @@ import { isStorageApiEnabled, storageIdentityHeaders } from './storage-api-ident
 // credentials or talks to the network directly (thin-client rule). Entra ID
 // tokens will be attached here once auth lands.
 const API_BASE = process.env.MN_API_BASE ?? 'http://127.0.0.1:8787'
+
+// Last slice of main.log shipped with a problem report (gzipped in transit).
+// Big enough to span days of logging; log text gzips ~10:1, comfortably under
+// the backend's 3MB attachment cap (pathological content is dropped there,
+// never failing the report).
+const LOG_ATTACHMENT_TAIL_BYTES = 4 * 1024 * 1024
 
 function parseBody(text: string): unknown {
   if (!text) return null
@@ -71,8 +78,23 @@ export function registerApiProxyIpc(): void {
         try {
           const logPath = join(app.getPath('userData'), 'logs', 'main.log')
           if (existsSync(logPath)) {
-            const lines = readFileSync(logPath, 'utf-8').split('\n').slice(-30)
+            const raw = readFileSync(logPath)
+            const lines = raw.toString('utf-8').split('\n').slice(-30)
             headers['X-MN-Recent-Logs'] = Buffer.from(lines.join('\n'), 'utf-8').toString('base64')
+            // The 30-line excerpt above misses most incidents (both 25 Aug
+            // field diagnoses sat thousands of lines earlier), so the full
+            // tail rides in the body as a gzip attachment. 4MB of log text
+            // gzips to a few hundred KB — far under Graph's inline
+            // attachment ceiling; the backend drops anything oversized
+            // rather than failing the report.
+            const tail =
+              raw.length > LOG_ATTACHMENT_TAIL_BYTES
+                ? raw.subarray(raw.length - LOG_ATTACHMENT_TAIL_BYTES)
+                : raw
+            req.body = {
+              ...((req.body as Record<string, unknown> | undefined) ?? {}),
+              log_gz_b64: gzipSync(tail).toString('base64')
+            }
           }
         } catch {
           // Best-effort; report still sends without logs.

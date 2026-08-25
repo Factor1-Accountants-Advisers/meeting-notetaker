@@ -1156,3 +1156,21 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   NOTE: post-capture retry notices do NOT survive an app restart — her
   original meeting's retry button is gone; that resurfacing gap is a filed
   follow-up.
+
+## 25 Aug 2026 — Problem reports attach the full main.log (gzip)
+
+- [x] Motivation: both of today's field diagnoses (Gabby "Projects", Regina
+  HD-1513) stalled on the 30-line inline excerpt — the failing uploads sat
+  thousands of lines above the cap; each needed a manual log handover.
+- [x] Desktop: api-proxy's report-problem interception now also gzips the
+  last 4MB of main.log into the request body (`log_gz_b64`). The 30-line
+  inline excerpt stays for at-a-glance reading. Best-effort as before.
+- [x] Backend: `report-problem` validates (base64, gzip magic, ≤3MB) and
+  attaches as `main.log.gz` via the existing provider attachments path; body
+  notes attached/omitted. Invalid or oversized payloads are dropped — a
+  report never fails over its log.
+- [x] Tests red-first in new `test_report_problem.py` (4): attachment rides
+  with correct Graph fileAttachment shape; absent without payload; oversized
+  and invalid/non-gzip payloads omit the attachment but still send. Suite:
+  426 tests, same 11 pre-existing recipient/delivery failures only.
+  Typecheck + build green.
