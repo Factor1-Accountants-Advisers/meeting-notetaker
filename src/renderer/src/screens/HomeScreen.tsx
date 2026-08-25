@@ -382,13 +382,13 @@ function CaptureCard({
         Planned duration
       </label>
       <div className="flex items-center gap-2">
+        {/* type="text", not "number": the native spinner buttons clash with
+            the flat design system and nobody clicks to 30 — people type.
+            clampAdhocDurationMinutes sanitizes on blur and on start. */}
         <input
           id="meeting-duration"
-          type="number"
+          type="text"
           inputMode="numeric"
-          min={ADHOC_DURATION_MIN_MINUTES}
-          max={ADHOC_DURATION_MAX_MINUTES}
-          step={5}
           value={durationText}
           disabled={recordingActive}
           onChange={(e) => setDurationText(e.target.value)}

@@ -156,6 +156,18 @@ assert.equal(
 )
 assert.match(home, /Planned duration/, 'the capture card offers a duration field')
 assert.match(home, /value="30"/, 'the duration field defaults to 30 minutes')
+// 25 Aug follow-up: no native number spinner — people type the value, and the
+// up/down buttons fought the flat design system. Clamping still guards input.
+assert.doesNotMatch(
+  home,
+  /type="number"/,
+  'the duration field must not render a spinner (text + numeric inputMode)'
+)
+assert.match(
+  home,
+  /inputmode="numeric"/i,
+  'the duration field keeps the numeric keyboard hint'
+)
 
 // Central cutover (5 Aug 2026): a colleague enrolled centrally but absent
 // from the local registry must map to 'enrolled' — that is what puts them in

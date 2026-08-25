@@ -1124,5 +1124,9 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   `verify:ad-hoc-attendees` (clamp table + rendered default 30). Also green:
   `verify:recording-controls`, `verify:join-watch`, `verify:call-signals`,
   `typecheck`, `build`, `git diff --check`.
+- [x] 25 Aug follow-up (Joseph review): native number spinner removed —
+  `type="text"` + `inputMode="numeric"`, matching the title input; clamp
+  behaviour unchanged. `verify:ad-hoc-attendees` asserts no `type="number"`
+  red-first. Ships in v2.0.32.
 - [ ] Live smoke: start an ad-hoc recording with a ~6-min duration; expect
   the ending-soon toast at T-5 and auto-stop + upload at the end.
