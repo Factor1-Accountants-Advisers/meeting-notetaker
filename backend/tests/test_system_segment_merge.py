@@ -107,6 +107,47 @@ class DecodeSystemSegmentsTests(unittest.TestCase):
         body = UploadAudioRequest(audio_b64=self.B64)
         self.assertEqual(meetings._decode_system_segments(body), [])
 
+    def test_undersized_segment_is_dropped_with_warning_not_rejected(self) -> None:
+        # Field incident 24 Aug 2026 (Gabby, "Projects"): a 594-byte header-only
+        # segment from a device switch 422'd a healthy 50-minute recording on
+        # every retry. Capture debris must be dropped — loudly — not fatal.
+        stub = base64.b64encode(b"s" * 594).decode()
+        body = UploadAudioRequest(
+            audio_b64=self.B64,
+            system_segments=[
+                SystemAudioSegment(audio_b64=self.B64, offset_ms=0),
+                SystemAudioSegment(audio_b64=stub, offset_ms=1_166_886),
+                SystemAudioSegment(audio_b64=self.B64, offset_ms=2_290_773),
+            ],
+        )
+        with self.assertLogs("app.routers.meetings", level="WARNING") as logs:
+            segments = meetings._decode_system_segments(body)
+        self.assertEqual([offset for _, offset in segments], [0, 2_290_773])
+        self.assertTrue(
+            any("kept=2" in message and "dropped=1" in message for message in logs.output),
+            logs.output,
+        )
+
+    def test_all_segments_undersized_returns_empty_list(self) -> None:
+        stub = base64.b64encode(b"s" * 100).decode()
+        body = UploadAudioRequest(
+            audio_b64=self.B64,
+            system_segments=[SystemAudioSegment(audio_b64=stub, offset_ms=0)],
+        )
+        with self.assertLogs("app.routers.meetings", level="WARNING"):
+            self.assertEqual(meetings._decode_system_segments(body), [])
+
+    def test_corrupt_segment_base64_still_rejects(self) -> None:
+        # Pin the boundary the drop rule must NOT widen: payload damage is a
+        # real error, not capture debris.
+        body = UploadAudioRequest(
+            audio_b64=self.B64,
+            system_segments=[SystemAudioSegment(audio_b64="not-base64!!", offset_ms=0)],
+        )
+        with self.assertRaises(HTTPException) as ctx:
+            meetings._decode_system_segments(body)
+        self.assertEqual(ctx.exception.status_code, 422)
+
 
 class MicTooSmallFallbackTests(unittest.IsolatedAsyncioTestCase):
     """A dead mic capture must not reject an otherwise-healthy recording.
@@ -175,6 +216,28 @@ class MicTooSmallFallbackTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertEqual(self.prepare.await_args.args[1], b"m" * 2_048)
+        self.assertFalse(store.MEETINGS[self.meeting.id].recorder_audio_missing)
+
+    async def test_stub_segment_does_not_reject_healthy_recording(self) -> None:
+        # The 24 Aug "Projects" incident end-to-end: healthy mic + one
+        # header-only segment among healthy ones → upload succeeds, merge
+        # sees only the healthy segments, mic is kept.
+        stub = base64.b64encode(b"s" * 594).decode()
+        await self._upload(
+            UploadAudioRequest(
+                audio_b64=self.HEALTHY_MIC,
+                system_segments=[
+                    SystemAudioSegment(audio_b64=self.HEALTHY_SEGMENT, offset_ms=0),
+                    SystemAudioSegment(audio_b64=stub, offset_ms=1_166_886),
+                    SystemAudioSegment(audio_b64=self.HEALTHY_SEGMENT, offset_ms=2_290_773),
+                ],
+            )
+        )
+        self.assertEqual(self.prepare.await_args.args[1], b"m" * 2_048)
+        self.assertEqual(
+            [offset for _, offset in self.prepare.await_args.args[2]],
+            [0, 2_290_773],
+        )
         self.assertFalse(store.MEETINGS[self.meeting.id].recorder_audio_missing)
 
 

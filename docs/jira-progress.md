@@ -1130,3 +1130,29 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   red-first. Ships in v2.0.32.
 - [ ] Live smoke: start an ad-hoc recording with a ~6-min duration; expect
   the ending-soon toast at T-5 and auto-stop + upload at the end.
+
+## 25 Aug 2026 — Stub system-audio segment no longer rejects uploads (Gabby "Projects" incident)
+
+- [x] Incident: 24 Aug in-person manual recording (50 min) 422'd on every
+  upload attempt (5×) with "System audio segment 1 is too short" — a 594-byte
+  header-only loopback segment from device churn (AirPods/DisplayLink/webcam,
+  10 segments) vetoed a healthy 48MB mic track. Mic was live throughout
+  (8-second silence watchdog never fired). Same class as the 11 Aug dead-mic
+  422, on the segment side — the known-open sibling.
+- [x] `_decode_system_segments` now drops undersized segments as capture
+  debris with a warning naming each (kept/dropped counts, offsets, bytes) —
+  never silently; corrupt base64 still rejects (payload damage ≠ debris).
+  All-segments-dropped degrades to the existing mic-only / 422 logic.
+- [x] Tests red-first in `test_system_segment_merge.py` (19/19): stub among
+  healthy segments dropped with warning; all-stubs → empty list; corrupt
+  base64 pinned as still-422; end-to-end healthy-mic + stub upload succeeds
+  with only healthy segments reaching the merge. Full backend suite: same 11
+  pre-existing recipient/delivery failures only.
+- [x] Recovery paths verified in code: (a) TODAY on her 2.0.30 — Home →
+  "Upload recording" sends audio_b64 only (no segments → no stub → no 422);
+  her saved `83722781-….webm` mic file in %APPDATA%\meeting-notetaker\
+  recordings\ carries the whole in-person meeting; nothing reaps saved
+  captures. (b) After this ships: in-session retries stop dead-looping.
+  NOTE: post-capture retry notices do NOT survive an app restart — her
+  original meeting's retry button is gone; that resurfacing gap is a filed
+  follow-up.

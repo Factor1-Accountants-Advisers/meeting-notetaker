@@ -323,13 +323,32 @@ def _decode_system_segments(body: "UploadAudioRequest") -> list[tuple[bytes, int
 
     Prefers the segmented form (IN-468); falls back to the legacy single-blob
     field as one segment at offset 0. Empty list when no system audio was sent.
+
+    A device switch can leave a header-only segment behind (24 Aug 2026: a
+    594-byte stub 422'd a healthy 50-minute recording on every retry).
+    Undersized segments are capture debris — dropped with a warning, never
+    silently and never taking the upload down with them. Corrupt base64 still
+    rejects: that is payload damage, not debris.
     """
     if body.system_segments:
-        segments = [
-            (_decode_audio_b64(seg.audio_b64, f"System audio segment {i}"), seg.offset_ms)
-            for i, seg in enumerate(body.system_segments)
-        ]
-        return sorted(segments, key=lambda pair: pair[1])
+        kept: list[tuple[bytes, int]] = []
+        dropped: list[str] = []
+        for i, seg in enumerate(body.system_segments):
+            data = _decode_audio_b64(
+                seg.audio_b64, f"System audio segment {i}", min_bytes=0
+            )
+            if len(data) < MIN_AUDIO_BYTES:
+                dropped.append(f"segment {i} at {seg.offset_ms}ms ({len(data)} bytes)")
+                continue
+            kept.append((data, seg.offset_ms))
+        if dropped:
+            logger.warning(
+                "Dropping header-only system audio segments: kept=%d dropped=%d (%s)",
+                len(kept),
+                len(dropped),
+                "; ".join(dropped),
+            )
+        return sorted(kept, key=lambda pair: pair[1])
     if body.system_audio_b64:
         return [(_decode_audio_b64(body.system_audio_b64, "System audio"), 0)]
     return []
