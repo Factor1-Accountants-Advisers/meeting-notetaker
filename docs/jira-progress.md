@@ -1075,3 +1075,30 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   app behaves exactly as before (one warn line in the backend log).
   Plan: `docs/superpowers/plans/2026-08-05-central-people-directory.md`
   (reviewed, 2 rounds). Ships in desktop v2.0.20.
+
+## 25 Aug 2026 — IN-486: speaker ID paginates past the 50-candidate bound
+
+- [x] Root cause (from the 10 Aug Firmwide Catchup): `build_meeting_candidates`
+  silently truncated the invite list at 50, so enrolled invitees past
+  position 50 (David #70, Joseph #71, Daniel #87, Jose #100) were never
+  looked up and stayed "Speaker N".
+- [x] `meeting_voiceprints.py`: cap removed; the full deduplicated participant
+  set is returned. Defensive `MAX_MEETING_CANDIDATES = 500` bound only drops
+  invitees (organiser/recorder/expansion protected) and warns with
+  total/kept/dropped counts — never silent.
+- [x] `resolve_meeting_voiceprints` paginates the Storage API lookup in
+  batches of ≤50 (`MEETING_CANDIDATE_BATCH_LIMIT`, shared with the request
+  model so contract and paginator cannot drift); `request_count` reports real
+  requests. Any batch failure discards partial central results and degrades
+  to the local fallback for ALL candidates — authoritative-or-nothing, so
+  never-guess semantics are unchanged. Server contract untouched.
+- [x] Tests red-first in `test_meeting_voiceprints.py`: 101-attendee fixture
+  resolves an enrolled speaker at invite position 71 across 3 batches;
+  organiser+recorder always candidates; cap warning with counts;
+  mid-pagination outage falls back for the full list. The old
+  `test_fallback_is_limited_to_exact_capped_request_candidates` (which
+  asserted the buggy cap) rewritten to the corrected contract.
+- [x] Verification: module 15/15; voiceprint-adjacent suites 99/99. Full
+  backend run has 11 pre-existing failures in the delivery/recipient
+  families (assert the pre-organizer-only delivery defaults; also fail on
+  unchanged code — verified by stash) — unrelated, needs its own cleanup.

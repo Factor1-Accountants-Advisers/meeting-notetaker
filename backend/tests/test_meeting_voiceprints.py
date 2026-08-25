@@ -87,6 +87,33 @@ class _CapturingClient:
         return self.response
 
 
+class _EnrolledStoreClient:
+    """Resolves each call against a fixed enrolled set, like the real API."""
+
+    def __init__(self, enrolled_emails, fail_on_call=None):
+        self.enrolled = set(enrolled_emails)
+        self.fail_on_call = fail_on_call
+        self.calls = []
+
+    def get_meeting_voiceprints(self, meeting_id, candidates, access_token):
+        self.calls.append((meeting_id, candidates, access_token))
+        if self.fail_on_call == len(self.calls):
+            raise StorageApiUnavailable("temporary outage")
+        return MeetingVoiceprintResponse(
+            meeting_id=meeting_id,
+            records=[
+                _central(candidate.email, person_id=f"oid-{candidate.email}")
+                for candidate in candidates
+                if candidate.email in self.enrolled
+            ],
+            missing=[
+                candidate
+                for candidate in candidates
+                if candidate.email not in self.enrolled
+            ],
+        )
+
+
 class MeetingCandidateTests(unittest.TestCase):
     def test_candidates_are_ordered_normalized_and_deduplicated(self):
         candidates = build_meeting_candidates(
@@ -155,6 +182,72 @@ class MeetingCandidateTests(unittest.TestCase):
                 ("recorder@example.com", "recorder"),
                 ("expansion@example.com", "controlled_expansion"),
             ],
+        )
+
+
+def _large_meeting(attendee_count: int) -> Meeting:
+    return Meeting(
+        id=MEETING_ID,
+        title="Firmwide catchup",
+        source=MeetingSource.online,
+        owner_id="owner@example.com",
+        created_at=datetime.now(timezone.utc),
+        graph_metadata=GraphMeetingMetadata(
+            meeting_id="large-graph-meeting",
+            organizer_email="organizer@example.com",
+            attendees=[
+                GraphMeetingAttendeeMetadata(
+                    email=f"attendee{index:03d}@example.com"
+                )
+                for index in range(attendee_count)
+            ],
+        ),
+    )
+
+
+class LargeMeetingCandidateTests(unittest.TestCase):
+    """IN-486: >50-invitee meetings must never silently truncate candidates."""
+
+    def test_all_attendees_organizer_and_recorder_are_candidates(self):
+        candidates = build_meeting_candidates(
+            _large_meeting(101),
+            recorder_email="recorder@example.com",
+            expansion_emails=[],
+        )
+
+        emails = [candidate.email for candidate in candidates]
+        self.assertEqual(len(candidates), 103)
+        self.assertIn("attendee070@example.com", emails)
+        self.assertIn("attendee100@example.com", emails)
+        self.assertIn(
+            ("organizer@example.com", "organizer"),
+            [(candidate.email, candidate.source) for candidate in candidates],
+        )
+        self.assertIn(
+            ("recorder@example.com", "recorder"),
+            [(candidate.email, candidate.source) for candidate in candidates],
+        )
+
+    def test_pathological_meeting_caps_with_warning_and_keeps_priority_sources(self):
+        # IN-486: the defensive overall bound may drop invitees, but never
+        # silently and never the organiser/recorder/expansion sources.
+        with self.assertLogs(
+            "app.services.meeting_voiceprints", level="WARNING"
+        ) as logs:
+            candidates = build_meeting_candidates(
+                _large_meeting(510),
+                recorder_email="recorder@example.com",
+                expansion_emails=["expansion@example.com"],
+            )
+
+        self.assertEqual(len(candidates), 500)
+        pairs = {(candidate.email, candidate.source) for candidate in candidates}
+        self.assertIn(("organizer@example.com", "organizer"), pairs)
+        self.assertIn(("recorder@example.com", "recorder"), pairs)
+        self.assertIn(("expansion@example.com", "controlled_expansion"), pairs)
+        self.assertTrue(
+            any("dropped=13" in message for message in logs.output),
+            logs.output,
         )
 
 
@@ -241,43 +334,93 @@ class MeetingResolutionTests(unittest.TestCase):
         self.assertTrue(result.degraded)
         self.assertEqual(result.request_count, 1)
 
-    def test_fallback_is_limited_to_exact_capped_request_candidates(self):
-        meeting = _meeting().model_copy(
-            update={
-                "graph_metadata": GraphMeetingMetadata(
-                    meeting_id="large-graph-meeting",
-                    organizer_email="organizer@example.com",
-                    attendees=[
-                        GraphMeetingAttendeeMetadata(
-                            email=f"attendee{index:02d}@example.com"
-                        )
-                        for index in range(51)
-                    ],
-                )
-            }
+    def test_large_meeting_lookup_is_paginated_in_batches_of_50(self):
+        # IN-486: an enrolled speaker past invite position 50 is identified.
+        client = _EnrolledStoreClient(
+            enrolled_emails=["attendee070@example.com", "recorder@example.com"]
         )
-        client = _CapturingClient(error=StorageApiUnavailable("temporary outage"))
 
         result = resolve_meeting_voiceprints(
-            meeting,
+            _large_meeting(101),
+            recorder_email="recorder@example.com",
+            access_token="token",
+            settings=self.settings,
+            client=client,
+            local_records=[],
+        )
+
+        self.assertEqual(len(client.calls), 3)
+        for _, batch, token in client.calls:
+            self.assertLessEqual(len(batch), 50)
+            self.assertEqual(token, "token")
+        requested = [
+            candidate.email for _, batch, _ in client.calls for candidate in batch
+        ]
+        self.assertEqual(len(requested), 103)
+        self.assertEqual(len(set(requested)), 103)
+        self.assertEqual(
+            sorted(record.employee_id for record in result.records),
+            ["attendee070@example.com", "recorder@example.com"],
+        )
+        self.assertFalse(result.degraded)
+        self.assertEqual(result.request_count, 3)
+
+    def test_partial_batch_failure_degrades_to_full_local_fallback(self):
+        # IN-486: a mid-pagination outage falls back for ALL candidates, not
+        # just the failed batch — central stays authoritative-or-nothing.
+        client = _EnrolledStoreClient(
+            enrolled_emails=["attendee000@example.com"],
+            fail_on_call=2,
+        )
+
+        result = resolve_meeting_voiceprints(
+            _large_meeting(101),
             recorder_email="recorder@example.com",
             access_token="token",
             settings=self.settings,
             client=client,
             local_records=[
-                _local("attendee00@example.com"),
-                _local("attendee49@example.com"),
-                _local("attendee50@example.com"),
+                _local("attendee000@example.com"),
+                _local("attendee070@example.com"),
+            ],
+        )
+
+        self.assertTrue(result.degraded)
+        self.assertEqual(
+            [record.employee_id for record in result.records],
+            ["attendee000@example.com", "attendee070@example.com"],
+        )
+
+    def test_fallback_covers_every_candidate_in_large_meetings(self):
+        # IN-486: candidates past position 50 keep local-fallback coverage too.
+        client = _CapturingClient(error=StorageApiUnavailable("temporary outage"))
+
+        result = resolve_meeting_voiceprints(
+            _large_meeting(51),
+            recorder_email="recorder@example.com",
+            access_token="token",
+            settings=self.settings,
+            client=client,
+            local_records=[
+                _local("attendee000@example.com"),
+                _local("attendee049@example.com"),
+                _local("attendee050@example.com"),
                 _local("organizer@example.com"),
                 _local("recorder@example.com"),
             ],
         )
 
-        self.assertEqual(len(client.calls[0][1]), 50)
         self.assertEqual(
             [record.employee_id for record in result.records],
-            ["attendee00@example.com", "attendee49@example.com"],
+            [
+                "attendee000@example.com",
+                "attendee049@example.com",
+                "attendee050@example.com",
+                "organizer@example.com",
+                "recorder@example.com",
+            ],
         )
+        self.assertTrue(result.degraded)
 
     def test_central_failure_without_relevant_local_data_is_retryable(self):
         client = _CapturingClient(error=StorageApiUnavailable("temporary outage"))

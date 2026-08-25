@@ -144,11 +144,16 @@ class MeetingVoiceprintCandidate(BaseModel):
         return normalized
 
 
+# Per-request security bound in the ratified Storage API v1 contract. Larger
+# meetings are covered by paginating lookups in batches of this size (IN-486).
+MEETING_CANDIDATE_BATCH_LIMIT = 50
+
+
 class MeetingVoiceprintRequest(BaseModel):
     meeting_id: UUID
     candidates: list[MeetingVoiceprintCandidate] = Field(
         min_length=1,
-        max_length=50,
+        max_length=MEETING_CANDIDATE_BATCH_LIMIT,
     )
 
 

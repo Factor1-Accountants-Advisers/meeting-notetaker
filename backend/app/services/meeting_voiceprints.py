@@ -18,6 +18,7 @@ from app.services.speaker_matching import (
     _controlled_expansion_ids_from_settings,
 )
 from app.services.storage_api import (
+    MEETING_CANDIDATE_BATCH_LIMIT,
     CentralEnrolment,
     MeetingVoiceprintCandidate,
     StorageApiClient,
@@ -31,6 +32,12 @@ logger = logging.getLogger(__name__)
 
 class MeetingVoiceprintsUnavailable(RuntimeError):
     """Central retrieval failed and no safe local fallback was available."""
+
+
+# IN-486 defensive overall bound: lookups paginate, so this only guards
+# against pathological invite lists. Dropping is never silent, and only
+# invitees are ever dropped — organiser/recorder/expansion always stay.
+MAX_MEETING_CANDIDATES = 500
 
 
 @dataclass(frozen=True)
@@ -56,14 +63,18 @@ def build_meeting_candidates(
     recorder_email: str | None,
     expansion_emails: Iterable[str],
 ) -> list[MeetingVoiceprintCandidate]:
-    """Build the bounded attendee → organiser → recorder → expansion request."""
+    """Build the deduplicated attendee → organiser → recorder → expansion list.
+
+    The full participant set is returned (lookups paginate per the Storage API
+    per-request bound); only MAX_MEETING_CANDIDATES guards pathological lists.
+    """
 
     candidates: list[MeetingVoiceprintCandidate] = []
     seen: set[str] = set()
 
     def add(value: str | None, source: str) -> None:
         email = _normalized_email(value)
-        if email is None or email in seen or len(candidates) >= 50:
+        if email is None or email in seen:
             return
         seen.add(email)
         candidates.append(MeetingVoiceprintCandidate(email=email, source=source))
@@ -81,6 +92,28 @@ def build_meeting_candidates(
     add(recorder_email or meeting.owner_id, "recorder")
     for email in expansion_emails:
         add(email, "controlled_expansion")
+
+    if len(candidates) > MAX_MEETING_CANDIDATES:
+        protected_count = sum(
+            1 for candidate in candidates if candidate.source != "invitee"
+        )
+        invitee_budget = MAX_MEETING_CANDIDATES - protected_count
+        kept: list[MeetingVoiceprintCandidate] = []
+        kept_invitees = 0
+        for candidate in candidates:
+            if candidate.source == "invitee":
+                if kept_invitees >= invitee_budget:
+                    continue
+                kept_invitees += 1
+            kept.append(candidate)
+        logger.warning(
+            "Meeting candidate list capped: total=%d kept=%d dropped=%d limit=%d",
+            len(candidates),
+            len(kept),
+            len(candidates) - len(kept),
+            MAX_MEETING_CANDIDATES,
+        )
+        candidates = kept
     return candidates
 
 
@@ -133,27 +166,41 @@ def resolve_meeting_voiceprints(
         )
 
     resolved_client = client or get_storage_api_client()
+    # IN-486: the contract caps each request at 50 candidates, so larger
+    # meetings paginate. Central stays authoritative-or-nothing: any batch
+    # failure discards partial results and degrades for ALL candidates.
+    batches = [
+        candidates[start : start + MEETING_CANDIDATE_BATCH_LIMIT]
+        for start in range(0, len(candidates), MEETING_CANDIDATE_BATCH_LIMIT)
+    ]
+    request_count = 0
     try:
-        response = resolved_client.get_meeting_voiceprints(
-            meeting.id,
-            candidates,
-            access_token,
-        )
-        records = [
-            voiceprint
-            for record in response.records
-            if (voiceprint := _as_voiceprint(record)) is not None
-        ]
+        records: list[Voiceprint] = []
+        missing_count = 0
+        for batch in batches:
+            request_count += 1
+            response = resolved_client.get_meeting_voiceprints(
+                meeting.id,
+                batch,
+                access_token,
+            )
+            records.extend(
+                voiceprint
+                for record in response.records
+                if (voiceprint := _as_voiceprint(record)) is not None
+            )
+            missing_count += len(response.missing)
         logger.info(
-            "Meeting voiceprint lookup completed: requested=%d resolved=%d missing=%d",
+            "Meeting voiceprint lookup completed: requested=%d resolved=%d missing=%d requests=%d",
             len(candidates),
             len(records),
-            len(response.missing),
+            missing_count,
+            request_count,
         )
         return MeetingVoiceprintResolution(
             records=records,
             degraded=False,
-            request_count=1,
+            request_count=request_count,
         )
     except StorageApiUnavailable as exc:
         available_local = (
@@ -186,5 +233,5 @@ def resolve_meeting_voiceprints(
         return MeetingVoiceprintResolution(
             records=fallback,
             degraded=True,
-            request_count=1,
+            request_count=request_count,
         )
