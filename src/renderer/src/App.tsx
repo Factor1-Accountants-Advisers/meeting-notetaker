@@ -783,10 +783,15 @@ function App(): JSX.Element {
 
   const startManualRecording = async (
     title: string,
-    manualAttendees: ManualMeetingAttendee[]
+    manualAttendees: ManualMeetingAttendee[],
+    durationMinutes: number
   ): Promise<void> => {
     if (recordingRef.current) return
     const startedAt = Date.now()
+    // IN-479: the chosen duration gives the ad-hoc recording a scheduled end,
+    // arming main's auto-stop + 5-minute reminder and this screen's countdown
+    // and Extend, exactly as for calendar meetings.
+    const plannedEndUtc = new Date(startedAt + durationMinutes * 60_000).toISOString()
     const source = 'online' as const
     const created = await createMeeting(title, null, source, null, manualAttendees)
     const meetingId = created?.id ?? null
@@ -807,9 +812,7 @@ function App(): JSX.Element {
       eventId: manualKey,
       idempotencyKey: manualKey,
       startTimeUtc: new Date(startedAt).toISOString(),
-      // Manual recordings have no scheduled end. This only supplies the state
-      // machine's required shape; no auto-stop timer is armed for this source.
-      endTimeUtc: new Date(startedAt + 8 * 60 * 60 * 1000).toISOString(),
+      endTimeUtc: plannedEndUtc,
       source: 'manual',
       title
     })
@@ -821,7 +824,7 @@ function App(): JSX.Element {
       startedAt,
       pausedAccum: 0,
       pausedAt: null,
-      scheduledEndUtc: null
+      scheduledEndUtc: plannedEndUtc
     })
     setAutoRecordingState('recording')
     setView('recording')
@@ -1566,8 +1569,8 @@ function App(): JSX.Element {
       )}
       {view === 'home' && (
         <HomeScreen
-          onStartRecording={(title, attendees) =>
-            void startManualRecording(title, attendees)
+          onStartRecording={(title, attendees, durationMinutes) =>
+            void startManualRecording(title, attendees, durationMinutes)
           }
           onUploadRecording={(title, file, attendees) =>
             void uploadRecording(title, file, attendees)

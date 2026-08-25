@@ -19,12 +19,14 @@ import { createRecordingStateMachine } from '../src/main/recording-state.ts'
 import {
   cleanupRecordingIpc,
   configureJoinWatchHooks,
+  extendAutoStop,
   getEndReminderPlan,
   getRecordingStateMachine,
   handleRendererRecordingError,
   handleRendererRecordingReady,
   handleRendererRecordingStarted,
   handleRendererRecordingStopped,
+  hasExtendableRecording,
   registerManualRecording,
   sendAutoStartRequest,
   sendAutoStopRequest,
@@ -403,6 +405,36 @@ async function main(): Promise<void> {
   assert.deepEqual(getRecordingStateMachine().getActiveRecording()?.metadata, { title: 'Manual client meeting' })
   assert.equal(getRecordingStateMachine().canStartAutoRecording('auto-during-manual'), false)
   handleRendererRecordingStopped()
+
+  // IN-479: an ad-hoc start carries its planned end, so the shared auto-stop,
+  // ending-soon reminder, and Extend machinery arm for manual recordings the
+  // same way they do for scheduled ones.
+  cleanupRecordingIpc()
+  const timedManualWindow = fakeWindow()
+  setMainWindow(timedManualWindow.window)
+  const manualStartMs = Date.now()
+  registerManualRecording({
+    eventId: 'manual-timed-event',
+    idempotencyKey: 'manual-timed-key',
+    startTimeUtc: new Date(manualStartMs).toISOString(),
+    endTimeUtc: new Date(manualStartMs + 30 * 60_000).toISOString(),
+    source: 'manual',
+    title: 'Ad-hoc catchup'
+  })
+  assert.equal(hasExtendableRecording(), true, 'IN-479: a timed manual recording is extendable')
+  assert.ok(
+    getRecordingStateMachine().getActiveRecording()?.startedAtUtc,
+    'IN-479: a manual start stamps startedAtUtc (capture is already running)'
+  )
+  const extendedManual = extendAutoStop()
+  assert.ok(extendedManual, 'IN-479: Extend applies to a manual recording')
+  assert.equal(
+    Date.parse(extendedManual!.endTimeUtc),
+    manualStartMs + 40 * 60_000,
+    'IN-479: Extend pushes the planned end out by 10 minutes'
+  )
+  handleRendererRecordingStopped()
+  assert.equal(hasExtendableRecording(), false, 'IN-479: stop disarms the manual auto-stop')
 
   // Join-triggered recording, spec J4 (Task 7): the auto-stop carries a
   // reason; a `grace_expired` stop shortly after a join-triggered start is a

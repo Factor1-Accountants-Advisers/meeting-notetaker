@@ -26,9 +26,28 @@ export interface InterruptedRecording {
   interruptedAtUtc: string
 }
 
+// IN-479: every ad-hoc recording carries a planned duration so the
+// scheduled-end auto-stop and 5-minute extension reminder arm for it.
+export const ADHOC_DURATION_DEFAULT_MINUTES = 30
+export const ADHOC_DURATION_MIN_MINUTES = 5
+// Matches the legacy fixed 8h placeholder, so no recording can now run
+// longer unattended than it could before.
+export const ADHOC_DURATION_MAX_MINUTES = 480
+
+/** Parse the duration field: blank/garbage falls back to the default,
+ *  anything numeric rounds to whole minutes and clamps to the allowed range. */
+export function clampAdhocDurationMinutes(raw: string): number {
+  const parsed = Number.parseFloat(raw)
+  if (!Number.isFinite(parsed)) return ADHOC_DURATION_DEFAULT_MINUTES
+  return Math.min(
+    ADHOC_DURATION_MAX_MINUTES,
+    Math.max(ADHOC_DURATION_MIN_MINUTES, Math.round(parsed))
+  )
+}
+
 interface HomeProps {
   previewMode?: boolean
-  onStartRecording: (title: string, attendees: ManualAttendee[]) => void
+  onStartRecording: (title: string, attendees: ManualAttendee[], durationMinutes: number) => void
   onUploadRecording: (title: string, file: File, attendees: ManualAttendee[]) => void
   recordingState?: 'idle' | 'recording' | 'processing'
   interruptedRecordings?: InterruptedRecording[]
@@ -318,7 +337,7 @@ function CaptureCard({
   people,
   directoryUnavailable
 }: {
-  onStart: (title: string, attendees: ManualAttendee[]) => void
+  onStart: (title: string, attendees: ManualAttendee[], durationMinutes: number) => void
   onUpload: (title: string, file: File, attendees: ManualAttendee[]) => void
   /** Capture actions are disabled while a recording is active or finishing. */
   recordingActive?: boolean
@@ -326,6 +345,7 @@ function CaptureCard({
   directoryUnavailable: boolean
 }): JSX.Element {
   const [title, setTitle] = useState('')
+  const [durationText, setDurationText] = useState(String(ADHOC_DURATION_DEFAULT_MINUTES))
   const [attendees, setAttendees] = useState<ManualAttendee[]>([])
   const [attendeesOpen, setAttendeesOpen] = useState(false)
   const hasTitle = title.trim().length > 0
@@ -355,6 +375,30 @@ function CaptureCard({
         placeholder="e.g. Tax compliance — Henderson & Co"
         className="ui-control h-7 w-full rounded-control border border-edge-tertiary bg-bg-secondary px-2 text-[14px] text-content-primary placeholder:text-content-tertiary focus:border-brand-blue focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
       />
+      <label
+        htmlFor="meeting-duration"
+        className="mb-1.5 mt-3 block text-[14px] font-medium text-content-primary"
+      >
+        Planned duration
+      </label>
+      <div className="flex items-center gap-2">
+        <input
+          id="meeting-duration"
+          type="number"
+          inputMode="numeric"
+          min={ADHOC_DURATION_MIN_MINUTES}
+          max={ADHOC_DURATION_MAX_MINUTES}
+          step={5}
+          value={durationText}
+          disabled={recordingActive}
+          onChange={(e) => setDurationText(e.target.value)}
+          onBlur={() => setDurationText(String(clampAdhocDurationMinutes(durationText)))}
+          className="ui-control h-7 w-20 rounded-control border border-edge-tertiary bg-bg-secondary px-2 text-[14px] text-content-primary focus:border-brand-blue focus:outline-none disabled:cursor-not-allowed disabled:opacity-45"
+        />
+        <span className="text-[12px] text-content-tertiary">
+          minutes · a reminder offers Extend 5 minutes before the end
+        </span>
+      </div>
       <button
         type="button"
         aria-expanded={attendeesOpen}
@@ -417,7 +461,7 @@ function CaptureCard({
         <button
           type="button"
           disabled={!canUpload}
-          onClick={() => onStart(title.trim(), attendees)}
+          onClick={() => onStart(title.trim(), attendees, clampAdhocDurationMinutes(durationText))}
           className="ui-control flex min-h-7 items-center justify-center gap-1 rounded-control border border-transparent bg-[var(--color-button-primary)] px-2 text-[14px] text-[var(--color-button-primary-text)] hover:bg-[var(--color-button-primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
         >
           <Mic size={16} strokeWidth={1.75} />

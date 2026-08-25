@@ -1102,3 +1102,27 @@ This ledger tracks Slice 1 Jira implementation items as we complete and verify t
   backend run has 11 pre-existing failures in the delivery/recipient
   families (assert the pre-organizer-only delivery defaults; also fail on
   unchanged code — verified by stash) — unrelated, needs its own cleanup.
+
+## 25 Aug 2026 — IN-479: planned duration for ad-hoc meetings
+
+- [x] DA's idea (29 Jul): an ad-hoc start is easy to forget to stop; give it
+  a duration so the scheduled-end machinery covers it.
+- [x] Home capture card gains "Planned duration" (number input, default 30,
+  clamp 5–480 — the 480 ceiling matches the old fixed 8h placeholder).
+  `clampAdhocDurationMinutes` exported; blank/garbage → 30, fractional
+  rounds.
+- [x] `App.startManualRecording` computes the real end from the duration:
+  `endTimeUtc` replaces the 8h placeholder and `scheduledEndUtc` lands in
+  session state, which alone lights up RecordingScreen's countdown + Extend.
+- [x] Main: `registerManualRecording` now calls `scheduleAutoStop()` and
+  stamps `startedAtUtc`, arming auto-stop + the 5-min ending-soon reminder
+  toast (Extend/Dismiss) for manual recordings identically to calendar
+  meetings. J4 false-start rule only discards join-triggered recordings, so
+  a scheduled_end stop of an ad-hoc recording always delivers.
+- [x] Verification red-first: `verify:graph` (timed manual start extendable,
+  Extend pushes end out exactly 10 min, stop disarms) and
+  `verify:ad-hoc-attendees` (clamp table + rendered default 30). Also green:
+  `verify:recording-controls`, `verify:join-watch`, `verify:call-signals`,
+  `typecheck`, `build`, `git diff --check`.
+- [ ] Live smoke: start an ad-hoc recording with a ~6-min duration; expect
+  the ending-soon toast at T-5 and auto-stop + upload at the end.

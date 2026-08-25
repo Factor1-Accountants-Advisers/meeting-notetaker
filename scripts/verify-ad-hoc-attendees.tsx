@@ -8,7 +8,13 @@ import {
   isValidAttendeeEmail,
   type ManualAttendee
 } from '../src/renderer/src/components/AttendeePicker'
-import { HomeScreen } from '../src/renderer/src/screens/HomeScreen'
+import {
+  ADHOC_DURATION_DEFAULT_MINUTES,
+  ADHOC_DURATION_MAX_MINUTES,
+  ADHOC_DURATION_MIN_MINUTES,
+  clampAdhocDurationMinutes,
+  HomeScreen
+} from '../src/renderer/src/screens/HomeScreen'
 import { enrollmentState } from '../src/renderer/src/lib/api'
 import {
   MENU_MAX_HEIGHT,
@@ -130,6 +136,26 @@ const home = renderToStaticMarkup(
 assert.match(home, /Add attendees/)
 assert.match(home, /Optional/)
 assert.match(home, /aria-expanded="false"/)
+
+// IN-479: ad-hoc meetings carry a planned duration so the scheduled-end
+// auto-stop and the 5-minute extension reminder arm for manual recordings.
+assert.equal(ADHOC_DURATION_DEFAULT_MINUTES, 30, 'ticket default is 30 minutes')
+assert.equal(clampAdhocDurationMinutes(''), 30, 'empty input falls back to the default')
+assert.equal(clampAdhocDurationMinutes('abc'), 30, 'non-numeric input falls back to the default')
+assert.equal(clampAdhocDurationMinutes('45'), 45)
+assert.equal(clampAdhocDurationMinutes('45.6'), 46, 'fractional input rounds to whole minutes')
+assert.equal(
+  clampAdhocDurationMinutes('1'),
+  ADHOC_DURATION_MIN_MINUTES,
+  'too-short durations clamp up to the minimum'
+)
+assert.equal(
+  clampAdhocDurationMinutes('9999'),
+  ADHOC_DURATION_MAX_MINUTES,
+  'runaway durations clamp to the legacy 8h worst case'
+)
+assert.match(home, /Planned duration/, 'the capture card offers a duration field')
+assert.match(home, /value="30"/, 'the duration field defaults to 30 minutes')
 
 // Central cutover (5 Aug 2026): a colleague enrolled centrally but absent
 // from the local registry must map to 'enrolled' — that is what puts them in

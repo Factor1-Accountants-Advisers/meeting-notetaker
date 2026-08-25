@@ -383,12 +383,20 @@ export function registerManualRecording(recording: ActiveRecording & { title?: s
   sm.startManualRecording({
     ...recording,
     source: 'manual',
+    // Manual starts register after capture already began, so "now" is the
+    // honest start-of-capture stamp (the auto path stamps at renderer ack).
+    startedAtUtc: new Date().toISOString(),
     metadata: recording.title ? { title: recording.title } : recording.metadata
   })
   blockSleepWhileRecording()
+  // IN-479: ad-hoc recordings carry a planned end (duration chosen at start,
+  // default 30 min), so the scheduled-end auto-stop, ending-soon reminder,
+  // and Extend flow all arm exactly as they do for calendar meetings.
+  scheduleAutoStop(recording)
   logger().info('[recording] manual recording registered', {
     eventId: recording.eventId,
-    idempotencyKey: recording.idempotencyKey
+    idempotencyKey: recording.idempotencyKey,
+    endTimeUtc: recording.endTimeUtc
   })
   // Fired for symmetry with the auto path. Manual keys are backend meeting
   // ids / `manual-<ts>`, never the calendar idempotency key, so the join
@@ -578,13 +586,14 @@ function rescheduleAutoStopTimers(recording: ActiveRecording): void {
 
 /**
  * Push the scheduled auto-stop out by one increment (IN-117). Returns the new
- * end time, or null if there is no active auto-recording to extend.
+ * end time, or null when no recording with a scheduled end is active (auto or
+ * timed ad-hoc — IN-479).
  */
 export function extendAutoStop(incrementMs: number = EXTEND_INCREMENT_MS): { endTimeUtc: string } | null {
   const sm = getRecordingStateMachine()
   const active = sm.getActiveRecording()
   if (!active || autoStopEndMs === null) {
-    logger().info('[recording] extend ignored: no active auto-recording')
+    logger().info('[recording] extend ignored: no active recording with a scheduled end')
     return null
   }
   // Extend from the later of (scheduled end, now) so a press near the wire
@@ -752,7 +761,7 @@ function closePausedToastAndDisarm(): void {
   disarmCallSignals()
 }
 
-/** True while an auto-recording with a scheduled end is active (extendable). */
+/** True while a recording with a scheduled end is active (extendable). */
 export function hasExtendableRecording(): boolean {
   return getRecordingStateMachine().getState() === 'recording' && autoStopEndMs !== null
 }
