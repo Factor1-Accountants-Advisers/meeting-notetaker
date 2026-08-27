@@ -161,6 +161,10 @@ class Meeting(BaseModel):
     created_at: datetime
     duration_seconds: int | None = None
     unknown_speaker_count: int = 0
+    # True when central voiceprint lookup failed and speaker identification
+    # ran on local fallback only (26 Aug Timesheet incident) — surfaced in
+    # the export so degraded labelling is never silent.
+    speaker_id_degraded: bool = False
     action_item_count: int = 0
     pipeline_status: PipelineStatus = PipelineStatus.pending_audio
     pipeline_stage: PipelineStage = PipelineStage.pending_audio

@@ -168,3 +168,38 @@ class PipelineVoiceprintTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DegradedResolutionStampTests(PipelineVoiceprintTests):
+    async def test_degraded_resolution_is_stamped_on_the_meeting(self):
+        # 26 Aug Timesheet: a local-fallback run must be visible downstream.
+        resolution = MeetingVoiceprintResolution(
+            records=[],
+            degraded=True,
+            request_count=4,
+        )
+        matcher = AsyncMock()
+        matcher.match_speakers.return_value = (
+            [_segment()],
+            [MeetingParticipant(name="Speaker 1", known=False)],
+            1,
+        )
+
+        with patch.object(pipeline, "STAGE_DELAY_S", 0), patch.object(
+            pipeline, "get_speech_provider", return_value=_Speech()
+        ), patch.object(
+            pipeline,
+            "resolve_meeting_voiceprints",
+            return_value=resolution,
+        ), patch.object(
+            pipeline, "get_speaker_matcher", return_value=matcher
+        ):
+            await pipeline.run_pipeline(
+                self.meeting.id,
+                Path("meeting.webm"),
+                storage_token="token-123",
+                storage_actor="Joseph",
+                recorder_email="recorder@example.com",
+            )
+
+        self.assertTrue(store.MEETINGS[self.meeting.id].speaker_id_degraded)

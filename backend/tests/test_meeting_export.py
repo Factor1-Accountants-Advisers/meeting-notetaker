@@ -60,6 +60,7 @@ EXPECTED_TOP_LEVEL_KEYS = {
     "key_points",
     "action_items",
     "follow_ups",
+    "speaker_id_degraded",
     "schema_version",
     "graph_event_id",
     "graph_ical_uid",
@@ -651,3 +652,17 @@ class MeetingExportStoreTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SpeakerIdDegradedExportTests(unittest.TestCase):
+    """26 Aug audit: degraded speaker ID must be visible, never silent."""
+
+    def test_export_carries_speaker_id_degraded_flag(self):
+        export = build_meeting_export(
+            _meeting(speaker_id_degraded=True), [], None, []
+        )
+        self.assertTrue(export.speaker_id_degraded)
+
+    def test_export_defaults_to_not_degraded(self):
+        export = build_meeting_export(_meeting(), [], None, [])
+        self.assertFalse(export.speaker_id_degraded)

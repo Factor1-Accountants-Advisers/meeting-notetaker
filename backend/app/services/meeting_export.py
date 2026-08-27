@@ -100,6 +100,9 @@ class MeetingExport(BaseModel):
     key_points: list[str] = Field(default_factory=list)
     action_items: list[ExportActionItem] = Field(default_factory=list)
     follow_ups: list[str] = Field(default_factory=list)
+    # True when speaker identification ran without the central voiceprint
+    # directory (local fallback) — expect generic "Speaker N" labels.
+    speaker_id_degraded: bool = False
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     graph_event_id: str | None = None
     graph_ical_uid: str | None = None
@@ -233,6 +236,7 @@ def build_meeting_export(
             if structured_output is not None
             else list(follow_ups or [])
         ),
+        speaker_id_degraded=meeting.speaker_id_degraded,
         graph_event_id=metadata.meeting_id if metadata else None,
         graph_ical_uid=(
             (metadata.ical_uid or metadata.online_meeting_id) if metadata else None

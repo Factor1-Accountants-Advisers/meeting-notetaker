@@ -421,6 +421,7 @@ async def run_pipeline(
             update={
                 "unknown_speaker_count": unknown_count,
                 "action_item_count": len(items),
+                "speaker_id_degraded": voiceprint_resolution.degraded,
             }
         )
         set_pipeline_state(

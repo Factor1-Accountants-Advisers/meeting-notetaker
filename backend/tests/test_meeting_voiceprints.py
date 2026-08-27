@@ -1,5 +1,6 @@
 """IN-378 meeting-scoped central voiceprint resolution."""
 
+import json
 import unittest
 from datetime import datetime, timezone
 from uuid import UUID
@@ -19,7 +20,9 @@ from app.services.meeting_voiceprints import (
 )
 from app.services.storage_api import (
     CentralEnrolment,
+    MeetingVoiceprintCandidate,
     MeetingVoiceprintResponse,
+    RestStorageApiClient,
     StorageApiContractError,
     StorageApiRejected,
     StorageApiUnavailable,
@@ -90,14 +93,14 @@ class _CapturingClient:
 class _EnrolledStoreClient:
     """Resolves each call against a fixed enrolled set, like the real API."""
 
-    def __init__(self, enrolled_emails, fail_on_call=None):
+    def __init__(self, enrolled_emails, fail_on_calls=None):
         self.enrolled = set(enrolled_emails)
-        self.fail_on_call = fail_on_call
+        self.fail_on_calls = set(fail_on_calls or ())
         self.calls = []
 
     def get_meeting_voiceprints(self, meeting_id, candidates, access_token):
         self.calls.append((meeting_id, candidates, access_token))
-        if self.fail_on_call == len(self.calls):
+        if len(self.calls) in self.fail_on_calls:
             raise StorageApiUnavailable("temporary outage")
         return MeetingVoiceprintResponse(
             meeting_id=meeting_id,
@@ -257,6 +260,9 @@ class MeetingResolutionTests(unittest.TestCase):
             update={
                 "storage_api_enabled": True,
                 "storage_api_url": "https://storage.example",
+                # Isolate from the developer's backend.env — a populated
+                # expansion list would inflate every candidate count below.
+                "voiceprint_expansion_employee_ids": "",
             }
         )
 
@@ -332,7 +338,7 @@ class MeetingResolutionTests(unittest.TestCase):
 
         self.assertEqual([record.employee_id for record in result.records], ["invitee@example.com"])
         self.assertTrue(result.degraded)
-        self.assertEqual(result.request_count, 1)
+        self.assertEqual(result.request_count, 2)  # one attempt + one retry
 
     def test_large_meeting_lookup_is_paginated_in_batches_of_50(self):
         # IN-486: an enrolled speaker past invite position 50 is identified.
@@ -365,12 +371,13 @@ class MeetingResolutionTests(unittest.TestCase):
         self.assertFalse(result.degraded)
         self.assertEqual(result.request_count, 3)
 
-    def test_partial_batch_failure_degrades_to_full_local_fallback(self):
-        # IN-486: a mid-pagination outage falls back for ALL candidates, not
-        # just the failed batch — central stays authoritative-or-nothing.
+    def test_partial_batch_failure_keeps_central_and_falls_back_for_failed_batch(self):
+        # 26 Aug Timesheet regression: one failed batch must not discard the
+        # answers central already gave. Central stays authoritative for every
+        # candidate it ruled on; local fallback covers ONLY the failed batch.
         client = _EnrolledStoreClient(
-            enrolled_emails=["attendee000@example.com"],
-            fail_on_call=2,
+            enrolled_emails=["attendee000@example.com", "attendee100@example.com"],
+            fail_on_calls={2, 3},  # batch 2: first attempt and its retry
         )
 
         result = resolve_meeting_voiceprints(
@@ -380,15 +387,48 @@ class MeetingResolutionTests(unittest.TestCase):
             settings=self.settings,
             client=client,
             local_records=[
-                _local("attendee000@example.com"),
+                # In the failed batch — local fills in.
                 _local("attendee070@example.com"),
+                # Batch 1 succeeded — central's answer stands, no local copy.
+                _local("attendee000@example.com"),
             ],
         )
 
         self.assertTrue(result.degraded)
+        self.assertEqual(len(client.calls), 4)
+        self.assertEqual(client.calls[1][1], client.calls[2][1])
+        self.assertEqual(result.request_count, 4)
+        self.assertEqual(
+            sorted(record.employee_id for record in result.records),
+            [
+                "attendee000@example.com",
+                "attendee070@example.com",
+                "attendee100@example.com",
+            ],
+        )
+
+    def test_transient_batch_failure_recovers_on_retry(self):
+        # A single flaky batch response must not degrade the whole meeting.
+        client = _EnrolledStoreClient(
+            enrolled_emails=["attendee070@example.com"],
+            fail_on_calls={2},
+        )
+
+        result = resolve_meeting_voiceprints(
+            _large_meeting(101),
+            recorder_email="recorder@example.com",
+            access_token="token",
+            settings=self.settings,
+            client=client,
+            local_records=[],
+        )
+
+        self.assertFalse(result.degraded)
+        self.assertEqual(len(client.calls), 4)
+        self.assertEqual(result.request_count, 4)
         self.assertEqual(
             [record.employee_id for record in result.records],
-            ["attendee000@example.com", "attendee070@example.com"],
+            ["attendee070@example.com"],
         )
 
     def test_fallback_covers_every_candidate_in_large_meetings(self):
@@ -482,3 +522,35 @@ class MeetingResolutionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MeetingLookupTimeoutTests(unittest.TestCase):
+    def test_meeting_candidates_request_uses_extended_timeout(self):
+        # 26 Aug Timesheet: a 3-batch lookup against the sequential server hot
+        # path can exceed the default 30s; this endpoint gets a longer budget.
+        captured = {}
+
+        class _Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {"meeting_id": str(MEETING_ID), "records": [], "missing": []}
+                ).encode("utf-8")
+
+        def opener(req, timeout=30):
+            captured["timeout"] = timeout
+            return _Response()
+
+        client = RestStorageApiClient("https://storage.example", opener=opener)
+        client.get_meeting_voiceprints(
+            MEETING_ID,
+            [MeetingVoiceprintCandidate(email="a@example.com", source="invitee")],
+            "token-value",
+        )
+
+        self.assertEqual(captured["timeout"], 120)

@@ -762,6 +762,10 @@ class RestStorageApiClient:
             "/api/v1/voiceprints/meeting-candidates",
             access_token,
             request.model_dump(mode="json"),
+            # A 50-candidate batch makes the server do per-candidate blob
+            # reads plus per-record usage stamping before it can answer; the
+            # default 30s proved too tight on firmwide meetings (26 Aug).
+            timeout_s=120,
         )
         try:
             response = MeetingVoiceprintResponse.model_validate(raw)

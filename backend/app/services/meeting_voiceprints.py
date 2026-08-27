@@ -167,29 +167,48 @@ def resolve_meeting_voiceprints(
 
     resolved_client = client or get_storage_api_client()
     # IN-486: the contract caps each request at 50 candidates, so larger
-    # meetings paginate. Central stays authoritative-or-nothing: any batch
-    # failure discards partial results and degrades for ALL candidates.
+    # meetings paginate. 26 Aug firmwide: central stays authoritative for
+    # every batch it answered — a failed batch (after one retry) degrades to
+    # local fallback for THAT batch's candidates only, instead of discarding
+    # the answers central already gave.
     batches = [
         candidates[start : start + MEETING_CANDIDATE_BATCH_LIMIT]
         for start in range(0, len(candidates), MEETING_CANDIDATE_BATCH_LIMIT)
     ]
     request_count = 0
-    try:
-        records: list[Voiceprint] = []
-        missing_count = 0
-        for batch in batches:
+    records: list[Voiceprint] = []
+    missing_count = 0
+    failed_candidates: list[MeetingVoiceprintCandidate] = []
+    last_error: StorageApiUnavailable | None = None
+    for batch in batches:
+        response = None
+        for attempt in range(2):
             request_count += 1
-            response = resolved_client.get_meeting_voiceprints(
-                meeting.id,
-                batch,
-                access_token,
-            )
-            records.extend(
-                voiceprint
-                for record in response.records
-                if (voiceprint := _as_voiceprint(record)) is not None
-            )
-            missing_count += len(response.missing)
+            try:
+                response = resolved_client.get_meeting_voiceprints(
+                    meeting.id,
+                    batch,
+                    access_token,
+                )
+                break
+            except StorageApiUnavailable as exc:
+                last_error = exc
+                if attempt == 0:
+                    logger.warning(
+                        "Meeting voiceprint batch failed, retrying once: size=%d",
+                        len(batch),
+                    )
+        if response is None:
+            failed_candidates.extend(batch)
+            continue
+        records.extend(
+            voiceprint
+            for record in response.records
+            if (voiceprint := _as_voiceprint(record)) is not None
+        )
+        missing_count += len(response.missing)
+
+    if not failed_candidates:
         logger.info(
             "Meeting voiceprint lookup completed: requested=%d resolved=%d missing=%d requests=%d",
             len(candidates),
@@ -202,36 +221,39 @@ def resolve_meeting_voiceprints(
             degraded=False,
             request_count=request_count,
         )
-    except StorageApiUnavailable as exc:
-        available_local = (
-            local_records
-            if local_records is not None
-            else get_voiceprint_repository().get_all()
-        )
-        local_by_email = {
-            record.employee_id.strip().casefold(): record
-            for record in available_local
-        }
-        fallback = [
-            local_by_email[candidate.email]
-            for candidate in candidates
-            if candidate.email in local_by_email
-        ]
-        if not fallback:
-            logger.warning(
-                "Meeting voiceprint lookup unavailable with no local fallback: requested=%d",
-                len(candidates),
-            )
-            raise MeetingVoiceprintsUnavailable(
-                "Voiceprint lookup is temporarily unavailable; retry processing."
-            ) from exc
+
+    available_local = (
+        local_records
+        if local_records is not None
+        else get_voiceprint_repository().get_all()
+    )
+    local_by_email = {
+        record.employee_id.strip().casefold(): record
+        for record in available_local
+    }
+    fallback = [
+        local_by_email[candidate.email]
+        for candidate in failed_candidates
+        if candidate.email in local_by_email
+    ]
+    merged = records + fallback
+    if not merged:
         logger.warning(
-            "Meeting voiceprint lookup degraded to local fallback: requested=%d resolved=%d",
+            "Meeting voiceprint lookup unavailable with no local fallback: requested=%d",
             len(candidates),
-            len(fallback),
         )
-        return MeetingVoiceprintResolution(
-            records=fallback,
-            degraded=True,
-            request_count=request_count,
-        )
+        raise MeetingVoiceprintsUnavailable(
+            "Voiceprint lookup is temporarily unavailable; retry processing."
+        ) from last_error
+    logger.warning(
+        "Meeting voiceprint lookup degraded: requested=%d central=%d local_fallback=%d unresolved_batch_candidates=%d",
+        len(candidates),
+        len(records),
+        len(fallback),
+        len(failed_candidates),
+    )
+    return MeetingVoiceprintResolution(
+        records=merged,
+        degraded=True,
+        request_count=request_count,
+    )

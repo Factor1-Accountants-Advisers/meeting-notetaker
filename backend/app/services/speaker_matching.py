@@ -150,37 +150,77 @@ class PyannoteAIVoiceprintMatcher:
         matching_threshold: float,
     ) -> list[IdentityRange]:
         label_to_name: dict[str, str] = {}
-        payload = _build_voiceprint_payload(candidates, label_to_name)
-        if not payload:
+        chunks = _chunk_voiceprint_payload(candidates, label_to_name)
+        if not chunks:
             return []
 
-        def identify() -> dict[str, Any]:
-            client = PyannoteAIClient(
-                settings.pyannote_api_key,
-                settings.pyannote_api_endpoint or "https://api.pyannote.ai",
+        client = PyannoteAIClient(
+            settings.pyannote_api_key,
+            settings.pyannote_api_endpoint or "https://api.pyannote.ai",
+        )
+        poll = PyannotePollConfig(
+            interval_seconds=settings.pyannote_poll_interval_seconds,
+            timeout_seconds=settings.pyannote_poll_timeout_seconds,
+        )
+
+        def upload() -> str:
+            return client.upload_media_file(
+                audio_path, f"meeting-identify/{meeting.id}"
             )
-            return client.identify_audio(
-                audio_path,
-                payload,
-                media_prefix=f"meeting-identify/{meeting.id}",
+
+        def identify_chunk(chunk: list[dict[str, str]]) -> dict[str, Any]:
+            job_id = client.submit_identify(
+                media_url,
+                chunk,
                 model=settings.pyannote_model_version or "precision-2",
                 matching_threshold=matching_threshold,
                 # False lets the same enrolled speaker match multiple diarized
                 # clusters if pyannote splits their voice into SPEAKER_00/03.
                 # Threshold + overlap checks still suppress weak matches.
                 exclusive_matching=False,
-                poll=PyannotePollConfig(
-                    interval_seconds=settings.pyannote_poll_interval_seconds,
-                    timeout_seconds=settings.pyannote_poll_timeout_seconds,
-                ),
             )
+            result = client.wait_for_job(job_id, poll)
+            status = str(result.get("status") or "").lower()
+            if status != "succeeded":
+                raise PyannoteAIError(
+                    f"pyannoteAI identify job ended with status {status}"
+                )
+            return result
 
         try:
-            result = await asyncio.to_thread(identify)
-            return _identity_ranges_from_result(result, label_to_name)
+            media_url = await asyncio.to_thread(upload)
         except PyannoteAIError:
-            logger.exception("pyannoteAI identify failed for meeting %s", meeting.id)
+            logger.exception(
+                "pyannoteAI media upload failed for meeting %s", meeting.id
+            )
             return []
+
+        results = await asyncio.gather(
+            *(asyncio.to_thread(identify_chunk, chunk) for chunk in chunks),
+            return_exceptions=True,
+        )
+        ranges: list[IdentityRange] = []
+        failed = 0
+        for result in results:
+            if isinstance(result, BaseException):
+                if not isinstance(result, PyannoteAIError):
+                    raise result
+                failed += 1
+                logger.error(
+                    "pyannoteAI identify chunk failed for meeting %s: %s",
+                    meeting.id,
+                    result,
+                )
+                continue
+            ranges.extend(_identity_ranges_from_result(result, label_to_name))
+        if failed:
+            logger.warning(
+                "pyannoteAI identify: %d/%d voiceprint chunks failed for meeting %s",
+                failed,
+                len(chunks),
+                meeting.id,
+            )
+        return ranges
 
 
 def _controlled_expansion_ids_from_settings(settings: Settings) -> list[str]:
@@ -288,20 +328,44 @@ def _candidate_voiceprints_for_meeting(
     return [by_id[employee_id] for employee_id in ordered_ids]
 
 
-def _build_voiceprint_payload(
-    records: list[Voiceprint], label_to_name: dict[str, str]
+# pyannoteAI /v1/identify accepts at most 50 voiceprints per request. Larger
+# candidate sets split into people-atomic chunks, one identify job per chunk
+# (26 Aug firmwide: 52 enrolled invitees x 3 samples were silently truncated
+# to the first ~16 people in invite order).
+MAX_IDENTIFY_VOICEPRINTS = 50
+
+
+def _person_payload_entries(
+    record: Voiceprint, label_to_name: dict[str, str]
 ) -> list[dict[str, str]]:
-    payload: list[dict[str, str]] = []
+    entries: list[dict[str, str]] = []
+    for idx, value in enumerate(record.voiceprints):
+        if not isinstance(value, str) or not value:
+            continue
+        # Labels must not start with SPEAKER_ and must be <=100 chars. Keep
+        # them unique so multiple samples from one person can be submitted.
+        label = f"{record.display_name} #{idx + 1}"[:100]
+        label_to_name[label] = record.display_name
+        entries.append({"label": label, "voiceprint": value})
+    return entries[:MAX_IDENTIFY_VOICEPRINTS]
+
+
+def _chunk_voiceprint_payload(
+    records: list[Voiceprint], label_to_name: dict[str, str]
+) -> list[list[dict[str, str]]]:
+    chunks: list[list[dict[str, str]]] = []
+    current: list[dict[str, str]] = []
     for record in records:
-        for idx, value in enumerate(record.voiceprints):
-            if not isinstance(value, str) or not value:
-                continue
-            # Labels must not start with SPEAKER_ and must be <=100 chars. Keep
-            # them unique so multiple samples from one person can be submitted.
-            label = f"{record.display_name} #{idx + 1}"[:100]
-            label_to_name[label] = record.display_name
-            payload.append({"label": label, "voiceprint": value})
-    return payload[:50]
+        entries = _person_payload_entries(record, label_to_name)
+        if not entries:
+            continue
+        if current and len(current) + len(entries) > MAX_IDENTIFY_VOICEPRINTS:
+            chunks.append(current)
+            current = []
+        current.extend(entries)
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def _threshold_percent(value: float) -> float:

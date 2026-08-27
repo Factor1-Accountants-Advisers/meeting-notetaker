@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -19,6 +20,7 @@ from app.services.speaker_matching import (
     _controlled_expansion_ids_from_settings,
     _merge_expansion_matches,
 )
+from app.services.pyannote_client import PyannoteAIError
 from app.services.voiceprints import Voiceprint
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -492,3 +494,135 @@ class InjectedVoiceprintTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _ScriptedPyannoteClient:
+    """Fake for the chunked identify flow: one media upload, then one
+    submit/wait per <=50-sample chunk. A chunk whose labels include
+    MATCH_PREFIX returns one identification for it; FAIL_PREFIX makes that
+    chunk's job raise. The legacy identify_audio path returns an empty result
+    so pre-chunking code fails assertions instead of erroring."""
+
+    MATCH_PREFIX = "Person 18 #"
+    FAIL_PREFIX: str | None = None
+    instances: list = []
+
+    def __init__(self, api_key, endpoint):
+        type(self).instances.append(self)
+        self.uploads: list[str] = []
+        self.submissions: list[list[dict]] = []
+
+    def upload_media_file(self, audio_path, media_prefix):
+        self.uploads.append(media_prefix)
+        return "media://meeting-audio"
+
+    def submit_identify(self, media_url, voiceprints, **kwargs):
+        assert media_url == "media://meeting-audio"
+        self.submissions.append(list(voiceprints))
+        return f"job-{len(self.submissions)}"
+
+    def wait_for_job(self, job_id, poll):
+        chunk = self.submissions[int(job_id.rsplit("-", 1)[1]) - 1]
+        labels = [entry["label"] for entry in chunk]
+        if self.FAIL_PREFIX and any(l.startswith(self.FAIL_PREFIX) for l in labels):
+            raise PyannoteAIError("scripted chunk failure")
+        identification = [
+            {
+                "speaker": label,
+                "match": label,
+                "start": 0.0,
+                "end": 30.0,
+                "diarizationSpeaker": "SPEAKER_00",
+                "confidence": 95,
+            }
+            for label in labels
+            if label.startswith(self.MATCH_PREFIX)
+        ][:1]
+        return {
+            "status": "succeeded",
+            "jobId": job_id,
+            "output": {"identification": identification},
+        }
+
+    def identify_audio(self, *args, **kwargs):
+        return {"status": "succeeded", "output": {"identification": []}}
+
+
+class ChunkedIdentifyTests(unittest.TestCase):
+    """Cap #3 (26 Aug firmwide): >50 samples must chunk, never truncate."""
+
+    def _meeting(self) -> Meeting:
+        return Meeting(
+            id=uuid4(),
+            title="Firmwide",
+            source=MeetingSource.online,
+            owner_id="recorder@example.com",
+            created_at=datetime.now(timezone.utc),
+        )
+
+    def _records(self, count: int) -> list[Voiceprint]:
+        return [
+            vp(
+                f"person{i:02d}@example.com",
+                f"Person {i:02d}",
+                voiceprints=[f"vp-{i}-{j}" for j in range(1, 4)],
+            )
+            for i in range(1, count + 1)
+        ]
+
+    def _identify(self, fake, records):
+        matcher = PyannoteAIVoiceprintMatcher()
+        with patch("app.services.speaker_matching.PyannoteAIClient", fake):
+            return asyncio.run(
+                matcher._identify_ranges(
+                    records,
+                    self._meeting(),
+                    Path("audio.wav"),
+                    Settings(pyannote_api_key="test-key"),
+                    matching_threshold=62.0,
+                )
+            )
+
+    def test_payload_over_50_samples_is_chunked_people_atomically(self):
+        class Fake(_ScriptedPyannoteClient):
+            instances = []
+
+        ranges = self._identify(Fake, self._records(20))
+
+        self.assertEqual(len(Fake.instances), 1)
+        client = Fake.instances[0]
+        self.assertEqual(len(client.uploads), 1)
+        self.assertEqual([len(chunk) for chunk in client.submissions], [48, 12])
+        persons_per_chunk = [
+            {entry["label"].rsplit(" #", 1)[0] for entry in chunk}
+            for chunk in client.submissions
+        ]
+        self.assertEqual(
+            persons_per_chunk[0] & persons_per_chunk[1],
+            set(),
+            "a person's samples must never split across identify jobs",
+        )
+        self.assertIn("Person 18", [r.display_name for r in ranges])
+
+    def test_small_payload_stays_a_single_identify_call(self):
+        class Fake(_ScriptedPyannoteClient):
+            instances = []
+            MATCH_PREFIX = "Person 02 #"
+
+        ranges = self._identify(Fake, self._records(3))
+
+        client = Fake.instances[0]
+        self.assertEqual([len(chunk) for chunk in client.submissions], [9])
+        self.assertEqual(len(client.uploads), 1)
+        self.assertEqual([r.display_name for r in ranges], ["Person 02"])
+
+    def test_failed_chunk_keeps_results_from_other_chunks(self):
+        class Fake(_ScriptedPyannoteClient):
+            instances = []
+            FAIL_PREFIX = "Person 01 #"
+
+        ranges = self._identify(Fake, self._records(20))
+
+        client = Fake.instances[0]
+        self.assertEqual(len(client.submissions), 2)
+        self.assertEqual([r.display_name for r in ranges], ["Person 18"])
