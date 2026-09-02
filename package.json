@@ -1,6 +1,6 @@
 {
   "name": "meeting-notetaker",
-  "version": "2.0.35",
+  "version": "2.0.36",
   "description": "Meeting recording, transcription, speaker identification, and transcript delivery",
   "main": "./out/main/index.js",
   "author": "Factor1",
@@ -23,6 +23,8 @@
     "verify:failure-chips": "esbuild scripts/verify-failure-chips.tsx --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-failure-chips.cjs --log-level=error && node out/verify-failure-chips.cjs",
     "verify:ad-hoc-attendees": "esbuild scripts/verify-ad-hoc-attendees.tsx --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-ad-hoc-attendees.cjs --log-level=error && node out/verify-ad-hoc-attendees.cjs",
     "verify:capture": "esbuild scripts/verify-capture-segments.tsx --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-capture-segments.cjs --log-level=error && node out/verify-capture-segments.cjs",
+    "verify:capture-warnings": "esbuild scripts/verify-capture-warnings.tsx --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-capture-warnings.cjs --log-level=error && node out/verify-capture-warnings.cjs",
+    "verify:mic-device-choice": "esbuild scripts/verify-mic-device-choice.tsx --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-mic-device-choice.cjs --log-level=error && node out/verify-mic-device-choice.cjs",
     "verify:saved-captures": "esbuild scripts/verify-saved-captures.ts --bundle --platform=node --format=cjs --outfile=out/verify-saved-captures.cjs --log-level=error --external:electron && node out/verify-saved-captures.cjs",
     "verify:email-notice": "esbuild scripts/verify-email-notice.ts --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-email-notice.cjs --log-level=error && node out/verify-email-notice.cjs",
     "verify:call-signals": "esbuild scripts/verify-call-signals.ts --bundle --platform=node --format=cjs --outfile=out/verify-call-signals.cjs --log-level=error --external:electron && node out/verify-call-signals.cjs",

@@ -12,6 +12,11 @@ import {
 } from 'lucide-react'
 import { Card } from '@renderer/components/ui/Card'
 import type { CaptureStatus } from '@renderer/lib/capture'
+import {
+  buildCaptureWarnings,
+  type CaptureWarning,
+  type WarningIcon
+} from '@renderer/lib/captureWarnings'
 
 /** Lifted to App so recording survives navigation between screens. */
 export interface RecordingSession {
@@ -280,6 +285,12 @@ function LevelMeter({
   )
 }
 
+const WARNING_ICONS: Record<WarningIcon, typeof AlertTriangle> = {
+  'mic-off': MicOff,
+  alert: AlertTriangle,
+  'cloud-off': CloudOff
+}
+
 function CaptureWarnings({
   session,
   captureStatus
@@ -287,60 +298,58 @@ function CaptureWarnings({
   session: RecordingSession
   captureStatus: CaptureStatus | null
 }): JSX.Element | null {
-  const warnings: { icon: typeof AlertTriangle; text: string; tone: string }[] = []
+  if (captureStatus === null) return null
 
-  if (captureStatus?.mic === 'error') {
-    warnings.push({
-      icon: MicOff,
-      text: 'Microphone unavailable — check access in system settings.',
-      tone: 'text-content-danger'
-    })
-  } else if (captureStatus?.mic === 'silent') {
-    warnings.push({
-      icon: MicOff,
-      text: 'Microphone appears silent — check your selected microphone.',
-      tone: 'text-content-danger'
-    })
-  }
-  if (session.source === 'online' && captureStatus?.loopback === 'error') {
-    warnings.push({
-      icon: AlertTriangle,
-      text: 'System audio failed — remote participants are not being captured.',
-      tone: 'text-content-danger'
-    })
-  } else if (session.source === 'online' && captureStatus?.loopback === 'silent') {
-    warnings.push({
-      icon: AlertTriangle,
-      text: 'System audio has been silent for over a minute — check your audio output device.',
-      tone: 'text-content-danger'
-    })
-  }
-  if (captureStatus !== null && !captureStatus.recording) {
-    warnings.push({
-      icon: AlertTriangle,
-      text: 'No audio is being captured — the timer is still running.',
-      tone: 'text-content-danger'
-    })
-  }
-  if (session.meetingId === null) {
-    warnings.push({
-      icon: CloudOff,
-      text: 'Backend unavailable — this meeting is not saved yet.',
-      tone: 'text-content-warning'
-    })
-  }
+  const warnings = buildCaptureWarnings({
+    source: session.source,
+    mic: captureStatus.mic,
+    loopback: captureStatus.loopback,
+    recording: captureStatus.recording,
+    hasMeeting: session.meetingId !== null
+  })
   if (warnings.length === 0) return null
 
+  const banners = warnings.filter((w) => w.severity === 'banner')
+  const rows = warnings.filter((w) => w.severity === 'row')
+
   return (
-    <Card className="!py-2.5">
-      <div className="flex flex-col gap-2">
-        {warnings.map(({ icon: Icon, text, tone }) => (
-          <div key={text} className={`flex items-start gap-2 text-[12px] ${tone}`}>
-            <Icon size={14} strokeWidth={1.75} className="mt-0.5 shrink-0" />
-            <span>{text}</span>
+    <div className="flex flex-col gap-2">
+      {banners.map((w) => (
+        <CaptureBanner key={w.id} warning={w} />
+      ))}
+      {rows.length > 0 && (
+        <Card className="!py-2.5">
+          <div className="flex flex-col gap-2">
+            {rows.map((w) => {
+              const Icon = WARNING_ICONS[w.icon]
+              const tone = w.tone === 'warning' ? 'text-content-warning' : 'text-content-danger'
+              return (
+                <div key={w.id} className={`flex items-start gap-2 text-[12px] ${tone}`}>
+                  <Icon size={14} strokeWidth={1.75} className="mt-0.5 shrink-0" />
+                  <span>{w.text}</span>
+                </div>
+              )
+            })}
           </div>
-        ))}
+        </Card>
+      )}
+    </div>
+  )
+}
+
+/** Prominent, hard-to-miss warning for a confidently-diagnosed capture problem. */
+function CaptureBanner({ warning }: { warning: CaptureWarning }): JSX.Element {
+  const Icon = WARNING_ICONS[warning.icon]
+  return (
+    <div
+      role="alert"
+      className="flex items-start gap-2.5 rounded-lg border border-edge-danger bg-[var(--color-background-danger,rgba(220,38,38,0.08))] px-3.5 py-3 text-content-danger"
+    >
+      <Icon size={18} strokeWidth={2} className="mt-0.5 shrink-0" />
+      <div className="flex flex-col gap-1">
+        {warning.title && <span className="text-[13px] font-semibold">{warning.title}</span>}
+        <span className="text-[12px] leading-snug text-content-primary">{warning.text}</span>
       </div>
-    </Card>
+    </div>
   )
 }

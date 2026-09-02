@@ -26,6 +26,7 @@ import {
 } from './lib/api'
 import { capture, type CaptureStatus, type SystemSegment } from './lib/capture'
 import { resolveDryRunMatch, formatDryRunLog } from './lib/audioRoutingDryRun'
+import { chooseMicDeviceId } from './lib/micDeviceChoice'
 import { emailFailureMessage } from './lib/deliveryNotice'
 import notificationChimeUrl from './assets/notification.wav'
 import { loadPrefs } from './lib/prefs'
@@ -203,6 +204,34 @@ function App(): JSX.Element {
       })
     } catch {
       // Telemetry only.
+    }
+  }, [])
+
+  // Resolve which mic device to record. With followCommunicationsMic on and a
+  // device-role split present (Bluetooth/AirPods), captures the communications
+  // endpoint Teams uses instead of the console default. Falls back to the saved
+  // preference on any error — must never block a recording from starting.
+  const resolveMicDeviceId = useCallback(async (): Promise<string> => {
+    const prefs = loadPrefs()
+    try {
+      if (typeof window.api?.getAudioEndpointSnapshot !== 'function') return prefs.micDeviceId
+      const [snapshot, devices] = await Promise.all([
+        window.api.getAudioEndpointSnapshot(),
+        navigator.mediaDevices.enumerateDevices()
+      ])
+      const choice = chooseMicDeviceId({
+        enabled: prefs.followCommunicationsMic,
+        explicitMicDeviceId: prefs.micDeviceId,
+        snapshot,
+        devices
+      })
+      window.api.debugLog('mic device choice', {
+        deviceId: choice.deviceId || '(default)',
+        reason: choice.reason
+      })
+      return choice.deviceId
+    } catch {
+      return prefs.micDeviceId
     }
   }, [])
 
@@ -519,7 +548,7 @@ function App(): JSX.Element {
         autoGraphMetadataRef.current = graphMetadata
         const title = graphMetadata?.title?.trim() || 'Auto-recorded Teams meeting'
         const created = await createMeeting(title, graphMetadata?.joinWebUrl ?? null, 'online', graphMetadata)
-        const status = await capture.start('online', loadPrefs().micDeviceId, {
+        const status = await capture.start('online', await resolveMicDeviceId(), {
           title,
           meetingId: created?.id ?? null,
           graphMetadata
@@ -847,7 +876,7 @@ function App(): JSX.Element {
     const source = 'online' as const
     const created = await createMeeting(title, null, source, null, manualAttendees)
     const meetingId = created?.id ?? null
-    const status = await capture.start(source, loadPrefs().micDeviceId, {
+    const status = await capture.start(source, await resolveMicDeviceId(), {
       title,
       meetingId,
       graphMetadata: null
