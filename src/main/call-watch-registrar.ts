@@ -33,7 +33,13 @@
  */
 
 import { logger } from './logger'
-import { callSignalsEnvGate, createCallWatchTransport, joinUrlHash, type CallSignalLog } from './call-signals'
+import {
+  callSignalsEnvGate,
+  createCallWatchTransport,
+  getActiveCallSignalHash,
+  joinUrlHash,
+  type CallSignalLog
+} from './call-signals'
 import { createCallWatchRegistrarEngine, type CallWatchRegistrar } from './call-watch-registrar-core'
 
 // The planner, state shapes, cap, and persistence helpers all belong to the
@@ -63,6 +69,10 @@ export function createCallWatchRegistrar(options: CallWatchRegistrarOptions): Ca
       const gate = callSignalsEnvGate(process.env)
       return gate.ok ? 'not_configured' : gate.reason
     },
-    hash: joinUrlHash
+    hash: joinUrlHash,
+    // A watch the live recording's poller is attached to is never reaped or
+    // replaced by a calendar sync (26 Aug 2026: Extend past the scheduled
+    // end left the recording with no leave detection).
+    isRecordingAttached: (hash) => getActiveCallSignalHash() === hash
   })
 }

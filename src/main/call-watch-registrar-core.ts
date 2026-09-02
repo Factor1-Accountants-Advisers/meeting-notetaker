@@ -77,6 +77,11 @@ export interface RegistrarState {
 export interface RegistrarActions {
   register: Array<{ key: string; watch: RegistrarWatch }>
   remove: Array<{ key: string; joinUrlHash: string }>
+  /** Watches the calendar rules would have removed (or replaced) this pass
+   *  but that a live recording poller is still attached to. Reported, not
+   *  acted on: the engine logs the deferral and the next sync after the
+   *  recording lets go reaps them as usual. */
+  retained: Array<{ key: string; joinUrlHash: string }>
 }
 
 function decisionKey(decision: GraphEventDecision): string {
@@ -164,9 +169,11 @@ export function planRegistrarActions(
   decisions: GraphEventDecision[],
   now: Date,
   signedInEmail: string | undefined,
-  hash: (joinWebUrl: string) => string
+  hash: (joinWebUrl: string) => string,
+  isRecordingAttached?: (joinUrlHash: string) => boolean
 ): RegistrarActions {
   const nowMs = now.getTime()
+  const retained: RegistrarActions['retained'] = []
 
   // Last-wins on duplicate keys, matching how a delta feed supersedes itself.
   const decisionsByKey = new Map<string, GraphEventDecision>()
@@ -196,14 +203,30 @@ export function planRegistrarActions(
     })
   }
 
+  // A watch with a recording poller attached is never deleted or replaced,
+  // whatever the calendar says: the poller IS the leave detection for that
+  // recording, and the calendar window stops being the recording's window
+  // the moment the user presses Extend (26 Aug 2026 — the first sync after
+  // the scheduled end reaped the watch under a live, extended recording, so
+  // the organiser's leave went unseen and the recording ran through her next
+  // call). Deferred, not cancelled: once the poller lets go the next sync
+  // reaps the entry exactly as before, so the cap slot still frees.
+  const attached = (joinUrlHash: string): boolean => isRecordingAttached?.(joinUrlHash) === true
+
   const remove: RegistrarActions['remove'] = []
   const removedKeys = new Set<string>()
+  const retainedKeys = new Set<string>()
   for (const [key, watch] of Object.entries(state.watches)) {
     const decision = decisionsByKey.get(key)
     const excluded = decision?.status === 'excluded'
     const endMs = parseUtcMs(watch.scheduledEndUtc)
     const ended = endMs === null || endMs <= nowMs
     if ((excluded || ended) && !watchWindowContains(watch, nowMs)) {
+      if (attached(watch.joinUrlHash)) {
+        retained.push({ key, joinUrlHash: watch.joinUrlHash })
+        retainedKeys.add(key)
+        continue
+      }
       remove.push({ key, joinUrlHash: watch.joinUrlHash })
       removedKeys.add(key)
     }
@@ -211,6 +234,9 @@ export function planRegistrarActions(
 
   const pending: RegistrarCandidate[] = []
   for (const candidate of candidates.values()) {
+    // Already deferred above (ended/excluded under a live recording): neither
+    // re-removed nor re-registered this pass.
+    if (retainedKeys.has(candidate.key)) continue
     const tracked = state.watches[candidate.key]
     if (!tracked || removedKeys.has(candidate.key)) {
       // Untracked, or its stale entry is being removed this pass (stored end
@@ -224,6 +250,12 @@ export function planRegistrarActions(
       tracked.scheduledEndUtc !== candidate.scheduledEndUtc ||
       tracked.joinWebUrl !== candidate.joinWebUrl
     if (changed && !watchWindowContains(tracked, nowMs)) {
+      if (attached(tracked.joinUrlHash)) {
+        // Replacing the subscription under a live recording recreates the
+        // mid-call root cause; the reschedule reconciles after the recording.
+        retained.push({ key: candidate.key, joinUrlHash: tracked.joinUrlHash })
+        continue
+      }
       remove.push({ key: candidate.key, joinUrlHash: tracked.joinUrlHash })
       removedKeys.add(candidate.key)
       pending.push(candidate)
@@ -264,7 +296,7 @@ export function planRegistrarActions(
     occupiedHashes.add(candidate.joinUrlHash)
   }
 
-  return { register, remove }
+  return { register, remove, retained }
 }
 
 // ===========================================================================
@@ -368,6 +400,11 @@ export interface CallWatchRegistrarEngineDeps {
    *  `joinUrlHash` so desktop and storage-api derive identical addresses. */
   hash: (joinWebUrl: string) => string
   log: CallSignalLog
+  /** Whether a recording's call-signal poller is currently attached to this
+   *  join-URL hash. While it is, the planner defers every delete/replace of
+   *  that watch (see `planRegistrarActions`). Optional: a caller that cannot
+   *  answer gets the calendar-only reap. */
+  isRecordingAttached?: (joinUrlHash: string) => boolean
   /** Injectable clock for the harness. */
   now?: () => Date
 }
@@ -476,7 +513,21 @@ export function createCallWatchRegistrarEngine(
       }
       inFlight = true
       try {
-        const plan = planRegistrarActions(state, decisions, now(), signedInEmail, deps.hash)
+        const plan = planRegistrarActions(
+          state,
+          decisions,
+          now(),
+          signedInEmail,
+          deps.hash,
+          deps.isRecordingAttached
+        )
+        if (plan.retained.length > 0) {
+          // Counts only: the hash is the server-side address and never logged.
+          deps.log('info', '[call-watch-registrar] watch retained', {
+            reason: 'recording_attached',
+            watches: plan.retained.length
+          })
+        }
 
         // Removes first: a re-register pair must delete before it creates
         // (the old subscription's expiry is wrong, and a changed join URL
@@ -534,6 +585,7 @@ export function createCallWatchRegistrarEngine(
         deps.log('info', '[call-watch-registrar] sync reconciled', {
           decisions: decisions.length,
           removed: plan.remove.length,
+          retained: plan.retained.length,
           registered,
           failed,
           tracked: Object.keys(state.watches).length

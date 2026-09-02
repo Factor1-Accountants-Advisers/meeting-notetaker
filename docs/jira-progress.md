@@ -1205,3 +1205,40 @@ double-transcription per Joseph's review:
 - [x] Gates: typecheck, `verify:saved-captures`, `verify:ad-hoc-attendees`,
   `verify:graph`, `verify:recording-controls`, `build`, `git diff --check`
   green; backend 429 tests with only the known pre-existing failures.
+
+## 2 Sep 2026 — Extended recordings keep their leave detection (Mel, 26 Aug incident)
+
+Mel (organiser) pressed Extend twice on the timesheet refresher; after the
+course she joined a call with Gabby and the notetaker recorded it until the
+extended auto-stop at 15:05. Root cause from her main.log: the call-watch
+registrar reaps a tracked watch at the first calendar sync after the SCHEDULED
+end (`already_ended` → `sync reconciled { removed: 1 }` → `DELETE
+/api/v1/call-watch/<hash> 204` at 14:47:43), which deletes the Graph
+subscription behind `recorder_left` / `call_ended`. Extend only reschedules
+the auto-stop timers, so an extended recording had no leave detection at all.
+
+- [x] `planRegistrarActions` takes an optional `isRecordingAttached(hash)` and
+  never removes or replaces a watch the live recording's poller is attached
+  to; such watches are reported in a new `retained` list. Deferred, not
+  cancelled: the first sync after the recording stops reaps as before, so
+  the cap slot still frees. Both the ended/excluded rule and the reschedule
+  (delete-then-create) rule are guarded — replacing a subscription under a
+  live call is the August mid-call root cause.
+- [x] Engine passes `deps.isRecordingAttached`, logs
+  `[call-watch-registrar] watch retained { reason: 'recording_attached',
+  watches }` (counts only, no hash) and adds `retained` to the `sync
+  reconciled` line so the next incident log answers in one grep.
+- [x] Runtime: `call-signals.ts` records the attached hash
+  (`getActiveCallSignalHash()`), cleared on disarm; `createCallWatchRegistrar`
+  wires `isRecordingAttached: (hash) => getActiveCallSignalHash() === hash`.
+- [x] Red-first in `verify:call-watch-registrar`: planner
+  `scenarioAttachedRecordingRetainsEndedWatch` +
+  `scenarioAttachedRecordingDefersReschedule`, engine
+  `scenarioEngineRetainsWatchWhileRecordingAttached` (no DELETE while
+  attached, retained log + count, reap on the next sync after detach). Each
+  watched failing on the missing guard before the implementation.
+- [x] Gates: typecheck, `verify:call-watch-registrar`, `verify:call-signals`,
+  `verify:join-watch`, `build`, `git diff --check` green.
+- [ ] Live check on a real Teams meeting: Extend past the scheduled end, leave
+  the call, expect pause + 60 s grace + stop, and `watch retained` in the log
+  at the first post-end sync.

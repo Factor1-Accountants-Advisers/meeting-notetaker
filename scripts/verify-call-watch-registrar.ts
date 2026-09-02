@@ -117,9 +117,10 @@ function stateOf(entries: Record<string, RegistrarWatch>): RegistrarState {
 function plan(
   state: RegistrarState,
   decisions: GraphEventDecision[],
-  signedInEmail: string | undefined = USER_EMAIL
+  signedInEmail: string | undefined = USER_EMAIL,
+  isRecordingAttached?: (joinUrlHash: string) => boolean
 ): ReturnType<typeof planRegistrarActions> {
-  return planRegistrarActions(state, decisions, NOW, signedInEmail, sha)
+  return planRegistrarActions(state, decisions, NOW, signedInEmail, sha, isRecordingAttached)
 }
 
 // ---------------------------------------------------------------------------
@@ -536,7 +537,7 @@ function scenarioRecurringJoinUrlUsesOneRegistrationUnit(): void {
   const whileFirstIsLive = plan(state, [nextOccurrence])
   assert.deepEqual(
     whileFirstIsLive,
-    { register: [], remove: [] },
+    { register: [], remove: [], retained: [] },
     'a later recurring occurrence sharing a tracked join URL must not replace the live subscription'
   )
 
@@ -603,7 +604,7 @@ function scenarioLiveWindowDefersDestructiveReconciliation(): void {
   })
   assert.deepEqual(
     plan(live, [extended]),
-    { register: [], remove: [] },
+    { register: [], remove: [], retained: [] },
     'a mid-call calendar edit must not replace the working Graph subscription'
   )
 
@@ -624,7 +625,7 @@ function scenarioLiveWindowDefersDestructiveReconciliation(): void {
   const cancelled = decision({ key: 'live', status: 'excluded', reason: 'cancelled' })
   assert.deepEqual(
     plan(live, [cancelled]),
-    { register: [], remove: [] },
+    { register: [], remove: [], retained: [] },
     'cancelling the calendar item mid-call must not kill leave detection for the active call'
   )
   const afterCancelledWindow = planRegistrarActions(
@@ -639,6 +640,76 @@ function scenarioLiveWindowDefersDestructiveReconciliation(): void {
     ['live'],
     'a cancelled watch is removed after its stored live window closes'
   )
+}
+
+function scenarioAttachedRecordingRetainsEndedWatch(): void {
+  // Mel, 26 Aug 2026: the organiser pressed Extend past the scheduled end,
+  // the first sync after that end reaped the watch (`already_ended`), and
+  // leave detection died while the recording was still running — so the
+  // recording ran through her next call until the extended timer fired. The
+  // calendar window is not the recording's window: a watch with a recording
+  // poller attached must survive reconciliation until the recording lets go.
+  const key = 'extended-live'
+  const joinUrlHash = sha(urlFor(key))
+  const state = stateOf({
+    [key]: watch(key, '2026-08-13T23:00:00Z', '2026-08-13T23:30:00Z')
+  })
+  const ended = [
+    decision({
+      key,
+      status: 'excluded',
+      reason: 'already_ended',
+      startUtc: '2026-08-13T23:00:00Z',
+      endUtc: '2026-08-13T23:30:00Z'
+    })
+  ]
+
+  const attached = plan(state, ended, USER_EMAIL, (hash) => hash === joinUrlHash)
+  assert.deepEqual(attached.remove, [], 'an ended watch with a recording attached must not be removed')
+  assert.deepEqual(
+    attached.retained,
+    [{ key, joinUrlHash }],
+    'the retained watch is reported so the engine can log the deferral'
+  )
+
+  const detached = plan(state, ended, USER_EMAIL, () => false)
+  assert.deepEqual(
+    detached.remove.map((entry) => entry.key),
+    [key],
+    'once the recording lets go, the next sync reaps the watch as before'
+  )
+  assert.deepEqual(detached.retained, [], 'nothing is retained without an attached recording')
+
+  const noPredicate = plan(state, ended)
+  assert.deepEqual(
+    noPredicate.remove.map((entry) => entry.key),
+    [key],
+    'callers that cannot answer the question get the pre-existing reap'
+  )
+}
+
+function scenarioAttachedRecordingDefersReschedule(): void {
+  // Same guard on the re-register path: a calendar edit landing after the
+  // stored window closed must not delete-then-create the subscription under a
+  // live recording either — a watch created after a call is live may never
+  // receive that call's roster events (the mid-call root cause of August).
+  const key = 'extended-rescheduled'
+  const joinUrlHash = sha(urlFor(key))
+  const state = stateOf({
+    [key]: watch(key, '2026-08-13T23:00:00Z', '2026-08-13T23:30:00Z')
+  })
+  const rescheduled = [
+    decision({ key, startUtc: '2026-08-13T23:00:00Z', endUtc: '2026-08-14T00:30:00Z' })
+  ]
+
+  const attached = plan(state, rescheduled, USER_EMAIL, (hash) => hash === joinUrlHash)
+  assert.deepEqual(attached.remove, [], 'a reschedule must not delete a watch with a recording attached')
+  assert.deepEqual(attached.register, [], 'nor re-register it under the live recording')
+  assert.deepEqual(attached.retained, [{ key, joinUrlHash }], 'the deferral is reported')
+
+  const detached = plan(state, rescheduled, USER_EMAIL, () => false)
+  assert.deepEqual(detached.remove.map((entry) => entry.key), [key], 'the reschedule reconciles once detached')
+  assert.deepEqual(detached.register.map((entry) => entry.key), [key])
 }
 
 // ---------------------------------------------------------------------------
@@ -1042,6 +1113,62 @@ async function scenarioDormantWhenTransportUnavailable(): Promise<void> {
   assertNoPii(logs.entries, 'dormant')
 }
 
+async function scenarioEngineRetainsWatchWhileRecordingAttached(): Promise<void> {
+  // End-to-end shape of the 26 Aug incident through the engine: the sync
+  // after the scheduled end must issue NO DELETE while the recording poller
+  // is attached, must log why, and must reap on the first sync after the
+  // recording stops so the cap slot is still freed.
+  const statePath = newStatePath()
+  const logs = createFakeLog()
+  const key = 'mel-extended'
+  const hash = sha(urlFor(key))
+  await writeRegistrarState(
+    statePath,
+    stateOf({ [key]: watch(key, '2026-08-13T23:00:00Z', '2026-08-13T23:30:00Z') })
+  )
+  const http = createFakeHttp(() => jsonResponse(204))
+  let attached = true
+  const engine = createCallWatchRegistrarEngine(
+    engineDeps(statePath, http, logs, { isRecordingAttached: (candidate) => attached && candidate === hash })
+  )
+  const ended = [
+    decision({
+      key,
+      status: 'excluded',
+      reason: 'already_ended',
+      startUtc: '2026-08-13T23:00:00Z',
+      endUtc: '2026-08-13T23:30:00Z'
+    })
+  ]
+
+  await engine.handleSyncDecisions(ended, USER_EMAIL)
+  assert.equal(
+    http.calls.filter((call) => call.method === 'DELETE').length,
+    0,
+    'no DELETE may be issued while a recording is attached to the watch'
+  )
+  assert.equal(engine.hasActiveWatch(hash), true, 'the watch stays tracked for the attached poller')
+  const retainedLine = logs.entries.find((entry) => entry.message === '[call-watch-registrar] watch retained')
+  assert.equal(retainedLine?.context?.reason, 'recording_attached', 'the deferral is logged with its reason')
+  const reconciled = logs.entries.filter((entry) => entry.message === '[call-watch-registrar] sync reconciled').at(-1)
+  assert.equal(reconciled?.context?.retained, 1, 'the reconciled line counts retained watches')
+  assert.equal(reconciled?.context?.removed, 0, 'and counts no removal')
+
+  // The recording stops; the next sync reaps exactly as before the guard.
+  attached = false
+  await engine.handleSyncDecisions(ended, USER_EMAIL)
+  assert.equal(
+    http.calls.filter((call) => call.method === 'DELETE').length,
+    1,
+    'the first sync after the recording stops issues the DELETE'
+  )
+  assert.equal(engine.hasActiveWatch(hash), false, 'and drops the entry')
+  await engine.flushState()
+  assert.deepEqual(readRegistrarStateSync(statePath).watches, {}, 'the reap persists')
+
+  assertNoPii(logs.entries, 'retain while attached', [hash])
+}
+
 // ---------------------------------------------------------------------------
 // Bundle purity (mirrors verify-call-signals.ts)
 // ---------------------------------------------------------------------------
@@ -1088,6 +1215,8 @@ async function main(): Promise<void> {
     scenarioUnparseableStoredEndIsReaped()
     scenarioRecurringJoinUrlUsesOneRegistrationUnit()
     scenarioLiveWindowDefersDestructiveReconciliation()
+    scenarioAttachedRecordingRetainsEndedWatch()
+    scenarioAttachedRecordingDefersReschedule()
 
     // Engine (injected transport, real fs persistence).
     await scenarioEngineRegistersAndPersists()
@@ -1097,6 +1226,7 @@ async function main(): Promise<void> {
     await scenarioOverlappingSyncIsNoOp()
     await scenarioStateRoundTripAndCorruption()
     await scenarioDormantWhenTransportUnavailable()
+    await scenarioEngineRetainsWatchWhileRecordingAttached()
 
     assertBundleIsRuntimeFree()
   } finally {

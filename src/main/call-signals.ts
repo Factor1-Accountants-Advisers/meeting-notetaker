@@ -101,6 +101,10 @@ let runtimeDeps: CallSignalRuntimeDeps | null = null
 // Storage API may park several per-meeting watches (spec E2), but only this
 // poller is attached to the active recording's join-URL hash.
 let activePoller: CallSignalPoller | null = null
+// The join-URL hash the live poller is attached to. The call-watch registrar
+// reads it to defer reaping that watch while the recording runs — the
+// calendar window is not the recording's window once Extend is pressed.
+let activePollerHash: string | null = null
 
 const defaultLog: CallSignalLog = (level, message, context) => {
   if (level === 'warn') logger().warn(message, context ?? {})
@@ -235,6 +239,7 @@ export function armCallSignals(
     baselineSeq: recording.callSignalBaselineSeq,
     log
   })
+  activePollerHash = hash
   log('info', '[call-signals] arming call-signal poller', {
     eventId: recording.eventId,
     mode,
@@ -309,6 +314,7 @@ export function createCallWatchTransport(
  *     "I disarmed" as "the recording was stopped": recording-ipc's own stop
  *     path is the guard, and this module only ever adds an earlier stop. */
 export function disarmCallSignals(): void {
+  activePollerHash = null
   if (!activePoller) return
   activePoller.stop()
   activePoller = null
@@ -318,6 +324,12 @@ export function disarmCallSignals(): void {
  *  verbs and the manual-resume hook through the helpers below. */
 export function getActiveCallSignalMachine(): CallSignalMachine | null {
   return activePoller?.machine ?? null
+}
+
+/** The join-URL hash the live poller is attached to, or null when no
+ *  recording has a poller. The registrar's `isRecordingAttached` answer. */
+export function getActiveCallSignalHash(): string | null {
+  return activePoller ? activePollerHash : null
 }
 
 /** Call when `recording:paused-changed` reports `paused === false` (D6). */
