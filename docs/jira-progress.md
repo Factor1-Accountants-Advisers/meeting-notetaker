@@ -1242,3 +1242,35 @@ the auto-stop timers, so an extended recording had no leave detection at all.
 - [ ] Live check on a real Teams meeting: Extend past the scheduled end, leave
   the call, expect pause + 60 s grace + stop, and `watch retained` in the log
   at the first post-end sync.
+
+## 3 Sep 2026 — Settled points no longer reported as "Unresolved… To be confirmed" (Ayda, CorpSec Queries 2 Sep)
+
+Ayda's minutes listed "Unresolved: Karen Wright and Ayda Thom had differing
+views on whether to charge clients for missed charges from 2024. To be
+confirmed." while the transcript shows the point settled in under a minute and
+the same minutes carried the outcome under Decisions. Root cause: both
+summariser prompts in `backend/app/services/llm.py` handed the model the
+literal "Unresolved: [name] and [name] had differing views on [topic]. To be
+confirmed." template with no condition, so it fired as a fill-in-the-blank.
+Jira item drafted for DA (parent IN-64; amends the IN-106 rules).
+
+- [x] Prompts: the template now applies only when the speakers have not
+  reached agreement by the end of the chunk / meeting; a settled disagreement
+  is recorded as a decision; the reduce stage treats "raised in one chunk,
+  settled in a later chunk" as a decision and never lets an open question
+  restate or contradict a decision.
+- [x] Red-first: `Jira106PromptRuleTests.test_chunk_prompt_only_records_disagreements_still_open`
+  and `test_reduce_prompt_reconciles_open_questions_against_decisions` failed
+  on the old wording, green after.
+- [x] Live (real gpt-4o provider) on Ayda's transcript: before, 2/2 runs
+  fabricated a "differing views" line; after, 3/3 runs left Open questions
+  empty with the 2024 decision retained. Synthetic settled fixture 2/2 no open
+  question; synthetic unsettled fixture 2/2 still emits the Unresolved line.
+- [x] Backend suite (442): 10 failures + 1 error are pre-existing on a clean
+  tree (recipient/SharePoint delivery tests still asserting attendee delivery,
+  stale since organiser-only delivery in v2.0.29) — unrelated, separate cleanup.
+- [ ] Ships in v2.0.38; validate on Ayda's next CorpSec Queries minutes.
+- [ ] Same-minutes follow-ups: ASR terms (Astute, Fillout, Formstack, Agaris,
+  NowInfinity, XPM, CorpSec) into the IN-383 company-context doc; transcript
+  ended mid-sentence on the $25 fee item (recording stopped early or the
+  meeting overran — ask Ayda).

@@ -46,14 +46,25 @@ SUMMARY_SECTIONS: tuple[tuple[str, str], ...] = (
 # rules (no invented content, explicit owners only, Australian spelling,
 # verb-led actions, disagreements recorded as unresolved). Module-level so
 # tests can pin the agreed rules against regressions.
+#
+# The "Unresolved: ..." template only applies to disagreements still open at
+# the end of the chunk / meeting. Before that condition was spelled out, the
+# model used the template as a fill-in-the-blank and reported settled points
+# as unresolved alongside the matching decision (CorpSec Queries minutes,
+# 2 Sep 2026). The reduce stage also reconciles open questions against
+# decisions for the case where a chunk boundary splits the exchange.
 _CHUNK_SYSTEM_PROMPT = (
     "Extract structured meeting insights from this transcript chunk. "
     "Use only evidence in the chunk. Do not infer or invent decisions, commitments, or action items "
     "that are not present, and do not speculate based on the meeting topic. "
     "Preserve exact speaker display names for owner_name; never assign an owner who is not explicitly "
     "associated with the action. Leave owner metadata null when the transcript does not establish it. "
-    "Record unresolved disagreements between speakers in 'questions' as "
+    "Record a disagreement between speakers in 'questions' only if they have not reached agreement "
+    "by the end of this chunk, as "
     "'Unresolved: [name] and [name] had differing views on [topic]. To be confirmed.' "
+    "If the speakers reach agreement, record the agreed outcome as a decision and do not list it "
+    "as a question. A question that is asked and answered, or a suggestion that is accepted, "
+    "is not a disagreement. "
     "Capture statements about when the next meeting will happen or items flagged for its agenda "
     "in 'next_meeting' verbatim. Start action descriptions with a verb. "
     "Use Australian spelling and return only the requested structured JSON."
@@ -65,8 +76,12 @@ _REDUCE_SYSTEM_PROMPT = (
     "Populate 'key_points', 'decisions', and 'unresolved_questions' as short, deduplicated strings "
     "(leave empty when a section has nothing substantive). "
     "Keep decisions distinct from actions: a decision is something resolved; an action is something "
-    "still to be done. Record unresolved disagreements in 'unresolved_questions' as "
+    "still to be done. Record a disagreement in 'unresolved_questions' only if the speakers have "
+    "not reached agreement by the end of the meeting, as "
     "'Unresolved: [name] and [name] had differing views on [topic]. To be confirmed.' "
+    "A disagreement raised in one chunk and settled in a later chunk is a decision, not an open "
+    "question. An open question must never restate or contradict an item in 'decisions': if the "
+    "same topic appears in both, keep the decision and drop the open question. "
     "Populate 'next_meeting' only from explicit statements: the agreed date/time as an item "
     "formatted 'Date: ...', plus each agenda item flagged for the next meeting as its own item. "
     "Start every action item description with a verb (e.g. 'Submit', 'Review', 'Schedule'). "

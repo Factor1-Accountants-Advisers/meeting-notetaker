@@ -93,6 +93,22 @@ class Jira106PromptRuleTests(unittest.TestCase):
         self.assertIn("Do not infer or invent", _CHUNK_SYSTEM_PROMPT)
         self.assertIn("Unresolved:", _CHUNK_SYSTEM_PROMPT)
 
+    # CorpSec Queries minutes, 2 Sep 2026: a point the speakers settled within a
+    # minute was reported as "Unresolved ... To be confirmed" while the agreed
+    # outcome also sat under Decisions. The template must only fire for
+    # disagreements that are still open, and the reduce stage must reconcile
+    # open questions against decisions.
+    def test_chunk_prompt_only_records_disagreements_still_open(self):
+        self.assertIn("not reached agreement", _CHUNK_SYSTEM_PROMPT)
+        self.assertIn("record the agreed outcome as a decision", _CHUNK_SYSTEM_PROMPT)
+        self.assertIn("asked and answered", _CHUNK_SYSTEM_PROMPT)
+
+    def test_reduce_prompt_reconciles_open_questions_against_decisions(self):
+        self.assertIn("not reached agreement", _REDUCE_SYSTEM_PROMPT)
+        self.assertIn("settled in a later chunk", _REDUCE_SYSTEM_PROMPT)
+        self.assertIn("never restate or contradict", _REDUCE_SYSTEM_PROMPT)
+        self.assertIn("keep the decision and drop the open question", _REDUCE_SYSTEM_PROMPT)
+
 
 if __name__ == "__main__":
     unittest.main()
