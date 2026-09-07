@@ -3,3 +3,5 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 pydantic-settings==2.7.0
+# OS trust-store TLS verification (CryptoAPI on Windows); see app/tls.py.
+truststore==0.10.4

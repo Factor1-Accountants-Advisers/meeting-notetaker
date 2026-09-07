@@ -20,6 +20,12 @@ from app.routers import (
 from app.services.blob_delivery import reconcile_interrupted_blob_deliveries
 from app.services.pipeline import pipeline_watchdog_loop, reconcile_interrupted_pipelines
 from app.services.retention import retention_loop
+from app.tls import install_system_trust
+
+
+# Before the first outbound HTTPS request: verify through the OS trust engine so a
+# new device can fetch a missing root instead of failing enrolment (see app/tls.py).
+install_system_trust()
 
 
 @asynccontextmanager

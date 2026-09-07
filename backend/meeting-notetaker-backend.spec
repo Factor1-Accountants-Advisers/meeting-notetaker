@@ -51,6 +51,10 @@ a = Analysis(
         "uvicorn.protocols.http.h11_impl",
         # FastAPI Starlette internals.
         "starlette.routing",
+        # OS trust-store TLS verification; the Windows backend is imported
+        # conditionally at runtime, so name it explicitly.
+        "truststore",
+        "truststore._windows",
         # Application modules (ensure all are collected).
         "app",
         "app.main",
@@ -58,6 +62,7 @@ a = Analysis(
         "app.paths",
         "app.schemas",
         "app.store",
+        "app.tls",
         "app.access",
         "app.routers",
         "app.routers.meetings",
