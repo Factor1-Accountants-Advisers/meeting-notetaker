@@ -29,7 +29,6 @@ from app.schemas import (
     MeetingSource,
 )
 from app.services.recipient_policy import (
-    attendee_fan_out_enabled,
     delivery_mode,
     invitees_approved,
     prompt_enabled,
@@ -156,6 +155,55 @@ class OrganizerOnlyDeliveryTests(unittest.TestCase):
         self.assertEqual(
             sharepoint, ["bb@factor1.com.au", "jt@factor1.com.au", "organizer@factor1.com.au"]
         )
+
+    def test_ask_mode_pending_is_organizer_only_everywhere(self):
+        manual = [ManualMeetingAttendee(email="bb@factor1.com.au")]
+        with _mode("ask"):
+            self.assertEqual(
+                _email_recipients(_meeting(_scheduled()), "organizer@factor1.com.au"),
+                ["organizer@factor1.com.au"],
+            )
+            self.assertEqual(
+                _sharepoint_recipients(_meeting(_scheduled())),
+                ["organizer@factor1.com.au"],
+            )
+            ad_hoc = _meeting(source=MeetingSource.in_person, manual_attendees=manual)
+            self.assertEqual(_email_recipients(ad_hoc, "recorder@factor1.com.au"), ["recorder@factor1.com.au"])
+            self.assertEqual(_sharepoint_recipients(ad_hoc), [])
+
+    def test_ask_mode_approved_fans_out_including_ad_hoc_email(self):
+        # D2: ad-hoc attendees become emailable. They never were before.
+        manual = [ManualMeetingAttendee(email="bb@factor1.com.au")]
+        approved = InviteeDecision.approved
+        with _mode("ask"):
+            scheduled = _meeting(_scheduled(), invitee_decision=approved)
+            self.assertEqual(
+                _email_recipients(scheduled, "organizer@factor1.com.au"),
+                ["bb@factor1.com.au", "jt@factor1.com.au", "organizer@factor1.com.au"],
+            )
+            self.assertEqual(
+                _sharepoint_recipients(scheduled),
+                ["bb@factor1.com.au", "jt@factor1.com.au", "organizer@factor1.com.au"],
+            )
+            ad_hoc = _meeting(
+                source=MeetingSource.in_person, manual_attendees=manual, invitee_decision=approved
+            )
+            self.assertEqual(
+                _email_recipients(ad_hoc, "recorder@factor1.com.au"),
+                ["bb@factor1.com.au", "recorder@factor1.com.au"],
+            )
+            self.assertEqual(_sharepoint_recipients(ad_hoc), ["bb@factor1.com.au"])
+
+    def test_kill_switch_ignores_a_stored_approval(self):
+        # Monday "Just me", Tuesday the switch is flipped, Wednesday someone
+        # clicks the leftover "Send to 5 invitees": nothing may go out.
+        approved = _meeting(_scheduled(), invitee_decision=InviteeDecision.approved)
+        with _mode("organizer"):
+            self.assertEqual(
+                _email_recipients(approved, "organizer@factor1.com.au"),
+                ["organizer@factor1.com.au"],
+            )
+            self.assertEqual(_sharepoint_recipients(approved), ["organizer@factor1.com.au"])
 
 
 if __name__ == "__main__":

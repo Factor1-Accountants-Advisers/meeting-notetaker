@@ -53,7 +53,11 @@ from app.services.failure_reasons import (
     log_delivery_failure,
 )
 from app.services.meeting_export import refresh_meeting_export
-from app.services.recipient_policy import attendee_fan_out_enabled, filter_deliverable
+from app.services.recipient_policy import (
+    filter_deliverable,
+    invitee_candidates,
+    invitees_approved,
+)
 from app.services.blob_delivery import kick_blob_delivery
 from app.services.sharepoint import (
     get_sharepoint_provider,
@@ -970,20 +974,23 @@ def _normalise_email(email: str | None) -> str | None:
 
 
 def _email_recipients(meeting: Meeting, recorder_email: str | None) -> list[str]:
-    """Resolve Jira IN-93/IN-94 recipients.
+    """Resolve Jira IN-93/IN-94 recipients under the IN-488 delivery rule.
 
-    Calendar-linked recordings use Graph attendee emails. The organiser (and
-    the signed-in recorder, who is the organiser for auto-recorded meetings)
-    must also receive the transcript: Graph's ``attendees`` array excludes the
-    organiser, so a scheduled meeting would otherwise email everyone *but* the
-    person who recorded it (Jira IN-94/IN-119). Manual/ad-hoc/upload recordings
-    have no attendees and fall back to the recorder alone. Preserve first-seen
-    order while deduping case-insensitively.
+    The organiser and the signed-in recorder always receive the transcript:
+    Graph's ``attendees`` array excludes the organiser, so a scheduled meeting
+    would otherwise email everyone *but* the person who recorded it (Jira
+    IN-94/IN-119), and the recorder is the sole recipient for ad-hoc.
 
-    Every candidate — attendees, organiser and recorder alike — then passes the
-    delivery domain allowlist. Until 7 Aug 2026 this list was used verbatim, so
-    an external invitee on a calendar event received the summary and the full
-    transcript (see app/services/recipient_policy.py).
+    Invitees (Graph attendees, or the attendee-picker selections for an ad-hoc
+    recording) are added only when ``invitees_approved(meeting)``: the mode is
+    ``attendees``, or the mode is ``ask`` and the owner said yes. Ad-hoc
+    attendees were never emailable before IN-488 (D2).
+
+    Every address, invitees, organiser and recorder alike, passes the delivery
+    domain allowlist. Until 7 Aug 2026 this list was used verbatim, so an
+    external invitee received the summary and the full transcript (see
+    app/services/recipient_policy.py). First-seen order, deduped
+    case-insensitively.
     """
     recipients: list[str] = []
 
@@ -992,11 +999,9 @@ def _email_recipients(meeting: Meeting, recorder_email: str | None) -> list[str]
         if email and email not in recipients:
             recipients.append(email)
 
-    # Invitee fan-out is gated (organiser-only mode, 18 Aug 2026 — see
-    # Settings.delivery_recipients). The organiser and recorder below are not.
-    if attendee_fan_out_enabled() and meeting.graph_metadata and meeting.graph_metadata.attendees:
-        for attendee in meeting.graph_metadata.attendees:
-            _add(attendee.email)
+    if invitees_approved(meeting):
+        for candidate in invitee_candidates(meeting, recorder_email, channel="email"):
+            _add(candidate.email)
 
     # The organiser always receives their own transcript, even when absent
     # from the attendees array.
@@ -1011,26 +1016,22 @@ def _email_recipients(meeting: Meeting, recorder_email: str | None) -> list[str]
 
 
 def _sharepoint_recipients(meeting: Meeting) -> list[str]:
-    """Resolve Jira IN-387 SharePoint view-access recipients.
+    """Resolve Jira IN-387 SharePoint view-access recipients (IN-488 rule).
 
-    Calendar-linked recordings grant view access to Graph attendee emails plus
-    the organiser (Graph's ``attendees`` array excludes the organiser, the
-    same gap fixed for email in IN-94/IN-119 — see ``_email_recipients``).
-    Manual/ad-hoc recordings grant view access to the recorder's ad-hoc
-    attendee picker selections instead. Recipients with no usable email
-    (room/resource attendees, unresolved external attendees) are silently
-    skipped rather than failing delivery, and the result passes the same
-    delivery domain allowlist as email — on 7 Aug 2026 this function tried to
-    share an interview transcript with an external candidate and was stopped
-    only by the tenant's external-sharing policy (HTTP 400 sharingFailed).
-    The recording owner is not included here: they already have access as the
-    identity that performed the upload. Preserve first-seen order while
-    deduping case-insensitively.
+    Invitees get a per-file view grant only when ``invitees_approved(meeting)``.
+    The grant IS the sharing: it alone surfaces the file in an invitee's
+    "Shared with me", so it follows the same decision as the email. Because
+    the upload is a PUT by path, re-posting /sharepoint after a later approval
+    overwrites the same two files and re-runs the grants; no Graph item IDs
+    are stored.
 
-    Unlike ``_email_recipients``, which currently drops manual attendees
-    entirely (email has no ad-hoc delivery path), this function intentionally
-    includes them — do not unify the two without revisiting IN-387's
-    SharePoint-access requirements.
+    The organiser is always included for calendar meetings. The recording
+    owner is not: they already have access as the identity that uploaded.
+    Recipients with no usable email (rooms, unresolved externals) are skipped
+    rather than failing delivery, and the result passes the delivery domain
+    allowlist: on 7 Aug 2026 this function tried to share an interview
+    transcript with an external candidate and was stopped only by the
+    tenant's external-sharing policy (HTTP 400 sharingFailed).
     """
     recipients: list[str] = []
 
@@ -1039,19 +1040,12 @@ def _sharepoint_recipients(meeting: Meeting) -> list[str]:
         if email and email not in recipients:
             recipients.append(email)
 
-    # Invitee fan-out is gated (organiser-only mode, 18 Aug 2026 — see
-    # Settings.delivery_recipients). Without it, no per-file grant is issued
-    # to anyone but the organiser: a grant alone would still surface the file
-    # in an invitee's "Shared with me".
-    fan_out = attendee_fan_out_enabled()
+    if invitees_approved(meeting):
+        for candidate in invitee_candidates(meeting, channel="sharepoint"):
+            _add(candidate.email)
+
     if meeting.graph_metadata:
-        if fan_out:
-            for attendee in meeting.graph_metadata.attendees:
-                _add(attendee.email)
         _add(meeting.graph_metadata.organizer_email)
-    elif fan_out:
-        for attendee in meeting.manual_attendees:
-            _add(attendee.email)
 
     return filter_deliverable(recipients, channel="sharepoint", meeting_id=meeting.id)
 

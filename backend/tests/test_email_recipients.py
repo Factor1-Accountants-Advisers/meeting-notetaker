@@ -6,8 +6,10 @@ emailing everyone but the person who recorded it.
 
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 from uuid import uuid4
 
+from app.config import get_settings
 from app.routers.meetings import _email_recipients
 from app.schemas import (
     GraphMeetingAttendeeMetadata,
@@ -28,6 +30,11 @@ def _meeting(graph_metadata=None, source=MeetingSource.online, manual_attendees=
         graph_metadata=graph_metadata,
         manual_attendees=manual_attendees or [],
     )
+
+
+def _mode(value: str):
+    override = get_settings().model_copy(update={"delivery_recipients": value})
+    return patch("app.services.recipient_policy.get_settings", return_value=override)
 
 
 class EmailRecipientTests(unittest.TestCase):
@@ -54,22 +61,34 @@ class EmailRecipientTests(unittest.TestCase):
         recipients = _email_recipients(_meeting(meta), recorder_email="organizer@factor1.com.au")
         self.assertEqual(recipients.count("organizer@factor1.com.au"), 1)
 
-    def test_adhoc_recording_still_emails_recorder_only(self):
-        recipients = _email_recipients(
-            _meeting(
-                None,
-                source=MeetingSource.in_person,
-                manual_attendees=[
-                    ManualMeetingAttendee(
-                        name="David Ahlhaus",
-                        email="davidahlhaus@factor1.com.au",
-                    ),
-                    ManualMeetingAttendee(
-                        name="Benjamin Bryant",
-                        email="benjaminbryant@factor1.com.au",
-                    ),
-                ],
-            ),
-            recorder_email="recorder@factor1.com.au",
+    def _adhoc_with_two_picked(self):
+        return _meeting(
+            None,
+            source=MeetingSource.in_person,
+            manual_attendees=[
+                ManualMeetingAttendee(name="David Ahlhaus", email="davidahlhaus@factor1.com.au"),
+                ManualMeetingAttendee(name="Benjamin Bryant", email="benjaminbryant@factor1.com.au"),
+            ],
         )
+
+    def test_adhoc_recording_emails_recorder_only_until_approved(self):
+        with _mode("ask"):
+            recipients = _email_recipients(
+                self._adhoc_with_two_picked(), recorder_email="recorder@factor1.com.au"
+            )
         self.assertEqual(recipients, ["recorder@factor1.com.au"])
+
+    def test_adhoc_recording_emails_picked_attendees_once_invitees_are_approved(self):
+        # IN-488 D2 (Joseph, 15 Sep): "so that invited people can also get the
+        # transcripts". The conftest pin is `attendees`, i.e. auto-approved.
+        recipients = _email_recipients(
+            self._adhoc_with_two_picked(), recorder_email="recorder@factor1.com.au"
+        )
+        self.assertEqual(
+            recipients,
+            [
+                "davidahlhaus@factor1.com.au",
+                "benjaminbryant@factor1.com.au",
+                "recorder@factor1.com.au",
+            ],
+        )
