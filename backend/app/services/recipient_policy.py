@@ -30,6 +30,7 @@ import logging
 from typing import Iterable
 
 from app.config import get_settings
+from app.schemas import InviteeDecision, Meeting
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,50 @@ DEFAULT_DELIVERY_DOMAINS: tuple[str, ...] = (
     "astutebusiness.com.au",
     "kppartners.com.au",
 )
+
+# Delivery mode (IN-488, spec D10). `ask` is the code default. `organizer` is
+# exactly the v2.0.29+ behaviour and therefore the kill switch. `attendees` is
+# the unchanged escape hatch: everyone gets it, nobody is asked.
+DELIVERY_MODE_ASK = "ask"
+DELIVERY_MODE_ORGANIZER = "organizer"
+DELIVERY_MODE_ATTENDEES = "attendees"
+_DELIVERY_MODES = frozenset(
+    {DELIVERY_MODE_ASK, DELIVERY_MODE_ORGANIZER, DELIVERY_MODE_ATTENDEES}
+)
+
+
+def delivery_mode() -> str:
+    """The configured delivery mode, failing closed to ``organizer``.
+
+    Anything unrecognised, including a blank value, reads as ``organizer``:
+    a typo in a repo variable or a %PROGRAMDATA% override must degrade to
+    today's organiser-only delivery, never to prompting or fan-out.
+    """
+    value = get_settings().delivery_recipients.strip().lower()
+    return value if value in _DELIVERY_MODES else DELIVERY_MODE_ORGANIZER
+
+
+def prompt_enabled() -> bool:
+    """Whether the owner is asked about invitees at all (``ask`` mode only)."""
+    return delivery_mode() == DELIVERY_MODE_ASK
+
+
+def invitees_approved(meeting: Meeting) -> bool:
+    """Whether this meeting's invitees may receive email and SharePoint grants.
+
+    ``attendees``: always. ``ask``: only with a stored approval. ``organizer``:
+    never, even with a stored approval (Joseph, 21 Sep 2026). The example that
+    settled it: Monday "Just me" leaves a "Send to 5 invitees" button on Home;
+    Tuesday the switch is flipped after an incident; Wednesday a click on that
+    leftover button must send nothing. The stored decision is kept, so
+    flipping back to ``ask`` restores it.
+    """
+    mode = delivery_mode()
+    if mode == DELIVERY_MODE_ATTENDEES:
+        return True
+    if mode == DELIVERY_MODE_ASK:
+        return meeting.invitee_decision is InviteeDecision.approved
+    return False
 
 
 def attendee_fan_out_enabled() -> bool:
