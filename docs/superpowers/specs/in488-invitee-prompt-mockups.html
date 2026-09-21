@@ -1,0 +1,608 @@
+<meta charset="utf-8">
+<title>Invitee Email Prompt</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap">
+<style>
+  /* ── Page (the review document) ──────────────────────────────────────── */
+  :root {
+    --pg-bg: #f5f6f9;
+    --pg-surface: #ffffff;
+    --pg-text: #1b2230;
+    --pg-muted: #5b6676;
+    --pg-rule: #dfe3ea;
+    --pg-accent: #1f3864;
+    --pg-accent-ink: #ffffff;
+    --pg-accent-soft: #e7edf7;
+    --pg-note-bg: #fff7e8;
+    --pg-note-ink: #7a4d07;
+    --pg-mono: 'IBM Plex Mono', ui-monospace, Consolas, monospace;
+    --pg-sans: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
+    --app-sans: 'Inter', 'Segoe UI', system-ui, sans-serif;
+    --toast-sans: 'Segoe UI', 'Segoe UI Variable Text', 'Inter', system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --pg-bg: #12161d;
+      --pg-surface: #1a2029;
+      --pg-text: #e6eaf0;
+      --pg-muted: #9aa6b8;
+      --pg-rule: #2a323f;
+      --pg-accent: #9dbbe8;
+      --pg-accent-ink: #0f1a2c;
+      --pg-accent-soft: #1f2a3c;
+      --pg-note-bg: #2b2415;
+      --pg-note-ink: #f0c47a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --pg-bg: #12161d;
+    --pg-surface: #1a2029;
+    --pg-text: #e6eaf0;
+    --pg-muted: #9aa6b8;
+    --pg-rule: #2a323f;
+    --pg-accent: #9dbbe8;
+    --pg-accent-ink: #0f1a2c;
+    --pg-accent-soft: #1f2a3c;
+    --pg-note-bg: #2b2415;
+    --pg-note-ink: #f0c47a;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--pg-bg);
+    color: var(--pg-text);
+    font-family: var(--pg-sans);
+    font-size: 15px;
+    line-height: 1.55;
+  }
+  .wrap {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding-block: 40px 72px;
+    padding-inline: 24px;
+  }
+  header.doc { display: grid; gap: 14px; margin-bottom: 40px; }
+  .eyebrow {
+    font-family: var(--pg-mono);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--pg-muted);
+  }
+  h1 {
+    margin: 0;
+    font-size: 30px;
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: -.01em;
+    text-wrap: balance;
+  }
+  .lede { max-width: 66ch; margin: 0; color: var(--pg-muted); }
+  .controls {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 18px;
+    padding: 12px 14px;
+    border: 1px solid var(--pg-rule);
+    border-radius: 6px;
+    background: var(--pg-surface);
+    font-size: 14px;
+  }
+  .controls label { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+  .legend { display: inline-flex; gap: 14px; color: var(--pg-muted); }
+  .legend span::before {
+    content: ''; display: inline-block; width: 10px; height: 10px; margin-right: 6px;
+    border-radius: 2px; vertical-align: -1px;
+  }
+  .legend .l-toast::before { background: #2d2d2d; }
+  .legend .l-app::before { background: #339cff; }
+
+  section.step {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px 32px;
+    padding-block: 32px;
+    border-top: 1px solid var(--pg-rule);
+  }
+  @media (min-width: 980px) {
+    section.step { grid-template-columns: 250px minmax(0, 1fr); }
+  }
+  .step-text { display: grid; gap: 10px; align-content: start; }
+  .step-text h2 { margin: 0; font-size: 19px; font-weight: 600; line-height: 1.25; text-wrap: balance; }
+  .step-text p, .step-text ul { margin: 0; font-size: 14px; color: var(--pg-muted); }
+  .step-text ul { padding-left: 18px; display: grid; gap: 4px; }
+  .step-text b { color: var(--pg-text); font-weight: 500; }
+  .step-text .arrow {
+    font-family: var(--pg-mono); font-size: 12px; color: var(--pg-accent);
+    padding: 3px 8px; border-radius: 4px; background: var(--pg-accent-soft);
+    display: inline-block;
+  }
+  .stage { min-width: 0; display: grid; gap: 22px; align-content: start; }
+  .scroller { overflow-x: auto; padding-bottom: 4px; }
+  .caption {
+    font-family: var(--pg-mono); font-size: 12px; color: var(--pg-muted);
+    margin: 0 0 8px;
+  }
+  .caption em { font-style: normal; color: var(--pg-accent); }
+  .note {
+    font-size: 13.5px; padding: 10px 14px; border-radius: 6px;
+    background: var(--pg-note-bg); color: var(--pg-note-ink); max-width: 66ch;
+  }
+  .pair { display: grid; gap: 22px; }
+  @media (min-width: 980px) { .pair.wide { grid-template-columns: 1fr 1fr; } }
+
+  footer.doc {
+    margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--pg-rule);
+    font-size: 13px; color: var(--pg-muted); display: grid; gap: 6px; max-width: 70ch;
+  }
+
+  /* ── Windows toast ───────────────────────────────────────────────────── */
+  .toast {
+    --t-bg: #f7f7f7; --t-text: #1a1a1a; --t-muted: #616161; --t-btn: #e9e9e9;
+    --t-btn-hover: #dedede; --t-border: rgba(0,0,0,.10); --t-shadow: 0 8px 24px rgba(0,0,0,.14);
+    width: 364px; font-family: var(--toast-sans); color: var(--t-text);
+    background: var(--t-bg); border: 1px solid var(--t-border); border-radius: 8px;
+    box-shadow: var(--t-shadow); padding: 14px 16px 16px; display: grid; gap: 12px;
+  }
+  .toast.is-dark {
+    --t-bg: #2c2c2c; --t-text: #ffffff; --t-muted: #b3b3b3; --t-btn: #3b3b3b;
+    --t-btn-hover: #474747; --t-border: rgba(255,255,255,.10); --t-shadow: 0 8px 24px rgba(0,0,0,.45);
+  }
+  .toast .t-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--t-muted); }
+  .toast .t-app { color: var(--t-text); }
+  .toast .t-icon { width: 16px; height: 16px; border-radius: 3px; background: #1f3864; display: grid; place-items: center; color: #fff; }
+  .toast .t-icon svg { width: 11px; height: 11px; }
+  .toast .t-close { margin-left: auto; font-size: 14px; line-height: 1; color: var(--t-muted); }
+  .toast .t-body { display: grid; gap: 2px; font-size: 14px; line-height: 1.35; }
+  .toast .t-title { font-weight: 600; }
+  .toast .t-names { color: var(--t-muted); font-size: 13px; }
+  .toast .t-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .toast .t-btn {
+    height: 32px; border: 0; border-radius: 4px; background: var(--t-btn); color: var(--t-text);
+    font: inherit; font-size: 13px; cursor: pointer;
+  }
+  .toast .t-btn:hover { background: var(--t-btn-hover); }
+  .toast-stage { display: grid; gap: 10px; justify-items: start; }
+  .toast-meta { font-family: var(--pg-mono); font-size: 12px; color: var(--pg-muted); display: flex; gap: 14px; flex-wrap: wrap; }
+
+  /* ── App (Meeting Notetaker) — tokens copied from src/renderer/src/assets/index.css ── */
+  .mn {
+    --page-bg: #ffffff;
+    --c-bg-primary: rgba(26, 28, 31, 0.05);
+    --c-bg-secondary: rgba(255, 255, 255, 0.96);
+    --c-bg-tertiary: #f1f2f3;
+    --c-bg-chrome: rgba(26, 28, 31, 0.1);
+    --c-bg-info: #e5f2ff;
+    --c-bg-danger: #fcebeb;
+    --c-bg-warning: #faeeda;
+    --c-bg-success: #eaf3de;
+    --c-text-primary: #1a1c1f;
+    --c-text-secondary: rgba(26, 28, 31, 0.64);
+    --c-text-tertiary: rgba(26, 28, 31, 0.49);
+    --c-text-info: #339cff;
+    --c-text-danger: #a32d2d;
+    --c-text-warning: #854f0b;
+    --c-text-success: #3b6d11;
+    --c-border-tertiary: rgba(26, 28, 31, 0.08);
+    --c-border-secondary: rgba(26, 28, 31, 0.12);
+    --c-border-info: #339cff;
+    --c-border-danger: #e24b4a;
+    --c-border-success: #639922;
+    --c-btn-primary: #1a1c1f;
+    --c-btn-primary-text: #ffffff;
+    --brand-navy: #2b4570;
+    --win-border: rgba(26, 28, 31, 0.18);
+    font-family: var(--app-sans); font-size: 14px; line-height: 1.5; color: var(--c-text-primary);
+    -webkit-font-smoothing: antialiased;
+  }
+  .mn.is-dark {
+    --page-bg: #181818;
+    --c-bg-primary: rgba(255, 255, 255, 0.05);
+    --c-bg-secondary: rgba(54, 54, 54, 0.96);
+    --c-bg-tertiary: #424242;
+    --c-bg-chrome: rgba(255, 255, 255, 0.1);
+    --c-bg-info: #0d273f;
+    --c-bg-danger: rgba(250, 66, 62, 0.12);
+    --c-bg-warning: rgba(255, 133, 73, 0.12);
+    --c-bg-success: rgba(64, 201, 119, 0.12);
+    --c-text-primary: #ffffff;
+    --c-text-secondary: rgba(255, 255, 255, 0.64);
+    --c-text-tertiary: rgba(255, 255, 255, 0.5);
+    --c-text-info: #83c3ff;
+    --c-text-danger: #fa423e;
+    --c-text-warning: #ff8549;
+    --c-text-success: #40c977;
+    --c-border-tertiary: rgba(255, 255, 255, 0.082);
+    --c-border-secondary: rgba(255, 255, 255, 0.12);
+    --c-border-info: rgba(131, 195, 255, 0.76);
+    --c-border-danger: rgba(250, 66, 62, 0.72);
+    --c-border-success: rgba(64, 201, 119, 0.72);
+    --c-btn-primary: #ffffff;
+    --c-btn-primary-text: #0d0d0d;
+    --brand-navy: #5f7fb2;
+    --win-border: rgba(255, 255, 255, 0.16);
+  }
+
+  /* Window frame: 620px content width, 40px title bar (window.ts / TopBar.tsx) */
+  .win {
+    width: 620px; background: var(--page-bg); border: 1px solid var(--win-border);
+    border-radius: 8px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,.12);
+  }
+  .topbar {
+    height: 40px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center;
+    gap: 12px; padding: 0 12px; background: var(--c-bg-chrome); border-bottom: 1px solid var(--c-border-tertiary);
+  }
+  .brand { display: flex; align-items: center; gap: 7px; font-weight: 500; font-size: 14px; }
+  .brand .sq { width: 28px; height: 28px; border-radius: 8px; background: var(--brand-navy); color: #fff; display: grid; place-items: center; }
+  .brand .sq svg { width: 16px; height: 16px; }
+  .status { justify-self: center; min-width: 0; display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--c-text-secondary); padding: 4px 10px; }
+  .status .spin { width: 14px; height: 14px; color: var(--c-text-primary); }
+  .status strong { font-weight: 500; color: var(--c-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .status .detail { color: var(--c-text-tertiary); white-space: nowrap; }
+  .chrome-right { display: flex; align-items: center; gap: 7px; }
+  .gear { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; color: var(--c-text-tertiary); }
+  .gear svg { width: 17px; height: 17px; }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--brand-navy); color: #fff; font-size: 11px; font-weight: 500; display: grid; place-items: center; }
+  .winctl { display: flex; gap: 22px; margin-left: 18px; font-size: 11px; color: var(--c-text-secondary); letter-spacing: 0; }
+  .body { padding: 16px; display: grid; gap: 12px; }
+
+  /* Card-only strip (a slice of the Home screen without the window chrome) */
+  .pane {
+    width: 620px; background: var(--page-bg); border: 1px dashed var(--win-border);
+    border-radius: 8px; padding: 16px; display: grid; gap: 12px;
+  }
+
+  /* Notice card — HomeScreen.tsx PostCaptureNotice anatomy */
+  .notice { border: 0.5px solid; border-radius: 8px; padding: 10px 12px; display: flex; align-items: flex-start; gap: 8px; }
+  .notice.info    { border-color: var(--c-border-info);    background: var(--c-bg-info);    color: var(--c-text-info); }
+  .notice.success { border-color: var(--c-border-success); background: var(--c-bg-success); color: var(--c-text-success); }
+  .notice.danger  { border-color: var(--c-border-danger);  background: var(--c-bg-danger);  color: var(--c-text-danger); }
+  .notice .ic { flex: none; margin-top: 2px; width: 16px; height: 16px; }
+  .notice .txt { min-width: 0; flex: 1; }
+  .notice .title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .notice .failed { margin-top: 2px; font-size: 12px; font-weight: 600; }
+  .notice .msg { margin-top: 2px; font-size: 12px; opacity: .9; }
+  .notice .names { margin-top: 4px; font-size: 12px; opacity: .78; }
+  .notice .acts { flex: none; display: flex; align-items: center; gap: 8px; }
+  .notice .btn {
+    border: 0.5px solid currentColor; border-radius: 2px; padding: 4px 8px; font: inherit; font-size: 12px;
+    background: transparent; color: inherit; opacity: .85; cursor: pointer; white-space: nowrap;
+  }
+  .notice .btn:hover { opacity: 1; }
+  .notice .link { font-size: 12px; opacity: .8; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; }
+  .notice .link:hover { opacity: 1; }
+  .notice .btn:focus-visible, .notice .link:focus-visible, .t-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(46,117,182,.45); border-radius: 6px; }
+
+  .spin { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+
+  /* New meeting capture card (CaptureCard) — condensed, context only */
+  .card { border-radius: 20px; background: var(--c-bg-primary); padding: 12px; }
+  .card .head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; }
+  .card .kicker { font-size: 12px; color: var(--c-text-tertiary); margin: 0 0 2px; }
+  .card h3 { margin: 0; font-size: 20px; font-weight: 500; }
+  .card .lbl { font-size: 14px; font-weight: 500; margin: 0 0 6px; }
+  .card .input { height: 28px; border-radius: 12px; border: 1px solid var(--c-border-tertiary); background: var(--c-bg-secondary); padding: 0 8px; font-size: 14px; color: var(--c-text-tertiary); display: flex; align-items: center; }
+  .card .row { display: flex; align-items: center; gap: 8px; margin-top: 0; }
+  .card .hint { font-size: 12px; color: var(--c-text-tertiary); }
+  .card .disc { margin: 12px 0; padding: 10px 0; border-top: 1px solid var(--c-border-tertiary); border-bottom: 1px solid var(--c-border-tertiary); display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 10px; font-size: 14px; }
+  .card .disc .l { display: flex; align-items: center; gap: 8px; }
+  .card .disc svg { width: 16px; height: 16px; }
+  .card .cta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .card .cta > span { min-height: 28px; border-radius: 12px; display: flex; align-items: center; justify-content: center; gap: 4px; font-size: 14px; }
+  .card .cta .sec { border: 1px solid var(--c-border-secondary); background: var(--c-bg-secondary); }
+  .card .cta .pri { background: var(--c-btn-primary); color: var(--c-btn-primary-text); }
+  .card .cta svg { width: 16px; height: 16px; }
+  .card .mt { margin-top: 12px; }
+  svg.i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></symbol>
+  <symbol id="i-loader" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></symbol>
+  <symbol id="i-mail" viewBox="0 0 24 24"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></symbol>
+  <symbol id="i-audio" viewBox="0 0 24 24"><path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></symbol>
+</svg>
+
+<div class="wrap">
+  <header class="doc">
+    <div class="eyebrow">Meeting Notetaker · IN-488 · design mockups · 15 Sep 2026</div>
+    <h1>Ask before the transcript goes to invitees</h1>
+    <p class="lede">
+      When a meeting's notes are ready, nothing is emailed until the recorder answers one question.
+      <b>Just me</b> and a timed-out prompt both send to the organiser only. Invitees can still be sent
+      the transcript later from the app. The same question appears as a Windows toast and as a card
+      in the app; answering in either place resolves both.
+    </p>
+    <div class="controls">
+      <label><input type="checkbox" id="dark-toggle"> Preview the app and toast in dark mode</label>
+      <span class="legend"><span class="l-toast">Windows toast</span><span class="l-app">In-app card</span></span>
+    </div>
+  </header>
+
+  <!-- ── 1. Toast ─────────────────────────────────────────────────────── -->
+  <section class="step">
+    <div class="step-text">
+      <div class="eyebrow">1 · Windows toast</div>
+      <h2>Notes are ready, the prompt appears</h2>
+      <p>Fires the moment processing finishes, from the main process, whether or not the window is open. Silent toast; the app plays its usual chime.</p>
+      <ul>
+        <li><b>Email invitees</b> → one email to organiser + invitees, plus SharePoint view access for them.</li>
+        <li><b>Just me</b> → one email to the organiser only.</li>
+        <li><b>No answer for 2 min</b> → same as Just me. <span class="arrow">safe default</span></li>
+        <li>Clicking the body opens the app; the timer keeps running.</li>
+      </ul>
+      <p>Windows allows three text lines, so the toast shows the first three names and a count. The full list is in the app card.</p>
+    </div>
+    <div class="stage">
+      <div class="toast-stage">
+        <p class="caption">buildInviteePromptToastXml · <em>scenario="reminder"</em> · lifetime TOAST_LIFETIME_MS</p>
+        <div class="toast" role="group" aria-label="Windows toast mockup">
+          <div class="t-head">
+            <span class="t-icon"><svg class="i" style="stroke:#fff"><use href="#i-audio"/></svg></span>
+            <span class="t-app">Meeting Notetaker</span>
+            <span>· now</span>
+            <span class="t-close" aria-hidden="true">✕</span>
+          </div>
+          <div class="t-body">
+            <div class="t-title">Notes ready: Innovations sync</div>
+            <div>Email the transcript to 5 invitees?</div>
+            <div class="t-names">David Ahlhaus, Priya Nair, Sam Whitfield +2 more</div>
+          </div>
+          <div class="t-actions">
+            <button type="button" class="t-btn">Email invitees</button>
+            <button type="button" class="t-btn">Just me</button>
+          </div>
+        </div>
+        <div class="toast-meta">
+          <span>notetaker://invitees-approve?meeting=…</span>
+          <span>notetaker://invitees-decline?meeting=…</span>
+        </div>
+      </div>
+      <p class="note">Both buttons are the same grey on purpose: Windows toast buttons cannot be styled, so we cannot make one look primary. The wording carries the emphasis instead.</p>
+    </div>
+  </section>
+
+  <!-- ── 2. In-app pending card ───────────────────────────────────────── -->
+  <section class="step">
+    <div class="step-text">
+      <div class="eyebrow">2 · In the app, at the same time</div>
+      <h2>The same question as a card on Home</h2>
+      <p>Post-capture state <span class="arrow">awaiting_invitees</span>. Shown while the toast is up, so the user can answer wherever they are looking.</p>
+      <ul>
+        <li>Full invitee list, already filtered to allowed company domains.</li>
+        <li>Answering here closes the toast and cancels its timer.</li>
+        <li>No Dismiss on this card: the timeout resolves it.</li>
+        <li>The top bar stays quiet; waiting for an answer is not "processing".</li>
+      </ul>
+    </div>
+    <div class="stage">
+      <p class="caption">Home · window 620 px · nothing else is recording</p>
+      <div class="scroller">
+        <div class="mn win">
+          <div class="topbar">
+            <div class="brand"><span class="sq"><svg class="i" style="stroke:#fff"><use href="#i-audio"/></svg></span>Meeting Notetaker</div>
+            <div class="status"></div>
+            <div class="chrome-right">
+              <span class="gear"><svg class="i"><use href="#i-gear"/></svg></span>
+              <span class="avatar">JG</span>
+              <span class="winctl"><span>—</span><span>☐</span><span>✕</span></span>
+            </div>
+          </div>
+          <div class="body">
+            <div class="notice info">
+              <svg class="i ic"><use href="#i-mail"/></svg>
+              <div class="txt">
+                <div class="title">Innovations sync</div>
+                <div class="msg">Notes are ready. Email the transcript to 5 invitees?</div>
+                <div class="names">David Ahlhaus, Priya Nair, Sam Whitfield, Alex Morgan, Jordan Lee</div>
+              </div>
+              <div class="acts">
+                <button type="button" class="btn">Email invitees</button>
+                <button type="button" class="btn">Just me</button>
+              </div>
+            </div>
+            <div class="card">
+              <div class="head">
+                <div><p class="kicker">Manual capture</p><h3>New meeting</h3></div>
+                <svg class="i" style="color:var(--c-text-secondary)"><use href="#i-mic"/></svg>
+              </div>
+              <p class="lbl">Meeting title</p>
+              <div class="input">e.g. Tax compliance — Henderson &amp; Co</div>
+              <p class="lbl mt">Planned duration</p>
+              <div class="row"><div class="input" style="width:80px;color:var(--c-text-primary)">60</div><span class="hint">minutes · a reminder offers Extend 5 minutes before the end</span></div>
+              <div class="disc"><span class="l"><svg class="i"><use href="#i-users"/></svg>Add attendees</span><span class="hint">Optional</span><svg class="i" style="color:var(--c-text-tertiary)"><use href="#i-chev"/></svg></div>
+              <div class="cta"><span class="sec"><svg class="i"><use href="#i-upload"/></svg>Upload recording</span><span class="pri"><svg class="i"><use href="#i-mic"/></svg>Start recording</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 3. Outcomes ──────────────────────────────────────────────────── -->
+  <section class="step">
+    <div class="step-text">
+      <div class="eyebrow">3 · After the answer</div>
+      <h2>One delivery pass, two possible recipient lists</h2>
+      <p>Either answer runs the existing SharePoint-then-email sequence once. The card moves through <span class="arrow">emailing</span> to today's <span class="arrow">ready</span> or <span class="arrow">email_failed</span>.</p>
+      <ul>
+        <li><b>Email invitees:</b> the ready message lists every address that received it, as it does today.</li>
+        <li><b>Just me / timeout:</b> organiser only, and the card gains a <b>Send to 5 invitees</b> action so the decision can be changed later.</li>
+      </ul>
+    </div>
+    <div class="stage">
+      <div class="pair wide">
+        <div>
+          <p class="caption">3a · answered <em>Email invitees</em></p>
+          <div class="scroller"><div class="mn pane" style="width:auto;min-width:0">
+            <div class="notice info">
+              <svg class="i ic spin"><use href="#i-loader"/></svg>
+              <div class="txt"><div class="title">Innovations sync</div><div class="msg">Saving to SharePoint and emailing to you and 5 invitees…</div></div>
+            </div>
+            <div class="notice success">
+              <svg class="i ic"><use href="#i-check"/></svg>
+              <div class="txt"><div class="title">Innovations sync</div><div class="msg">Transcript saved to SharePoint and emailed to innovations@factor1.com.au, davidahlhaus@factor1.com.au, priya.nair@factor1.com.au, sam.whitfield@factor1.com.au, alex.morgan@factor1.com.au, jordan.lee@factor1.com.au.</div></div>
+              <div class="acts"><button type="button" class="link">Dismiss</button></div>
+            </div>
+          </div></div>
+        </div>
+        <div>
+          <p class="caption">3b · answered <em>Just me</em>, or no answer in 2 min</p>
+          <div class="scroller"><div class="mn pane" style="width:auto;min-width:0">
+            <div class="notice info">
+              <svg class="i ic spin"><use href="#i-loader"/></svg>
+              <div class="txt"><div class="title">Innovations sync</div><div class="msg">Saving to SharePoint and emailing to you…</div></div>
+            </div>
+            <div class="notice success">
+              <svg class="i ic"><use href="#i-check"/></svg>
+              <div class="txt"><div class="title">Innovations sync</div><div class="msg">Transcript saved to SharePoint and emailed to innovations@factor1.com.au. Invitees haven't received it.</div></div>
+              <div class="acts"><button type="button" class="btn">Send to 5 invitees</button><button type="button" class="link">Dismiss</button></div>
+            </div>
+          </div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 4. Send later ────────────────────────────────────────────────── -->
+  <section class="step">
+    <div class="step-text">
+      <div class="eyebrow">4 · Send later</div>
+      <h2>Changing "Just me" to "everyone"</h2>
+      <p><b>Send to 5 invitees</b> records the new answer and runs the same delivery pass again. The backend knows the organiser already has their copy, so only the invitees are emailed, and the SharePoint files are re-saved with view access added.</p>
+      <ul>
+        <li>Success lists the addresses reached by this send.</li>
+        <li>Failure keeps the existing <b>Retry email</b>; retrying can never email the organiser twice.</li>
+      </ul>
+    </div>
+    <div class="stage">
+      <p class="caption">card-only · emailing → ready, or → email_failed</p>
+      <div class="scroller"><div class="mn pane">
+        <div class="notice info">
+          <svg class="i ic spin"><use href="#i-loader"/></svg>
+          <div class="txt"><div class="title">Innovations sync</div><div class="msg">Sending the transcript to 5 invitees…</div></div>
+        </div>
+        <div class="notice success">
+          <svg class="i ic"><use href="#i-check"/></svg>
+          <div class="txt"><div class="title">Innovations sync</div><div class="msg">Sent to davidahlhaus@factor1.com.au, priya.nair@factor1.com.au, sam.whitfield@factor1.com.au, alex.morgan@factor1.com.au, jordan.lee@factor1.com.au.</div></div>
+          <div class="acts"><button type="button" class="link">Dismiss</button></div>
+        </div>
+        <div class="notice danger">
+          <svg class="i ic"><use href="#i-x"/></svg>
+          <div class="txt">
+            <div class="title">Innovations sync</div>
+            <div class="failed">Failed: Outlook sign-in</div>
+            <div class="msg">Sign in to Outlook, then retry. Nothing was sent to invitees; your own copy was already delivered.</div>
+          </div>
+          <div class="acts"><button type="button" class="btn">Retry email</button><button type="button" class="link">Dismiss</button></div>
+        </div>
+      </div></div>
+    </div>
+  </section>
+
+  <!-- ── 5. Restart ───────────────────────────────────────────────────── -->
+  <section class="step">
+    <div class="step-text">
+      <div class="eyebrow">5 · After a restart</div>
+      <h2>Unanswered and unsent meetings come back as cards</h2>
+      <p>On launch the app checks the last 7 days of meetings and surfaces two kinds, above the New meeting card, the same way unuploaded recordings do today.</p>
+      <ul>
+        <li><b>Still waiting for an answer</b> (the app closed during the hold): the question again, no timer, no toast.</li>
+        <li><b>Sent to you only</b>: the Send to invitees action, until dismissed.</li>
+        <li>Dismiss is remembered on this computer, so a card does not nag every launch.</li>
+      </ul>
+    </div>
+    <div class="stage">
+      <p class="caption">Home · first launch of the day</p>
+      <div class="scroller">
+        <div class="mn win">
+          <div class="topbar">
+            <div class="brand"><span class="sq"><svg class="i" style="stroke:#fff"><use href="#i-audio"/></svg></span>Meeting Notetaker</div>
+            <div class="status"></div>
+            <div class="chrome-right">
+              <span class="gear"><svg class="i"><use href="#i-gear"/></svg></span>
+              <span class="avatar">JG</span>
+              <span class="winctl"><span>—</span><span>☐</span><span>✕</span></span>
+            </div>
+          </div>
+          <div class="body">
+            <div class="notice info">
+              <svg class="i ic"><use href="#i-mail"/></svg>
+              <div class="txt">
+                <div class="title">Board pack review</div>
+                <div class="msg">Notes are ready. Email the transcript to 3 invitees?</div>
+                <div class="names">David Ahlhaus, Priya Nair, Jordan Lee</div>
+              </div>
+              <div class="acts">
+                <button type="button" class="btn">Email invitees</button>
+                <button type="button" class="btn">Just me</button>
+              </div>
+            </div>
+            <div class="notice success">
+              <svg class="i ic"><use href="#i-check"/></svg>
+              <div class="txt">
+                <div class="title">Innovations sync</div>
+                <div class="msg">Emailed to you on Tue 15 Sep, 14:32. Invitees haven't received it.</div>
+              </div>
+              <div class="acts"><button type="button" class="btn">Send to 5 invitees</button><button type="button" class="link">Dismiss</button></div>
+            </div>
+            <div class="card">
+              <div class="head">
+                <div><p class="kicker">Manual capture</p><h3>New meeting</h3></div>
+                <svg class="i" style="color:var(--c-text-secondary)"><use href="#i-mic"/></svg>
+              </div>
+              <p class="lbl">Meeting title</p>
+              <div class="input">e.g. Tax compliance — Henderson &amp; Co</div>
+              <div class="cta mt"><span class="sec"><svg class="i"><use href="#i-upload"/></svg>Upload recording</span><span class="pri"><svg class="i"><use href="#i-mic"/></svg>Start recording</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── When there is no prompt ──────────────────────────────────────── -->
+  <section class="step">
+    <div class="step-text">
+      <div class="eyebrow">No prompt</div>
+      <h2>When the question is skipped</h2>
+    </div>
+    <div class="stage">
+      <ul class="step-text" style="padding-left:18px">
+        <li><b>No eligible invitees.</b> A recording with nobody else on the invite (or only external addresses, which the allowlist removes) delivers to the organiser straight away, as today.</li>
+        <li><b>Fleet override.</b> If IT sets <code>MN_DELIVERY_RECIPIENTS=attendees</code> at release, every meeting is treated as "Email invitees" with no prompt: the existing escape hatch, unchanged.</li>
+        <li><b>Per-user "always send" setting.</b> Not in this version. To be confirmed with the team (DA's ticket proposed it; the sync raised the risk that what was said matters more than the preference).</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer class="doc">
+    <span>Names and addresses other than the signed-in user and David Ahlhaus are examples. Card colours, spacing, and type are the app's own tokens (index.css); the toast is drawn to Windows 11 proportions and will look like the app's other reminder toasts.</span>
+    <span>Backend and desktop details are in the design spec that accompanies this file.</span>
+  </footer>
+</div>
+
+<script>
+  (function () {
+    var toggle = document.getElementById('dark-toggle');
+    function apply() {
+      var on = toggle.checked;
+      document.querySelectorAll('.mn, .toast').forEach(function (el) {
+        el.classList.toggle('is-dark', on);
+      });
+    }
+    try { toggle.checked = localStorage.getItem('in488-mock-dark') === '1'; } catch (e) {}
+    toggle.addEventListener('change', function () {
+      apply();
+      try { localStorage.setItem('in488-mock-dark', toggle.checked ? '1' : '0'); } catch (e) {}
+    });
+    apply();
+  })();
+</script>
