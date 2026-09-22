@@ -78,7 +78,11 @@ export function inviteeDisplayNames(candidates: readonly InviteePromptCandidate[
 export function parseInviteePromptRequest(value: unknown): InviteePromptRequest | null {
   if (!value || typeof value !== 'object') return null
   const raw = value as { meetingId?: unknown; title?: unknown; candidates?: unknown }
-  if (typeof raw.meetingId !== 'string' || !raw.meetingId) return null
+  if (typeof raw.meetingId !== 'string') return null
+  // The id keys the open-prompt map, so a whitespace-only one would open a
+  // prompt no toast click and no close could ever match.
+  const meetingId = raw.meetingId.trim()
+  if (!meetingId) return null
   if (!Array.isArray(raw.candidates) || raw.candidates.length === 0) return null
   const candidates: InviteePromptCandidate[] = []
   for (const entry of raw.candidates) {
@@ -91,7 +95,7 @@ export function parseInviteePromptRequest(value: unknown): InviteePromptRequest 
     })
   }
   return {
-    meetingId: raw.meetingId,
+    meetingId,
     title: typeof raw.title === 'string' ? raw.title : '',
     candidates
   }

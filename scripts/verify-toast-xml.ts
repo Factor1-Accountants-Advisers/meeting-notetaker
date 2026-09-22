@@ -250,6 +250,15 @@ assert.equal(toastActionFromArgv(['exe', '--background']), null, 'unrelated argv
   )
   assert.equal(parseToastArgv(['exe', 'notetaker://invitees-approve']), null, 'no meeting id: ignored, never guessed')
   assert.equal(parseToastArgv(['exe', 'notetaker://invitees-approve?meeting=']), null, 'blank meeting id: ignored')
+  assert.deepEqual(
+    parseToastArgv([
+      'exe',
+      'notetaker://invitees-approve?meeting=',
+      inviteeToastUri('invitees-decline', meetingId)
+    ]),
+    { action: 'invitees-decline', meetingId },
+    'a blank-id arg is skipped, not taken as the answer: the parser reads on'
+  )
   assert.deepEqual(parseToastArgv(['exe', toastUri('extend')]), { action: 'extend', meetingId: null }, 'bare URIs still parse')
   assert.deepEqual(parseToastArgv(['exe', 'mn-open']), { action: 'open', meetingId: null }, 'legacy mn-* still parse')
   assert.equal(toastActionFromArgv(['exe', inviteeToastUri('invitees-decline', meetingId)]), 'invitees-decline')

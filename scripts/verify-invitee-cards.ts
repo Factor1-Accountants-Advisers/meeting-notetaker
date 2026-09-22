@@ -262,17 +262,32 @@ assert.equal(
   assert.match(app, /window\.api\.promptInvitees\(/, 'the renderer asks main to show the toast')
   assert.match(app, /window\.api\.closeInviteePrompt/, "an in-app answer cancels main's timer")
   assert.match(app, /window\.api\.onInviteeDecision\(/, 'toast answers and the timeout reach the renderer')
-  const hold = app.slice(app.indexOf('const deliverWithInviteeHold'))
+  // Bounded slices: an unbounded one silently reads the whole rest of the file,
+  // so the pin would keep "passing" after the function it names moved or went.
+  const holdStart = app.indexOf('const deliverWithInviteeHold')
+  const holdEnd = app.indexOf('const answerInviteePrompt')
+  assert.ok(holdStart >= 0 && holdEnd > holdStart, 'deliverWithInviteeHold still precedes answerInviteePrompt')
+  const hold = app.slice(holdStart, holdEnd)
   assert.ok(
     hold.indexOf('postInviteeDecision(') < hold.indexOf('runDeliveryPass('),
     'the decision is recorded BEFORE delivery starts, so every retry uses the same recipient list'
   )
-  const activeNotice = app.slice(app.indexOf('const activePostCaptureNotice'), app.indexOf('const shellRecordingState'))
+  const noticeStart = app.indexOf('const activePostCaptureNotice')
+  const noticeEnd = app.indexOf('const shellRecordingState')
+  assert.ok(noticeStart >= 0 && noticeEnd > noticeStart, 'activePostCaptureNotice still precedes shellRecordingState')
+  const activeNotice = app.slice(noticeStart, noticeEnd)
   assert.doesNotMatch(activeNotice, /awaiting_invitees/, 'waiting for an answer is not "processing" in the status bar')
 
   const home = read('screens', 'HomeScreen.tsx')
   assert.match(home, /sendLaterLabel\(/, 'the ready card offers Send to N invitees')
   assert.match(home, /inviteeNamesLine\(/, 'the pending card shows the full list')
+  assert.match(home, /!awaiting && onDismiss/, 'no Dismiss while the question is up: the timeout resolves it')
+  assert.doesNotMatch(
+    home,
+    /postCaptureNotice\.state !== 'emailing'/,
+    "the emailing card is rendered since IN-488 (Q10); only 'processing' stays status-bar only"
+  )
+  assert.match(home, /const sendLater = notice\.state === 'ready'/, 'send-later is offered on a ready card only')
 }
 
 // ---- wiring pins (Task 13) ---------------------------------------------------

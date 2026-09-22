@@ -214,6 +214,11 @@ function request(meetingId: string): InviteePromptRequest {
     'nobody to ask about: there is no prompt'
   )
   assert.equal(parseInviteePromptRequest({ meetingId: 'm1', title: 't', candidates: [{ name: 'x' }] }), null)
+  assert.equal(
+    parseInviteePromptRequest({ meetingId: '   ', title: 't', candidates: [{ email: 'a@factor1.com.au' }] }),
+    null,
+    'whitespace is not a meeting id: it would key a prompt nothing can ever answer'
+  )
   assert.deepEqual(
     parseInviteePromptRequest({ meetingId: 'm1', candidates: [{ email: 'a@factor1.com.au' }] }),
     { meetingId: 'm1', title: '', candidates: [{ name: null, email: 'a@factor1.com.au' }] },
