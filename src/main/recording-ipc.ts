@@ -114,7 +114,7 @@ function closeRecordingStartedToast(): void {
  * window hides to the tray but is never destroyed, so the cue normally lands —
  * if the window is gone the toast still shows, only the chime is lost.
  */
-function playNotificationChime(): void {
+export function playNotificationChime(): void {
   if (!mainWindow || mainWindow.isDestroyed()) return
   mainWindow.webContents.send('notification:chime')
 }

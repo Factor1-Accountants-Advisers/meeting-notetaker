@@ -221,4 +221,29 @@ function request(meetingId: string): InviteePromptRequest {
   )
 }
 
+// ---- wiring pins (Task 9) -----------------------------------------------------
+// The runtime is Electron-bound, so its wiring is pinned textually, the way
+// verify-join-watch pins index.ts.
+{
+  const read = (...parts: string[]): string => readFileSync(join(process.cwd(), ...parts), 'utf8')
+  const index = read('src', 'main', 'index.ts')
+  assert.match(index, /registerInviteePromptIpc\(\)/, 'IPC is registered at startup')
+  assert.match(index, /parseToastArgv\(argv\)/, 'second-instance reads the meeting id, not just the action')
+  assert.match(index, /'invitees-approve'/, 'approve button is routed')
+  assert.match(index, /'invitees-decline'/, 'decline button is routed')
+  assert.match(index, /disposeInviteePrompt\(\)/, 'timers are cleared on quit')
+  const branch = index.slice(index.indexOf("'invitees-approve'"), index.indexOf("'update-restart'"))
+  assert.doesNotMatch(branch, /showMainWindow\(\)/, 'answering from the toast never steals focus')
+
+  const runtime = read('src', 'main', 'invitee-prompt.ts')
+  for (const channel of ['delivery:prompt-invitees', 'delivery:close-invitee-prompt', 'delivery:invitee-decision']) {
+    assert.ok(runtime.includes(`'${channel}'`), `runtime uses ${channel}`)
+  }
+  const preload = read('src', 'preload', 'index.ts')
+  for (const channel of ['delivery:prompt-invitees', 'delivery:close-invitee-prompt', 'delivery:invitee-decision']) {
+    assert.ok(preload.includes(`'${channel}'`), `preload bridges ${channel}`)
+  }
+  assert.match(read('src', 'main', 'recording-ipc.ts'), /export function playNotificationChime/, 'chime helper is shared (Q14)')
+}
+
 console.log('Invitee prompt verification passed')

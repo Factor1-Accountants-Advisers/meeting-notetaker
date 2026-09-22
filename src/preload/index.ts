@@ -40,6 +40,25 @@ export interface AutoStopRequest {
   deliver: boolean
 }
 
+// IN-488 invitee prompt. Mirrors src/main/invitee-prompt-core.ts; declared
+// here because the renderer's tsconfig sees the preload types, not src/main.
+export interface InviteePromptCandidate {
+  name: string | null
+  email: string
+}
+
+export interface InviteePromptRequest {
+  meetingId: string
+  title: string
+  candidates: InviteePromptCandidate[]
+}
+
+export interface InviteeDecisionMessage {
+  meetingId: string
+  approved: boolean
+  source: 'toast' | 'app' | 'timeout'
+}
+
 // Crash-safe capture spill (IN-129).
 export type SpillStream = 'mic' | 'sys'
 
@@ -245,6 +264,24 @@ const api = {
     const handler = (_event: IpcRendererEvent, data: { endTimeUtc: string }) => callback(data)
     ipcRenderer.on('recording:end-extended', handler)
     return () => ipcRenderer.removeListener('recording:end-extended', handler)
+  },
+
+  /** Ask main to show the "email invitees?" toast and start its 2-minute
+   *  timer (IN-488). The answer arrives through onInviteeDecision. */
+  promptInvitees: (request: InviteePromptRequest): void =>
+    ipcRenderer.send('delivery:prompt-invitees', request),
+
+  /** The owner answered on the in-app card: close the toast and cancel the
+   *  timer, so the timeout cannot fire "declined" behind their back. */
+  closeInviteePrompt: (meetingId: string): void =>
+    ipcRenderer.send('delivery:close-invitee-prompt', { meetingId }),
+
+  /** Listen for a toast-button answer or main's timeout. Returns unsubscribe. */
+  onInviteeDecision: (callback: (decision: InviteeDecisionMessage) => void): (() => void) => {
+    const handler = (_event: IpcRendererEvent, decision: InviteeDecisionMessage): void =>
+      callback(decision)
+    ipcRenderer.on('delivery:invitee-decision', handler)
+    return () => ipcRenderer.removeListener('delivery:invitee-decision', handler)
   }
 }
 
