@@ -1,16 +1,22 @@
 #!/usr/bin/env node
 /**
- * Generates the theme-paired Windows tray icons (IN-472 fix).
+ * Generates the theme-paired Windows tray icons (IN-472 fix) and the
+ * recording variants used to swap the tray + taskbar icon while capturing.
  *
  * Source of truth is the two hand-drawn white masters in resources/:
  *   tray-icon-32.png (32x32) and tray-icon-16.png (16x16).
  * Only their ALPHA channel is used — the glyph colour is painted here, so the
  * masters stay a single monochrome silhouette and colour lives in one place.
  *
- * Emits two multi-size .ico files containing 16/20/24/32 px, the sizes Electron
+ * Emits multi-size .ico files containing 16/20/24/32 px, the sizes Electron
  * documents for Windows small icons at 100/125/150/200% DPI:
- *   resources/tray-icon-light.ico  — dark glyph, for a LIGHT taskbar
- *   resources/tray-icon-dark.ico   — white glyph, for a DARK taskbar
+ *   resources/tray-icon-light.ico      — dark glyph, for a LIGHT taskbar
+ *   resources/tray-icon-dark.ico       — white glyph, for a DARK taskbar
+ *   resources/tray-icon-light-rec.ico  — light-theme glyph + red recording dot
+ *   resources/tray-icon-dark-rec.ico   — dark-theme glyph + red recording dot
+ *
+ * Also stamps the same red dot onto each size in build/icon.ico and writes
+ * build/icon-rec.ico (taskbar / window icon while recording).
  *
  * The suffix names the THEME THE ICON IS FOR, not the glyph colour.
  *
@@ -21,13 +27,18 @@ const fs = require('fs')
 const path = require('path')
 const zlib = require('zlib')
 
-const RESOURCES = path.join(__dirname, '..', 'resources')
+const ROOT = path.join(__dirname, '..')
+const RESOURCES = path.join(ROOT, 'resources')
+const BUILD = path.join(ROOT, 'build')
 
 /** Glyph colour per taskbar theme. Change these to restyle both icons. */
 const GLYPH = {
   light: { r: 0x1f, g: 0x1f, b: 0x1f }, // near-black on a light taskbar
   dark: { r: 0xff, g: 0xff, b: 0xff } //  white on a dark taskbar
 }
+
+/** Recording indicator. Same red on every icon so idle/recording is a clean swap. */
+const REC_DOT = { r: 0xe0, g: 0x2b, b: 0x2b }
 
 /** Sizes Windows asks for at 100/125/150/200% DPI. */
 const SIZES = [16, 20, 24, 32]
@@ -51,9 +62,12 @@ function crc32(buf) {
   return (c ^ -1) >>> 0
 }
 
-/** Decode an 8-bit RGBA PNG and return just its alpha mask. */
-function readAlphaMask(file) {
-  const buf = fs.readFileSync(file)
+/**
+ * Decode an 8-bit RGB or RGBA PNG to a tightly packed RGBA buffer.
+ * RGB (colour type 2) is expanded with opaque alpha — that is how build/icon.ico
+ * stores the app icon.
+ */
+function decodePng(buf, label) {
   let off = 8
   let width = 0
   let height = 0
@@ -67,7 +81,7 @@ function readAlphaMask(file) {
     if (type === 'IHDR') {
       width = data.readUInt32BE(0)
       height = data.readUInt32BE(4)
-      if (data[8] !== 8) throw new Error(`${file}: expected 8-bit depth, got ${data[8]}`)
+      if (data[8] !== 8) throw new Error(`${label}: expected 8-bit depth, got ${data[8]}`)
       colorType = data[9]
     } else if (type === 'IDAT') {
       idat.push(data)
@@ -77,14 +91,15 @@ function readAlphaMask(file) {
     off += 12 + len
   }
 
-  if (colorType !== 6) throw new Error(`${file}: expected RGBA (colour type 6), got ${colorType}`)
+  if (colorType !== 2 && colorType !== 6) {
+    throw new Error(`${label}: expected RGB or RGBA, got colour type ${colorType}`)
+  }
 
-  const channels = 4
+  const channels = colorType === 6 ? 4 : 3
   const stride = width * channels
   const raw = zlib.inflateSync(Buffer.concat(idat))
   const pixels = Buffer.alloc(height * stride)
 
-  // Undo the per-scanline PNG filters.
   let pos = 0
   for (let y = 0; y < height; y++) {
     const filter = raw[pos++]
@@ -116,15 +131,30 @@ function readAlphaMask(file) {
           break
         }
         default:
-          throw new Error(`${file}: unsupported PNG filter ${filter}`)
+          throw new Error(`${label}: unsupported PNG filter ${filter}`)
       }
       pixels[y * stride + x] = out & 0xff
     }
     pos += stride
   }
 
+  if (channels === 4) return { width, height, rgba: pixels }
+
+  const rgba = Buffer.alloc(width * height * 4)
+  for (let i = 0; i < width * height; i++) {
+    rgba[i * 4] = pixels[i * 3]
+    rgba[i * 4 + 1] = pixels[i * 3 + 1]
+    rgba[i * 4 + 2] = pixels[i * 3 + 2]
+    rgba[i * 4 + 3] = 0xff
+  }
+  return { width, height, rgba }
+}
+
+/** Decode an 8-bit RGBA PNG and return just its alpha mask. */
+function readAlphaMask(file) {
+  const { width, height, rgba } = decodePng(fs.readFileSync(file), file)
   const alpha = new Uint8Array(width * height)
-  for (let i = 0; i < width * height; i++) alpha[i] = pixels[i * 4 + 3]
+  for (let i = 0; i < width * height; i++) alpha[i] = rgba[i * 4 + 3]
   return { width, height, alpha }
 }
 
@@ -180,20 +210,14 @@ function chunk(type, data) {
   return Buffer.concat([len, typeAndData, crc])
 }
 
-/** Paint `colour` through `alpha` and encode as an 8-bit RGBA PNG. */
-function encodePng(size, alpha, colour) {
+/** Encode a tightly packed RGBA buffer as an 8-bit RGBA PNG (filter none). */
+function encodePngFromRgba(size, rgba) {
   const stride = size * 4
   const raw = Buffer.alloc(size * (stride + 1))
   for (let y = 0; y < size; y++) {
     const rowStart = y * (stride + 1)
-    raw[rowStart] = 0 // filter: none — tiny images, keeps this readable
-    for (let x = 0; x < size; x++) {
-      const o = rowStart + 1 + x * 4
-      raw[o] = colour.r
-      raw[o + 1] = colour.g
-      raw[o + 2] = colour.b
-      raw[o + 3] = alpha[y * size + x]
-    }
+    raw[rowStart] = 0
+    rgba.copy(raw, rowStart + 1, y * stride, y * stride + stride)
   }
 
   const ihdr = Buffer.alloc(13)
@@ -211,6 +235,48 @@ function encodePng(size, alpha, colour) {
     chunk('IDAT', zlib.deflateSync(raw, { level: 9 })),
     chunk('IEND', Buffer.alloc(0))
   ])
+}
+
+/** Paint `colour` through `alpha` and encode as an 8-bit RGBA PNG. */
+function encodePng(size, alpha, colour) {
+  return encodePngFromRgba(size, paintGlyphRgba(size, alpha, colour))
+}
+
+function paintGlyphRgba(size, alpha, colour) {
+  const rgba = Buffer.alloc(size * size * 4)
+  for (let i = 0; i < size * size; i++) {
+    const o = i * 4
+    rgba[o] = colour.r
+    rgba[o + 1] = colour.g
+    rgba[o + 2] = colour.b
+    rgba[o + 3] = alpha[i]
+  }
+  return rgba
+}
+
+/**
+ * Composite a recording dot in the bottom-right. Coverage is a cheap analytic
+ * anti-alias so 16px tray sizes still read as a circle rather than a square.
+ */
+function overlayRedDot(width, height, rgba) {
+  const short = Math.min(width, height)
+  const radius = Math.max(2, short * 0.16)
+  const inset = Math.max(0.75, short * 0.07)
+  const cx = width - inset - radius
+  const cy = height - inset - radius
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const cover = Math.max(0, Math.min(1, radius + 0.5 - Math.hypot(x + 0.5 - cx, y + 0.5 - cy)))
+      if (cover <= 0) continue
+      const o = (y * width + x) * 4
+      const ia = 1 - cover
+      rgba[o] = Math.round(REC_DOT.r * cover + rgba[o] * ia)
+      rgba[o + 1] = Math.round(REC_DOT.g * cover + rgba[o + 1] * ia)
+      rgba[o + 2] = Math.round(REC_DOT.b * cover + rgba[o + 2] * ia)
+      rgba[o + 3] = Math.max(rgba[o + 3], Math.round(255 * cover))
+    }
+  }
 }
 
 // ---------------------------------------------------------------- ICO encode
@@ -241,9 +307,34 @@ function encodeIco(entries) {
   return Buffer.concat([header, directory, ...entries.map((e) => e.png)])
 }
 
+function readIcoPngs(file) {
+  const buf = fs.readFileSync(file)
+  if (buf.readUInt16LE(0) !== 0 || buf.readUInt16LE(2) !== 1) {
+    throw new Error(`${file}: not an ICO`)
+  }
+  const count = buf.readUInt16LE(4)
+  const entries = []
+  for (let i = 0; i < count; i++) {
+    const at = 6 + i * 16
+    const length = buf.readUInt32LE(at + 8)
+    const offset = buf.readUInt32LE(at + 12)
+    const png = buf.subarray(offset, offset + length)
+    const decoded = decodePng(png, `${file}#${i}`)
+    if (decoded.width !== decoded.height) {
+      throw new Error(`${file}#${i}: expected a square PNG, got ${decoded.width}x${decoded.height}`)
+    }
+    entries.push(decoded)
+  }
+  return entries
+}
+
+function rel(file) {
+  return path.relative(ROOT, file)
+}
+
 // --------------------------------------------------------------------- main
 
-function main() {
+function writeTrayIcons() {
   const master32 = readAlphaMask(path.join(RESOURCES, 'tray-icon-32.png'))
   const master16 = readAlphaMask(path.join(RESOURCES, 'tray-icon-16.png'))
 
@@ -258,19 +349,51 @@ function main() {
   }))
 
   for (const [theme, colour] of Object.entries(GLYPH)) {
-    const ico = encodeIco(
+    const idle = encodeIco(
       masks.map(({ size, alpha }) => ({ size, png: encodePng(size, alpha, colour) }))
     )
-    const target = path.join(RESOURCES, `tray-icon-${theme}.ico`)
-    fs.writeFileSync(target, ico)
+    const idleTarget = path.join(RESOURCES, `tray-icon-${theme}.ico`)
+    fs.writeFileSync(idleTarget, idle)
+
+    const rec = encodeIco(
+      masks.map(({ size, alpha }) => {
+        const rgba = paintGlyphRgba(size, alpha, colour)
+        overlayRedDot(size, size, rgba)
+        return { size, png: encodePngFromRgba(size, rgba) }
+      })
+    )
+    const recTarget = path.join(RESOURCES, `tray-icon-${theme}-rec.ico`)
+    fs.writeFileSync(recTarget, rec)
+
     const hex = `#${colour.r.toString(16).padStart(2, '0')}${colour.g
       .toString(16)
       .padStart(2, '0')}${colour.b.toString(16).padStart(2, '0')}`
     console.log(
-      `wrote ${path.relative(path.join(__dirname, '..'), target)} ` +
-        `(${SIZES.join('/')}px, glyph ${hex}, ${ico.length} bytes)`
+      `wrote ${rel(idleTarget)} and ${rel(recTarget)} ` +
+        `(${SIZES.join('/')}px, glyph ${hex}, idle ${idle.length}b / rec ${rec.length}b)`
     )
   }
+}
+
+function writeAppIconRec() {
+  const src = path.join(BUILD, 'icon.ico')
+  const target = path.join(BUILD, 'icon-rec.ico')
+  const entries = readIcoPngs(src)
+  const rec = encodeIco(
+    entries.map(({ width, height, rgba }) => {
+      overlayRedDot(width, height, rgba)
+      return { size: width, png: encodePngFromRgba(width, rgba) }
+    })
+  )
+  fs.writeFileSync(target, rec)
+  console.log(
+    `wrote ${rel(target)} (from ${rel(src)}, ${entries.map((e) => e.width).join('/')}px, ${rec.length} bytes)`
+  )
+}
+
+function main() {
+  writeTrayIcons()
+  writeAppIconRec()
 }
 
 main()

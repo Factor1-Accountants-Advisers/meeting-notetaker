@@ -71,9 +71,15 @@ export function resolveTrayTheme(signals: TrayThemeSignals): TrayTheme {
   return signals.electronPrefersDark ? 'dark' : 'light'
 }
 
-/** Icon filename for a taskbar theme. Both live in resources/. */
-export function trayIconFileName(theme: TrayTheme): string {
-  return `tray-icon-${theme}.ico`
+/** Idle vs recording (red-dot) tray asset. */
+export type TrayIconVariant = 'idle' | 'recording'
+
+/** Icon filename for a taskbar theme. All four live in resources/. */
+export function trayIconFileName(
+  theme: TrayTheme,
+  variant: TrayIconVariant = 'idle'
+): string {
+  return variant === 'recording' ? `tray-icon-${theme}-rec.ico` : `tray-icon-${theme}.ico`
 }
 
 export interface TrayIconPaths {
@@ -91,11 +97,33 @@ export interface TrayIconPaths {
  * Packaged: electron-builder copies resources/ entries to resourcesPath root.
  * Dev: out/main/../../resources — matches how IN-472 resolved the old PNG.
  */
-export function trayIconPath(theme: TrayTheme, paths: TrayIconPaths): string {
-  const file = trayIconFileName(theme)
+export function trayIconPath(
+  theme: TrayTheme,
+  paths: TrayIconPaths,
+  variant: TrayIconVariant = 'idle'
+): string {
+  const file = trayIconFileName(theme, variant)
   return paths.isPackaged
     ? join(paths.resourcesPath, file)
     : join(paths.mainDir, '..', '..', 'resources', file)
+}
+
+/** Packaged extraResources name for the window / taskbar icon. */
+export function appIconFileName(recording: boolean): string {
+  return recording ? 'app-icon-rec.ico' : 'app-icon.ico'
+}
+
+/**
+ * Absolute path to the window / taskbar icon.
+ *
+ * Packaged: extraResources copies of build/icon.ico and build/icon-rec.ico.
+ * Dev: the files in build/, next to the electron-builder icon.
+ */
+export function appIconPath(recording: boolean, paths: TrayIconPaths): string {
+  if (paths.isPackaged) {
+    return join(paths.resourcesPath, appIconFileName(recording))
+  }
+  return join(paths.mainDir, '..', '..', 'build', recording ? 'icon-rec.ico' : 'icon.ico')
 }
 
 /**

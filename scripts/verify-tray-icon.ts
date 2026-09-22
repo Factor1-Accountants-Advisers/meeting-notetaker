@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import zlib from 'node:zlib'
 import {
+  appIconFileName,
+  appIconPath,
   parseRegDword,
   resolveTrayTheme,
   trayIconFileName,
@@ -30,6 +32,7 @@ interface IcoEntry {
   size: number
   visiblePixels: number
   partialAlphaPixels: number
+  redPixels: number
   colours: Set<string>
   meanLuminance: number
 }
@@ -48,7 +51,7 @@ function readIco(file: string): IcoEntry[] {
   const entries: IcoEntry[] = []
   for (let i = 0; i < count; i++) {
     const at = 6 + i * 16
-    const declaredSize = buf[at]
+    const declaredSize = buf[at] === 0 ? 256 : buf[at]
     const length = buf.readUInt32LE(at + 8)
     const offset = buf.readUInt32LE(at + 12)
     const png = buf.subarray(offset, offset + length)
@@ -85,6 +88,7 @@ function readIco(file: string): IcoEntry[] {
     const stride = width * 4
     let visiblePixels = 0
     let partialAlphaPixels = 0
+    let redPixels = 0
     let luminanceSum = 0
     const colours = new Set<string>()
 
@@ -99,6 +103,7 @@ function readIco(file: string): IcoEntry[] {
         visiblePixels++
         colours.add(`${r},${g},${b}`)
         luminanceSum += 0.2126 * r + 0.7152 * g + 0.0722 * b
+        if (isRecordingRed(r, g, b)) redPixels++
       }
     }
 
@@ -106,6 +111,7 @@ function readIco(file: string): IcoEntry[] {
       size: width,
       visiblePixels,
       partialAlphaPixels,
+      redPixels,
       colours,
       meanLuminance: visiblePixels > 0 ? luminanceSum / visiblePixels : 0
     })
@@ -113,10 +119,18 @@ function readIco(file: string): IcoEntry[] {
   return entries
 }
 
+function isRecordingRed(r: number, g: number, b: number): boolean {
+  return r >= 160 && g <= 90 && b <= 90 && r > g + 40 && r > b + 40
+}
+
 async function main(): Promise<void> {
   // ---------------------------------------------------------------- 1. paths
   assert.equal(trayIconFileName('light'), 'tray-icon-light.ico')
   assert.equal(trayIconFileName('dark'), 'tray-icon-dark.ico')
+  assert.equal(trayIconFileName('light', 'recording'), 'tray-icon-light-rec.ico')
+  assert.equal(trayIconFileName('dark', 'recording'), 'tray-icon-dark-rec.ico')
+  assert.equal(appIconFileName(false), 'app-icon.ico')
+  assert.equal(appIconFileName(true), 'app-icon-rec.ico')
 
   assert.equal(
     trayIconPath('dark', {
@@ -135,6 +149,37 @@ async function main(): Promise<void> {
     }),
     join('C:', 'repo', 'resources', 'tray-icon-light.ico'),
     'dev builds resolve out/main/../../resources'
+  )
+  assert.equal(
+    trayIconPath(
+      'dark',
+      {
+        isPackaged: true,
+        resourcesPath: join('C:', 'app', 'resources'),
+        mainDir: join('C:', 'app', 'resources', 'app.asar', 'out', 'main')
+      },
+      'recording'
+    ),
+    join('C:', 'app', 'resources', 'tray-icon-dark-rec.ico'),
+    'packaged recording tray icons are extraResources next to the idle pair'
+  )
+  assert.equal(
+    appIconPath(true, {
+      isPackaged: true,
+      resourcesPath: join('C:', 'app', 'resources'),
+      mainDir: join('C:', 'unused')
+    }),
+    join('C:', 'app', 'resources', 'app-icon-rec.ico'),
+    'packaged window recording icon is extraResources app-icon-rec.ico'
+  )
+  assert.equal(
+    appIconPath(false, {
+      isPackaged: false,
+      resourcesPath: join('C:', 'unused'),
+      mainDir: join('C:', 'repo', 'out', 'main')
+    }),
+    join('C:', 'repo', 'build', 'icon.ico'),
+    'dev window icon is build/icon.ico'
   )
 
   // ------------------------------------------------------- 2. REG_DWORD parse
@@ -161,6 +206,7 @@ async function main(): Promise<void> {
   // Assets first: they are independent of the resolver, so they keep reporting
   // while resolveTrayTheme is still being written.
   checkAssets()
+  checkRecordingAssets()
   checkResolver()
 
   console.log('Tray icon verification passed')
@@ -267,6 +313,11 @@ function checkAssets(): void {
         `${theme} @${entry.size}: icon is fully transparent — nothing would render`
       )
       assert.equal(
+        entry.redPixels,
+        0,
+        `${theme} @${entry.size}: idle icon must not contain the recording dot`
+      )
+      assert.equal(
         entry.colours.size,
         1,
         `${theme} @${entry.size}: glyph must be a single flat colour, got ${entry.colours.size}`
@@ -313,6 +364,56 @@ function checkAssets(): void {
       )
     }
   }
+}
+
+/** Recording (red-dot) twins — same sizes as idle, actually contain red, and differ. */
+function checkRecordingAssets(): void {
+  const expectedSizes = [16, 20, 24, 32]
+  const buildDir = join(__dirname, '..', 'build')
+
+  for (const theme of ['light', 'dark'] as const) {
+    const idleFile = join(RESOURCES, trayIconFileName(theme, 'idle'))
+    const recFile = join(RESOURCES, trayIconFileName(theme, 'recording'))
+    const recEntries = readIco(recFile)
+
+    assert.deepEqual(
+      recEntries.map((e) => e.size),
+      expectedSizes,
+      `${theme} rec: must ship 16/20/24/32 px for 100/125/150/200% DPI`
+    )
+
+    for (const entry of recEntries) {
+      assert.ok(
+        entry.visiblePixels > 0,
+        `${theme} rec @${entry.size}: icon is fully transparent`
+      )
+      assert.ok(
+        entry.redPixels > 0,
+        `${theme} rec @${entry.size}: missing the red recording dot (${entry.redPixels} red pixels)`
+      )
+    }
+
+    const idleBytes = readFileSync(idleFile)
+    const recBytes = readFileSync(recFile)
+    assert.ok(!idleBytes.equals(recBytes), `${theme}: recording tray icon is identical to idle`)
+  }
+
+  const appRec = readIco(join(buildDir, 'icon-rec.ico'))
+  assert.deepEqual(
+    appRec.map((e) => e.size),
+    [16, 32, 48, 64, 128, 256],
+    'icon-rec.ico must keep the same sizes as build/icon.ico'
+  )
+  for (const entry of appRec) {
+    assert.ok(
+      entry.redPixels > 0,
+      `icon-rec.ico @${entry.size}: missing the red recording dot`
+    )
+  }
+
+  const idleApp = readFileSync(join(buildDir, 'icon.ico'))
+  const recApp = readFileSync(join(buildDir, 'icon-rec.ico'))
+  assert.ok(!idleApp.equals(recApp), 'icon-rec.ico is identical to icon.ico')
 }
 
 void main().catch((error) => {

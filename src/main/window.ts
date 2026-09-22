@@ -1,8 +1,9 @@
-import { app, BrowserWindow, ipcMain, nativeTheme, screen, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeImage, nativeTheme, screen, shell } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { logger } from './logger'
-import { setMainWindow } from './recording-ipc'
+import { getRecordingStateMachine, setMainWindow } from './recording-ipc'
+import { appIconPath } from './tray-icon'
 
 interface CreateWindowOptions {
   showOnReady?: boolean
@@ -46,7 +47,7 @@ export function createWindow(options: CreateWindowOptions = {}): void {
     titleBarStyle: 'hidden',
     titleBarOverlay: titleBarOverlay(initialTheme),
     backgroundColor: windowBackground(initialTheme),
-    icon: join(__dirname, '../../build/icon.ico'),
+    icon: loadWindowIcon(false),
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
       sandbox: false,
@@ -56,6 +57,7 @@ export function createWindow(options: CreateWindowOptions = {}): void {
 
   // Expose the window for main→renderer IPC (recording commands, etc.)
   setMainWindow(mainWindow)
+  setWindowRecordingIcon(getRecordingStateMachine().getState() === 'recording')
   mainWindow.center()
 
   mainWindow.on('ready-to-show', () => {
@@ -130,6 +132,36 @@ export function registerWindowSizingIpc(): void {
     targetWindow.setTitleBarOverlay(titleBarOverlay(theme))
     targetWindow.setBackgroundColor(windowBackground(theme))
   })
+}
+
+function windowIconFilePath(recording: boolean): string {
+  return appIconPath(recording, {
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    mainDir: __dirname
+  })
+}
+
+function loadWindowIcon(recording: boolean): Electron.NativeImage {
+  const iconPath = windowIconFilePath(recording)
+  try {
+    const icon = nativeImage.createFromPath(iconPath)
+    if (!icon.isEmpty()) return icon
+  } catch {
+    // Fall through to the idle path / empty image.
+  }
+  if (recording) return loadWindowIcon(false)
+  logger().warn('[window] app icon not found', { path: iconPath })
+  return nativeImage.createEmpty()
+}
+
+/** Swap the taskbar / window icon when recording starts or stops. */
+export function setWindowRecordingIcon(recording: boolean): void {
+  const icon = loadWindowIcon(recording)
+  if (icon.isEmpty()) return
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.setIcon(icon)
+  }
 }
 
 function safeOrigin(url: string): string {
