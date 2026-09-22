@@ -19,6 +19,7 @@ from uuid import UUID
 
 from app import store
 from app.config import get_settings
+from app.paths import audio_dir
 from app.schemas import (
     AccessRole,
     BlobStatus,
@@ -30,14 +31,13 @@ from app.schemas import (
     PipelineStage,
     PipelineStatus,
 )
-from app.paths import audio_dir
 from app.services import audio_checks
 from app.services.blob_delivery import deliver_meeting_to_blob
 from app.services.context_file import get_company_context
 from app.services.failure_reasons import (
+    USER_SENTENCES,
     FailureCategory,
     FailureReason,
-    USER_SENTENCES,
     classify,
     log_delivery_failure,
 )
@@ -49,8 +49,8 @@ from app.services.llm import (
 )
 from app.services.meeting_export import derive_meeting_type, refresh_meeting_export
 from app.services.meeting_voiceprints import resolve_meeting_voiceprints
-from app.services.speech import get_speech_provider
 from app.services.speaker_matching import get_speaker_matcher
+from app.services.speech import get_speech_provider
 
 logger = logging.getLogger(__name__)
 

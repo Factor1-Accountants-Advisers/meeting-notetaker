@@ -22,13 +22,14 @@ from app.services.audio_checks import find_ffmpeg
 logger = logging.getLogger(__name__)
 from app.schemas import (
     AccessRole,
-    BlobStatus,
     AuditEntry,
+    BlobStatus,
     DeliveryStatus,
     EditSegmentRequest,
     EmailRequest,
     EmailResult,
     GrantAccessRequest,
+    InviteeCandidate,
     InviteeDecision,
     InviteeDecisionRequest,
     InviteeDeliveryStatus,
@@ -44,6 +45,7 @@ from app.schemas import (
     SharePointStatus,
     UploadAudioRequest,
 )
+from app.services.blob_delivery import kick_blob_delivery
 from app.services.email import (
     EmailDeliveryUnconfirmed,
     build_meeting_notes_email_html,
@@ -57,6 +59,14 @@ from app.services.failure_reasons import (
     log_delivery_failure,
 )
 from app.services.meeting_export import refresh_meeting_export
+from app.services.pipeline import (
+    audio_path_for,
+    kick_pipeline,
+    mic_track_path,
+    set_delivery_state,
+    set_invitee_delivery_state,
+    set_pipeline_state,
+)
 from app.services.recipient_policy import (
     DELIVERY_MODE_ATTENDEES,
     delivery_mode,
@@ -65,20 +75,11 @@ from app.services.recipient_policy import (
     invitees_approved,
     prompt_enabled,
 )
-from app.services.blob_delivery import kick_blob_delivery
 from app.services.sharepoint import (
     get_sharepoint_provider,
     safe_owner_folder,
     safe_summary_filename,
     safe_transcript_filename,
-)
-from app.services.pipeline import (
-    audio_path_for,
-    kick_pipeline,
-    mic_track_path,
-    set_delivery_state,
-    set_invitee_delivery_state,
-    set_pipeline_state,
 )
 
 Actor = Header("Unknown user", alias="X-MN-User")
@@ -903,7 +904,17 @@ async def email_notes(
             "Transcript email is already being sent for this meeting",
         )
 
-    recipients = _email_recipients(meeting, body.recorder_email)
+    # Resolved ONCE and shared: invitee_candidates logs a WARNING per blocked
+    # address (the "who did we nearly email" audit trail), and resolving it
+    # twice for one send doubled every one of those lines.
+    approved_candidates = (
+        invitee_candidates(meeting, body.recorder_email, channel="email")
+        if invitees_approved(meeting)
+        else []
+    )
+    recipients = _email_recipients(
+        meeting, body.recorder_email, candidates=approved_candidates
+    )
     if not recipients:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -911,15 +922,9 @@ async def email_notes(
         )
     # The invitees riding on this first send. Empty unless approved, which is
     # what keeps the invitee machine untouched for an organiser-only send.
-    invitee_subset = (
-        [
-            candidate.email
-            for candidate in invitee_candidates(meeting, body.recorder_email, channel="email")
-            if candidate.email in recipients
-        ]
-        if invitees_approved(meeting)
-        else []
-    )
+    invitee_subset = [
+        candidate.email for candidate in approved_candidates if candidate.email in recipients
+    ]
     if not graph_token:
         reason = FailureReason.for_category(
             FailureCategory.azure_signin, detail="signin_check"
@@ -1242,7 +1247,12 @@ def _normalise_email(email: str | None) -> str | None:
     return cleaned
 
 
-def _email_recipients(meeting: Meeting, recorder_email: str | None) -> list[str]:
+def _email_recipients(
+    meeting: Meeting,
+    recorder_email: str | None,
+    *,
+    candidates: list[InviteeCandidate] | None = None,
+) -> list[str]:
     """Resolve Jira IN-93/IN-94 recipients under the IN-488 delivery rule.
 
     The organiser and the signed-in recorder always receive the transcript:
@@ -1260,6 +1270,10 @@ def _email_recipients(meeting: Meeting, recorder_email: str | None) -> list[str]
     external invitee received the summary and the full transcript (see
     app/services/recipient_policy.py). First-seen order, deduped
     case-insensitively.
+
+    ``candidates`` lets a caller that has already resolved the invitee list
+    hand it over: resolving it twice for one send doubles the
+    ``recipient_blocked`` WARNING each dropped address gets.
     """
     recipients: list[str] = []
 
@@ -1269,7 +1283,12 @@ def _email_recipients(meeting: Meeting, recorder_email: str | None) -> list[str]
             recipients.append(email)
 
     if invitees_approved(meeting):
-        for candidate in invitee_candidates(meeting, recorder_email, channel="email"):
+        resolved = (
+            invitee_candidates(meeting, recorder_email, channel="email")
+            if candidates is None
+            else candidates
+        )
+        for candidate in resolved:
             _add(candidate.email)
 
     # The organiser always receives their own transcript, even when absent
@@ -1310,6 +1329,7 @@ def _sharepoint_recipients(meeting: Meeting) -> list[str]:
             recipients.append(email)
 
     if invitees_approved(meeting):
+        # No recorder_email here: the uploader already has access, and a self-grant is harmless (pre-IN-488 behaviour).
         for candidate in invitee_candidates(meeting, channel="sharepoint"):
             _add(candidate.email)
 

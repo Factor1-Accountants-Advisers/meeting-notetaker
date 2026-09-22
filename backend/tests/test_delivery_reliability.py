@@ -12,9 +12,6 @@ from fastapi import HTTPException
 from app import store
 from app.config import get_settings
 from app.routers import meetings as meetings_router
-from app.services import sharepoint
-from app.services.email import EmailDeliveryUnconfirmed
-from app.services.failure_reasons import FailureCategory, USER_SENTENCES
 from app.schemas import (
     AccessRole,
     ActionItem,
@@ -31,6 +28,9 @@ from app.schemas import (
     SharePointStatus,
     TranscriptSegment,
 )
+from app.services import sharepoint
+from app.services.email import EmailDeliveryUnconfirmed
+from app.services.failure_reasons import USER_SENTENCES, FailureCategory
 
 
 def _delivery_mode(value: str):
@@ -521,10 +521,10 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_sharepoint_configured_drive_no_token_returns_401(self):
         """D1: configured SharePoint drive + missing token → 401."""
-        from app.config import get_settings
-
         # Temporarily set sharepoint_drive_id via env
         import os
+
+        from app.config import get_settings
         os.environ["MN_SHAREPOINT_DRIVE_ID"] = "fake-drive-id"
         get_settings.cache_clear()
         try:
@@ -580,8 +580,10 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
             [["benjamin@factor1.com.au"], ["benjamin@factor1.com.au"]],
         )
         # A PUT by path: the same two files are overwritten, not duplicated.
+        # The folder is half the path, so compare it too.
         self.assertEqual(
-            [u["filename"] for u in uploads[:2]], [u["filename"] for u in uploads[2:]]
+            [(u["owner_folder"], u["filename"]) for u in uploads[:2]],
+            [(u["owner_folder"], u["filename"]) for u in uploads[2:]],
         )
 
 
