@@ -167,3 +167,35 @@ keys without reinstalling, drop an override file on each machine:
   - A watch registered after a call has already started is blind to that
     call's join signal — the user only gets the start+2 min prompt, not
     an automatic start, for that meeting.
+
+## Invitee email prompt (IN-488)
+
+When notes are ready, the recording owner is asked **Email invitees** or
+**Just me**, as a Windows toast and as a card on Home at the same time. Nothing
+is saved to SharePoint or emailed until they answer. No answer in 2 minutes
+counts as **Just me**. A "Just me" meeting keeps a **Send to N invitees**
+button on its card; using it emails the invitees only, never the owner again.
+If the app is closed while it is waiting, the question comes back as a card on
+the next launch (meetings from the last 7 days).
+
+`MN_DELIVERY_RECIPIENTS` is the delivery mode:
+
+| Value | Behaviour |
+|---|---|
+| `ask` | Code default. The prompt flow above. |
+| `organizer` | **Kill switch.** Never ask, owner only: exactly v2.0.29–v2.0.39. Also removes "Send to N invitees" and ignores any approval already stored. |
+| `attendees` | Invitees always receive it; nobody is asked. |
+| anything else, or blank | Treated as `organizer`. |
+
+- **Kill switch, one machine, no release:** put `MN_DELIVERY_RECIPIENTS=organizer`
+  in `%PROGRAMDATA%\Factor1\MeetingNotetaker\backend.env` and restart the app
+  (the same layer as the auto-record trigger's kill switch).
+- **Kill switch, fleet:** set the `MN_DELIVERY_RECIPIENTS` repo variable to
+  `organizer` and cut a release. Flipping it back to `ask` restores any stored
+  approvals.
+- **Check on release day:** `gh variable list` must show no
+  `MN_DELIVERY_RECIPIENTS` (or `ask`), otherwise the release ships with the
+  prompt off. The release log prints the mode.
+- **Field signal:** grep `[invitee-prompt]` in a problem report's `main.log`
+  (`shown` / `answered` / `timeout` / `stale-click`). If `timeout` dominates,
+  the toast is being missed or 2 minutes is too short; both are one constant.
