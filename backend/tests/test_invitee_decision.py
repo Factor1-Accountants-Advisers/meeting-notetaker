@@ -8,18 +8,25 @@ already received theirs.
 """
 
 import asyncio
+import json
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
+from fastapi import HTTPException
+
 from app import store
+from app.config import get_settings
+from app.paths import snapshot_path
+from app.routers import meetings as meetings_router
 from app.schemas import (
     AccessRole,
     DeliveryStatus,
     EmailResult,
     InviteeDecision,
+    InviteeDecisionRequest,
     InviteeDeliveryStatus,
     ManualMeetingAttendee,
     Meeting,
@@ -36,6 +43,11 @@ from app.services.pipeline import (
     set_delivery_state,
     set_invitee_delivery_state,
 )
+
+
+def _mode(value: str):
+    override = get_settings().model_copy(update={"delivery_recipients": value})
+    return patch("app.services.recipient_policy.get_settings", return_value=override)
 
 
 class InviteeStateSchemaTests(unittest.TestCase):
@@ -216,6 +228,124 @@ class InviteeDeliveryStateTests(_StoreIsolatedTestCase):
         meeting = self._meeting()
         self.assertIs(meeting.invitee_decision, InviteeDecision.pending)
         self.assertIs(meeting.invitee_delivery_status, InviteeDeliveryStatus.not_started)
+
+
+class InviteeEndpointTests(_StoreIsolatedTestCase):
+    async def _get(self, actor="Joseph"):
+        return await meetings_router.get_invitees(
+            self.meeting_id, recorder_email="joseph@factor1.com.au", actor=actor
+        )
+
+    async def _decide(self, approved: bool, source: str = "app", actor="Joseph"):
+        return await meetings_router.record_invitee_decision(
+            self.meeting_id,
+            InviteeDecisionRequest(approved=approved, source=source),
+            actor=actor,
+        )
+
+    def _decision_audits(self):
+        return [
+            a for a in store.AUDIT_LOG
+            if a.action == "meeting.invitee_decision" and a.meeting_id == self.meeting_id
+        ]
+
+    async def test_get_reports_candidates_and_pending_in_ask_mode(self):
+        with _mode("ask"):
+            state = await self._get()
+        self.assertEqual(
+            [(c.name, c.email) for c in state.candidates],
+            [("David Ahlhaus", "da@factor1.com.au"), ("Mel Tran", "mel@factor1.com.au")],
+        )
+        self.assertIs(state.decision, InviteeDecision.pending)
+        self.assertIs(state.invitee_delivery_status, InviteeDeliveryStatus.not_started)
+        self.assertEqual(state.invitee_recipients, [])
+        self.assertTrue(state.prompt_enabled)
+
+    async def test_get_reports_the_effective_decision_per_mode(self):
+        with _mode("attendees"):
+            state = await self._get()
+            self.assertIs(state.decision, InviteeDecision.approved)
+            self.assertFalse(state.prompt_enabled)
+        with _mode("organizer"):
+            state = await self._get()
+            # The stored value is reported as is; prompt_enabled=False is what
+            # tells the desktop not to ask and not to offer "Send to N".
+            self.assertIs(state.decision, InviteeDecision.pending)
+            self.assertFalse(state.prompt_enabled)
+
+    async def test_get_is_owner_only(self):
+        store.ACCESS[self.meeting_id] = [
+            MeetingAccessEntry(user="Joseph", role=AccessRole.owner),
+            MeetingAccessEntry(user="Editor", role=AccessRole.editor),
+        ]
+        with self.assertRaises(HTTPException) as raised:
+            await self._get(actor="Editor")
+        self.assertEqual(raised.exception.status_code, 403)
+        with self.assertRaises(HTTPException) as raised:
+            await self._get(actor="Stranger")
+        self.assertEqual(raised.exception.status_code, 404)
+
+    async def test_pending_to_approved_is_audited_with_its_source(self):
+        meeting = await self._decide(True, source="toast")
+        self.assertIs(meeting.invitee_decision, InviteeDecision.approved)
+        audits = self._decision_audits()
+        self.assertEqual(len(audits), 1)
+        self.assertEqual(audits[0].before, "pending")
+        self.assertEqual(audits[0].after, "approved (toast)")
+
+    async def test_timeout_is_stored_as_declined(self):
+        meeting = await self._decide(False, source="timeout")
+        self.assertIs(meeting.invitee_decision, InviteeDecision.declined)
+        self.assertEqual(self._decision_audits()[0].after, "declined (timeout)")
+
+    async def test_declined_to_approved_is_the_send_later_path(self):
+        await self._decide(False, source="timeout")
+        meeting = await self._decide(True, source="app")
+        self.assertIs(meeting.invitee_decision, InviteeDecision.approved)
+        self.assertEqual(len(self._decision_audits()), 2)
+
+    async def test_repeating_the_same_answer_is_a_silent_no_op(self):
+        await self._decide(True)
+        await self._decide(True)
+        self.assertEqual(len(self._decision_audits()), 1)
+
+    async def test_approved_is_final(self):
+        # Q4: a timeout (or a decline) that reaches the backend after an
+        # approve is rejected, whether or not the send has finished.
+        await self._decide(True, source="app")
+        with self.assertRaises(HTTPException) as raised:
+            await self._decide(False, source="timeout")
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIs(self._meeting().invitee_decision, InviteeDecision.approved)
+
+    async def test_decision_is_persisted_on_its_own_request(self):
+        # "Backend unreachable mid-pass" must not lose the answer: it hits disk
+        # here, not when the snapshot middleware runs after some later call.
+        await self._decide(True)
+        data = json.loads(snapshot_path().read_text(encoding="utf-8"))
+        self.assertEqual(
+            data["meetings"][str(self.meeting_id)]["invitee_decision"], "approved"
+        )
+
+    async def test_decision_is_owner_only(self):
+        store.ACCESS[self.meeting_id] = [
+            MeetingAccessEntry(user="Joseph", role=AccessRole.owner),
+            MeetingAccessEntry(user="Editor", role=AccessRole.editor),
+        ]
+        with self.assertRaises(HTTPException) as raised:
+            await self._decide(True, actor="Editor")
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertIs(self._meeting().invitee_decision, InviteeDecision.pending)
+
+    async def test_unknown_meeting_is_404(self):
+        with self.assertRaises(HTTPException) as raised:
+            await meetings_router.get_invitees(uuid4(), recorder_email=None, actor="Joseph")
+        self.assertEqual(raised.exception.status_code, 404)
+        with self.assertRaises(HTTPException) as raised:
+            await meetings_router.record_invitee_decision(
+                uuid4(), InviteeDecisionRequest(approved=True, source="app"), actor="Joseph"
+            )
+        self.assertEqual(raised.exception.status_code, 404)
 
 
 if __name__ == "__main__":

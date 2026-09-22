@@ -29,6 +29,9 @@ from app.schemas import (
     EmailRequest,
     EmailResult,
     GrantAccessRequest,
+    InviteeDecision,
+    InviteeDecisionRequest,
+    InviteeState,
     Meeting,
     MeetingAccessEntry,
     MeetingCreate,
@@ -54,9 +57,12 @@ from app.services.failure_reasons import (
 )
 from app.services.meeting_export import refresh_meeting_export
 from app.services.recipient_policy import (
+    DELIVERY_MODE_ATTENDEES,
+    delivery_mode,
     filter_deliverable,
     invitee_candidates,
     invitees_approved,
+    prompt_enabled,
 )
 from app.services.blob_delivery import kick_blob_delivery
 from app.services.sharepoint import (
@@ -964,6 +970,77 @@ async def save_transcript_to_sharepoint(
     return updated
 
 
+@router.get("/{meeting_id}/invitees", response_model=InviteeState)
+async def get_invitees(
+    meeting_id: UUID,
+    recorder_email: str | None = None,
+    actor: str = Actor,
+) -> InviteeState:
+    """Who the owner would be emailing, and what they have decided (IN-488).
+
+    Owner only: the response lists attendee email addresses. ``recorder_email``
+    is excluded from the candidates so "N invitees" never counts the person
+    being asked.
+    """
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.owner)
+    return _invitee_state(meeting, recorder_email)
+
+
+@router.post("/{meeting_id}/invitees/decision", response_model=Meeting)
+async def record_invitee_decision(
+    meeting_id: UUID,
+    body: InviteeDecisionRequest,
+    actor: str = Actor,
+) -> Meeting:
+    """Record the owner's answer to "email the invitees?" (IN-488).
+
+    Sends nothing. The desktop follows this with its normal delivery pass
+    (POST /sharepoint, then POST /email), and both read the stored decision.
+    It is recorded even under the ``organizer`` kill switch, where it has no
+    effect: flipping back to ``ask`` restores it.
+    """
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    require(meeting_id, actor, AccessRole.owner)
+
+    requested = InviteeDecision.approved if body.approved else InviteeDecision.declined
+    current = meeting.invitee_decision
+    if current is requested:
+        return meeting
+    if current is InviteeDecision.approved:
+        # Approved is final (Q4). The realistic arrival here is main's timeout
+        # landing a moment after the owner clicked "Email invitees".
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Invitee delivery was already approved for this meeting",
+        )
+
+    updated = meeting.model_copy(update={"invitee_decision": requested})
+    store.MEETINGS[meeting_id] = updated
+    logger.info(
+        "invitee_decision meeting=%s decision=%s source=%s",
+        meeting_id,
+        requested.value,
+        body.source.value,
+    )
+    store.add_audit(
+        actor,
+        "meeting.invitee_decision",
+        meeting.title,
+        before=current.value,
+        after=f"{requested.value} ({body.source.value})",
+        meeting_id=meeting_id,
+    )
+    # Persist on this request: the delivery pass that follows can fail or the
+    # backend can be killed, and the answer must survive either.
+    store.save_snapshot()
+    return updated
+
+
 def _normalise_email(email: str | None) -> str | None:
     if not email:
         return None
@@ -1048,6 +1125,24 @@ def _sharepoint_recipients(meeting: Meeting) -> list[str]:
         _add(meeting.graph_metadata.organizer_email)
 
     return filter_deliverable(recipients, channel="sharepoint", meeting_id=meeting.id)
+
+
+def _invitee_state(meeting: Meeting, recorder_email: str | None) -> InviteeState:
+    # Effective decision: `attendees` auto-approves. Under `organizer` the
+    # stored value is reported untouched; prompt_enabled=False is the signal
+    # the desktop acts on (no prompt, no "Send to N invitees").
+    effective = (
+        InviteeDecision.approved
+        if delivery_mode() == DELIVERY_MODE_ATTENDEES
+        else meeting.invitee_decision
+    )
+    return InviteeState(
+        candidates=invitee_candidates(meeting, recorder_email),
+        decision=effective,
+        invitee_delivery_status=meeting.invitee_delivery_status,
+        invitee_recipients=meeting.invitee_recipients,
+        prompt_enabled=prompt_enabled(),
+    )
 
 
 def _build_review(meeting: Meeting) -> MeetingReview:
