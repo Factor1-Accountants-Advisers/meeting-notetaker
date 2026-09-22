@@ -27,7 +27,7 @@ import {
 import { capture, type CaptureStatus, type SystemSegment } from './lib/capture'
 import { resolveDryRunMatch, formatDryRunLog } from './lib/audioRoutingDryRun'
 import { chooseMicDeviceId } from './lib/micDeviceChoice'
-import { emailFailureMessage } from './lib/deliveryNotice'
+import { deliveryOutcomeNotice } from './lib/deliveryNotice'
 import notificationChimeUrl from './assets/notification.wav'
 import { loadPrefs } from './lib/prefs'
 import { createSingleFlight } from './lib/singleFlight'
@@ -1002,6 +1002,38 @@ function App(): JSX.Element {
     applyAndSchedule(initialMeeting)
   }
 
+  // The one delivery pass: SharePoint, then email, then the card. Shared by the
+  // post-capture watcher and Retry email so IN-478's unconfirmed handling
+  // lives in one place (lib/deliveryNotice).
+  const runDeliveryPass = async (
+    meetingId: string,
+    title: string,
+    recorderEmail: string,
+    attempt: 'first' | 'retry'
+  ): Promise<void> => {
+    const sharePointResult = await saveTranscriptToSharePoint(meetingId)
+    const emailResult = await emailNotes(meetingId, null, recorderEmail)
+    // IN-478: a failed email call may still have delivered (transport error or
+    // backend restart mid-send). Re-check delivery state so the notice warns
+    // "check your inbox" instead of inviting a blind resend.
+    const deliveryAfterFailure = emailResult
+      ? null
+      : (await fetchMeetingReview(meetingId))?.meeting
+    setPostCaptureNotice({
+      meetingId,
+      title,
+      ...deliveryOutcomeNotice({
+        attempt,
+        emailRecipients: emailResult?.recipients ?? null,
+        sharePointSaved: Boolean(sharePointResult?.sharepoint_web_url),
+        grantWarning: sharePointResult?.sharepoint_grant_warning,
+        deliveryStatus: deliveryAfterFailure?.delivery_status,
+        deliveryErrorMessage: deliveryAfterFailure?.delivery_error_message,
+        deliveryErrorCode: deliveryAfterFailure?.delivery_error_code
+      })
+    })
+  }
+
   const watchProcessing = (meetingId: string, title: string): void => {
     const blobDeliveryEpoch = nextBlobDeliveryEpoch(meetingId)
     setPostCaptureNotice({
@@ -1036,73 +1068,7 @@ function App(): JSX.Element {
           title,
           message: `Notes are ready: ${review.segments.length} transcript segments and ${review.action_items.length} action items. Saving to SharePoint and emailing transcript…`
         })
-        const sharePointResult = await saveTranscriptToSharePoint(meetingId)
-        const emailResult = await emailNotes(meetingId, null, user.email)
-        // IN-478: a failed email call may still have delivered (transport
-        // error or backend restart mid-send). Re-check delivery state so the
-        // notice warns "check your inbox" instead of inviting a blind resend.
-        const deliveryAfterFailure = emailResult ? null : (await fetchMeetingReview(meetingId))?.meeting
-        if (emailResult && sharePointResult?.sharepoint_web_url) {
-          setPostCaptureNotice({
-            state: 'ready',
-            meetingId,
-            title,
-            // Option A (IN-398): a saved delivery can still carry a view-grant
-            // warning for ungrantable attendees — say so instead of hiding it.
-            message:
-              `Transcript saved to SharePoint and emailed to ${emailResult.recipients.join(', ')}.` +
-              (sharePointResult.sharepoint_grant_warning
-                ? ` ${sharePointResult.sharepoint_grant_warning}`
-                : '')
-          })
-        } else if (emailResult) {
-          setPostCaptureNotice({
-            state: 'email_failed',
-            meetingId,
-            title,
-            message: 'Transcript email was sent, but SharePoint save failed. Sign in again, then retry delivery.',
-            // Email succeeded here — this is actually a SharePoint failure
-            // surfaced under the shared 'email_failed' state. sharePointResult
-            // is null on failure (the save endpoint raises rather than
-            // returning a DTO), so no fresh sharepoint_error_code is in scope;
-            // fall back to the same "Processing error" label the chips use.
-            errorCode: null
-          })
-        } else if (sharePointResult?.sharepoint_web_url) {
-          setPostCaptureNotice({
-            state: 'email_failed',
-            meetingId,
-            title,
-            message: emailFailureMessage(
-              deliveryAfterFailure?.delivery_status,
-              deliveryAfterFailure?.delivery_error_message,
-              'Transcript saved to SharePoint, but email was not sent. Sign in to Outlook, then retry email.'
-            ),
-            // IN-478: 'unconfirmed' is not a failure — omit errorCode so
-            // HomeScreen never renders a Failed: label for it.
-            errorCode:
-              deliveryAfterFailure?.delivery_status === 'unconfirmed'
-                ? undefined
-                : (deliveryAfterFailure?.delivery_error_code ?? null)
-          })
-        } else {
-          setPostCaptureNotice({
-            state: 'email_failed',
-            meetingId,
-            title,
-            message: emailFailureMessage(
-              deliveryAfterFailure?.delivery_status,
-              deliveryAfterFailure?.delivery_error_message,
-              'Notes are ready, but SharePoint save and transcript email failed. Sign in to Microsoft, then retry delivery.'
-            ),
-            // Same IN-478 guard as above — email's own outcome here may still
-            // be 'unconfirmed' even though SharePoint definitively failed too.
-            errorCode:
-              deliveryAfterFailure?.delivery_status === 'unconfirmed'
-                ? undefined
-                : (deliveryAfterFailure?.delivery_error_code ?? null)
-          })
-        }
+        await runDeliveryPass(meetingId, title, user.email, 'first')
         return
       }
       if (status === 'failed') {
@@ -1221,43 +1187,7 @@ function App(): JSX.Element {
       title,
       message: 'Retrying SharePoint save and transcript email…'
     })
-    const sharePointResult = await saveTranscriptToSharePoint(meetingId)
-    const emailResult = await emailNotes(meetingId, null, recorderEmail)
-    // IN-478: same as the post-capture watcher — a failed call may still have
-    // delivered, so let the backend's unconfirmed warning replace "failed".
-    const deliveryAfterFailure = emailResult ? null : (await fetchMeetingReview(meetingId))?.meeting
-    setPostCaptureNotice({
-      state: emailResult && sharePointResult?.sharepoint_web_url ? 'ready' : 'email_failed',
-      meetingId,
-      title,
-      message: emailResult && sharePointResult?.sharepoint_web_url
-        ? `Transcript saved to SharePoint and emailed to ${emailResult.recipients.join(', ')}.` +
-          (sharePointResult.sharepoint_grant_warning
-            ? ` ${sharePointResult.sharepoint_grant_warning}`
-            : '')
-        : emailResult
-          ? 'Transcript email was sent, but SharePoint save still failed.'
-          : sharePointResult?.sharepoint_web_url
-            ? emailFailureMessage(
-                deliveryAfterFailure?.delivery_status,
-                deliveryAfterFailure?.delivery_error_message,
-                'Transcript saved to SharePoint, but email still failed.'
-              )
-            : emailFailureMessage(
-                deliveryAfterFailure?.delivery_status,
-                deliveryAfterFailure?.delivery_error_message,
-                'SharePoint save and email still failed. The notes are ready and the recording is safe.'
-              ),
-      // Mirrors the three email_failed sub-cases in watchProcessing's poll():
-      // email succeeded (sharepoint-only failure, no fresh DTO) -> null;
-      // email failed and 'unconfirmed' (IN-478, not a failure) -> omit;
-      // email genuinely failed -> its delivery_error_code.
-      errorCode: emailResult
-        ? null
-        : deliveryAfterFailure?.delivery_status === 'unconfirmed'
-          ? undefined
-          : (deliveryAfterFailure?.delivery_error_code ?? null)
-    })
+    await runDeliveryPass(meetingId, title, recorderEmail, 'retry')
   }
 
   const retrySavedUpload = async (meetingId: string, title: string): Promise<void> => {
