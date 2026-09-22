@@ -18,7 +18,13 @@ import {
 import { staff as sampleStaff, type BlobStatus, type StaffMember } from '@renderer/data/mock'
 import { fetchPeople } from '@renderer/lib/api'
 import { categoryLabel } from '@renderer/lib/failureDisplay'
-import { inviteeNamesLine, sendLaterLabel, type InviteeCandidate } from '../lib/inviteePrompt'
+import {
+  inviteeNamesLine,
+  inviteeQuestion,
+  resurfacedSendLaterMessage,
+  sendLaterLabel,
+  type InviteeCandidate
+} from '../lib/inviteePrompt'
 import { useLive } from '@renderer/lib/useLive'
 
 /** A recording interrupted by sleep/crash, recoverable from its spill file (IN-129). */
@@ -54,6 +60,15 @@ export function clampAdhocDurationMinutes(raw: string): number {
     ADHOC_DURATION_MAX_MINUTES,
     Math.max(ADHOC_DURATION_MIN_MINUTES, Math.round(parsed))
   )
+}
+
+/** IN-488: a question or a send-later action that survived a restart. */
+export interface InviteeResurfacedCard {
+  meetingId: string
+  title: string
+  kind: 'pending' | 'send_later'
+  candidates: InviteeCandidate[]
+  emailedAt: string | null
 }
 
 interface HomeProps {
@@ -92,6 +107,10 @@ interface HomeProps {
   onRetryPostCapture?: (meetingId: string, title: string) => void
   onAnswerInviteePrompt?: (meetingId: string, approved: boolean) => void
   onSendToInvitees?: (meetingId: string, title: string, count: number) => void
+  inviteeCards?: InviteeResurfacedCard[]
+  onAnswerInviteeCard?: (meetingId: string, approved: boolean) => void
+  onSendInviteeCard?: (meetingId: string) => void
+  onDismissInviteeCard?: (meetingId: string) => void
   blobDeliveryNotices?: {
     status: BlobStatus
     meetingId: string
@@ -120,6 +139,10 @@ export function HomeScreen({
   onRetryPostCapture,
   onAnswerInviteePrompt,
   onSendToInvitees,
+  inviteeCards,
+  onAnswerInviteeCard,
+  onSendInviteeCard,
+  onDismissInviteeCard,
   blobDeliveryNotices,
   onDismissBlobDeliveryNotice,
   onRetryBlobDelivery
@@ -145,6 +168,15 @@ export function HomeScreen({
           entry={entry}
           onRetry={onRetryUnuploaded}
           onDiscard={onDiscardUnuploaded}
+        />
+      ))}
+      {inviteeCards?.map((card) => (
+        <InviteeResurfacedNotice
+          key={card.meetingId}
+          card={card}
+          onAnswer={onAnswerInviteeCard}
+          onSend={onSendInviteeCard}
+          onDismiss={onDismissInviteeCard}
         />
       ))}
       {/* `processing` stays status-bar only. `emailing` is a card since IN-488
@@ -352,6 +384,75 @@ function UnuploadedRecordingNotice({
               onClick={() => onDiscard(entry.meetingId)}
             >
               Discard
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function InviteeResurfacedNotice({
+  card,
+  onAnswer,
+  onSend,
+  onDismiss
+}: {
+  card: InviteeResurfacedCard
+  onAnswer?: (meetingId: string, approved: boolean) => void
+  onSend?: (meetingId: string) => void
+  onDismiss?: (meetingId: string) => void
+}): JSX.Element {
+  const pending = card.kind === 'pending'
+  const namesLine = pending ? inviteeNamesLine(card.candidates) : null
+  const toneClass = pending
+    ? 'border-edge-info bg-bg-info text-content-info'
+    : 'border-edge-success bg-bg-success text-content-success'
+  const buttonClass =
+    'rounded-sm border-[0.5px] border-current px-2 py-1 text-[12px] opacity-85 hover:opacity-100'
+
+  return (
+    <div className={`rounded-md border-[0.5px] px-3 py-2.5 ${toneClass}`}>
+      <div className="flex items-start gap-2">
+        <div className="mt-0.5 shrink-0">
+          {pending ? (
+            <Mail size={16} strokeWidth={1.75} />
+          ) : (
+            <CheckCircle2 size={16} strokeWidth={1.75} />
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[13px] font-medium">{card.title}</div>
+          <div className="mt-0.5 text-[12px] opacity-90">
+            {pending ? inviteeQuestion(card.candidates) : resurfacedSendLaterMessage(card.emailedAt)}
+          </div>
+          {namesLine && <div className="mt-0.5 text-[12px] opacity-90">{namesLine}</div>}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {pending && onAnswer && (
+            <>
+              <button type="button" className={buttonClass} onClick={() => onAnswer(card.meetingId, true)}>
+                Email invitees
+              </button>
+              <button type="button" className={buttonClass} onClick={() => onAnswer(card.meetingId, false)}>
+                Just me
+              </button>
+            </>
+          )}
+          {!pending && onSend && (
+            <button type="button" className={buttonClass} onClick={() => onSend(card.meetingId)}>
+              {sendLaterLabel(card.candidates.length)}
+            </button>
+          )}
+          {/* Only a send-later card can be dismissed; a pending question is
+              answered, and "Just me" is its way out. */}
+          {!pending && onDismiss && (
+            <button
+              type="button"
+              className="text-[12px] opacity-80 hover:opacity-100"
+              onClick={() => onDismiss(card.meetingId)}
+            >
+              Dismiss
             </button>
           )}
         </div>

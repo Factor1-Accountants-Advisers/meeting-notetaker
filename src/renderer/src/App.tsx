@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppShell } from './components/shell/AppShell'
 import { EnrollmentModal } from './components/EnrollmentModal'
-import { HomeScreen } from './screens/HomeScreen'
+import { HomeScreen, type InviteeResurfacedCard } from './screens/HomeScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
 import { VoiceprintAdminScreen } from './screens/VoiceprintAdminScreen'
 import { LoginScreen, type User } from './screens/LoginScreen'
@@ -13,6 +13,7 @@ import {
   ensureCurrentPerson,
   fetchEnrolmentStatus,
   fetchInvitees,
+  fetchMeetingDtos,
   fetchMeetings,
   fetchMeetingReview,
   postInviteeDecision,
@@ -32,10 +33,14 @@ import { chooseMicDeviceId } from './lib/micDeviceChoice'
 import { deliveryOutcomeNotice } from './lib/deliveryNotice'
 import {
   canSendLater,
+  DISMISSED_INVITEE_CARDS_KEY,
   emailingMessage,
   inviteeQuestion,
+  parseDismissed,
+  resurfaceKind,
   sendingLaterMessage,
   shouldPrompt,
+  withDismissed,
   type InviteeCandidate,
   type InviteeDecisionSource
 } from './lib/inviteePrompt'
@@ -58,6 +63,29 @@ function loadUser(): User | null {
     return null
   }
 }
+
+// IN-488: dismissed "Send to N invitees" cards. A UI preference, not delivery
+// state, so it lives beside USER_KEY in localStorage and is per machine.
+function loadDismissedInviteeCards(): string[] {
+  try {
+    return parseDismissed(localStorage.getItem(DISMISSED_INVITEE_CARDS_KEY))
+  } catch {
+    return []
+  }
+}
+
+function rememberDismissedInviteeCard(meetingId: string): void {
+  try {
+    localStorage.setItem(
+      DISMISSED_INVITEE_CARDS_KEY,
+      JSON.stringify(withDismissed(loadDismissedInviteeCards(), meetingId))
+    )
+  } catch {
+    // Storage unavailable: the card simply comes back on the next launch.
+  }
+}
+
+const RESURFACED_INVITEE_CARD_LIMIT = 10
 
 type View = ScreenId | 'recording' | 'voiceprint-admin'
 
@@ -298,6 +326,8 @@ function App(): JSX.Element {
   >([])
   // IN-488: meetings whose delivery is held on the owner's answer.
   const inviteeHoldsRef = useRef(new Map<string, (answer: InviteeAnswer) => void>())
+  // IN-488: questions and send-later actions that survived a restart.
+  const [inviteeCards, setInviteeCards] = useState<InviteeResurfacedCard[]>([])
   const { theme, setTheme } = useTheme()
 
   useEffect(() => {
@@ -444,6 +474,49 @@ function App(): JSX.Element {
       cancelled = true
     }
   }, [user])
+
+  // IN-488 (spec §3.4): a restart during the hold loses the renderer's watcher,
+  // so nothing fires. On launch, meetings from the last 7 days that still owe
+  // the owner a question, or that went to the owner only, come back as cards.
+  // No toast and no timer here: the owner decides when they open the app.
+  const signedInEmail = user?.email
+  useEffect(() => {
+    if (!signedInEmail) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const meetings = await fetchMeetingDtos()
+        if (cancelled || !meetings) return
+        const dismissed = new Set(loadDismissedInviteeCards())
+        const now = Date.now()
+        const cards: InviteeResurfacedCard[] = []
+        for (const meeting of meetings) {
+          const kind = resurfaceKind(meeting, now, dismissed)
+          // A meeting whose hold is live in this session already has its card.
+          if (!kind || inviteeHoldsRef.current.has(meeting.id)) continue
+          const state = await fetchInvitees(meeting.id, signedInEmail)
+          if (cancelled) return
+          // prompt_enabled=false is the kill switch (or the attendees override):
+          // no question and no send-later action may be offered.
+          if (!state || !state.prompt_enabled || state.candidates.length === 0) continue
+          cards.push({
+            meetingId: meeting.id,
+            title: meeting.title,
+            kind,
+            candidates: state.candidates,
+            emailedAt: meeting.delivery_emailed_at ?? null
+          })
+          if (cards.length >= RESURFACED_INVITEE_CARD_LIMIT) break
+        }
+        if (!cancelled && cards.length) setInviteeCards(cards)
+      } catch {
+        // Best-effort; the scan simply runs again on the next launch.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [signedInEmail])
 
   // Mid-capture status changes (e.g. mic falls silent) must reach the UI live.
   useEffect(() => {
@@ -1111,6 +1184,8 @@ function App(): JSX.Element {
     let emailingMessageText = notAskedMessage
     if (shouldPrompt(state) && state && typeof window.api?.promptInvitees === 'function') {
       const { candidates } = state
+      // A restart card for this meeting would now be a second copy of the question.
+      setInviteeCards((list) => list.filter((entry) => entry.meetingId !== meetingId))
       setPostCaptureNotice({
         state: 'awaiting_invitees',
         meetingId,
@@ -1165,6 +1240,37 @@ function App(): JSX.Element {
       return
     }
     await runDeliveryPass(meetingId, title, user.email, 'retry')
+  }
+
+  // Restart cards (IN-488). Each leaves the list at once and hands over to the
+  // single post-capture notice, the same hand-off the unuploaded cards use.
+  const takeInviteeCard = (meetingId: string): InviteeResurfacedCard | undefined => {
+    const card = inviteeCards.find((entry) => entry.meetingId === meetingId)
+    setInviteeCards((list) => list.filter((entry) => entry.meetingId !== meetingId))
+    return card
+  }
+
+  const answerInviteeCard = async (meetingId: string, approved: boolean): Promise<void> => {
+    const card = takeInviteeCard(meetingId)
+    if (!card) return
+    setPostCaptureNotice({
+      state: 'emailing',
+      meetingId,
+      title: card.title,
+      message: emailingMessage(approved, card.candidates.length)
+    })
+    await postInviteeDecision(meetingId, approved, 'app')
+    await runDeliveryPass(meetingId, card.title, user.email, 'first')
+  }
+
+  const sendInviteeCard = (meetingId: string): void => {
+    const card = takeInviteeCard(meetingId)
+    if (card) void sendToInvitees(meetingId, card.title, card.candidates.length)
+  }
+
+  const dismissInviteeCard = (meetingId: string): void => {
+    rememberDismissedInviteeCard(meetingId)
+    takeInviteeCard(meetingId)
   }
 
   const watchProcessing = (meetingId: string, title: string): void => {
@@ -1748,6 +1854,10 @@ function App(): JSX.Element {
           onRetryPostCapture={(meetingId, title) => void retryPostCapture(meetingId, title)}
           onAnswerInviteePrompt={answerInviteePrompt}
           onSendToInvitees={(meetingId, title, count) => void sendToInvitees(meetingId, title, count)}
+          inviteeCards={inviteeCards}
+          onAnswerInviteeCard={(meetingId, approved) => void answerInviteeCard(meetingId, approved)}
+          onSendInviteeCard={sendInviteeCard}
+          onDismissInviteeCard={dismissInviteeCard}
           blobDeliveryNotices={Object.values(blobDeliveryNotices)}
           onDismissBlobDeliveryNotice={dismissBlobDeliveryNotice}
           onRetryBlobDelivery={(meetingId, title) =>

@@ -215,4 +215,24 @@ assert.equal(
   assert.match(home, /inviteeNamesLine\(/, 'the pending card shows the full list')
 }
 
+// ---- wiring pins (Task 13) ---------------------------------------------------
+{
+  const read = (...parts: string[]): string => readFileSync(join(process.cwd(), 'src', 'renderer', 'src', ...parts), 'utf8')
+  const app = read('App.tsx')
+  assert.match(app, /resurfaceKind\(/, 'launch scan uses the pure restart filter')
+  assert.match(app, /DISMISSED_INVITEE_CARDS_KEY/, 'dismissal is a per-machine UI preference in localStorage')
+  const scan = app.slice(app.indexOf('resurfaceKind('))
+  assert.ok(
+    scan.indexOf('prompt_enabled') !== -1 && scan.indexOf('prompt_enabled') < scan.indexOf('setInviteeCards('),
+    'no card is built under the kill switch'
+  )
+  const home = read('screens', 'HomeScreen.tsx')
+  assert.match(home, /resurfacedSendLaterMessage\(/, 'send-later card shows when the owner was emailed')
+  assert.doesNotMatch(
+    home.slice(home.indexOf('function InviteeResurfacedNotice')),
+    /promptInvitees/,
+    'no toast and no timer after a restart'
+  )
+}
+
 console.log('Invitee cards verification passed')
