@@ -17,6 +17,10 @@
 
 export const TOAST_PROTOCOL_SCHEME = 'notetaker'
 
+/** IN-488 invitee prompt buttons. Unlike the other actions these carry a
+ *  `?meeting=<id>` query, because more than one prompt can be up at once. */
+export type InviteeToastVerb = 'invitees-approve' | 'invitees-decline'
+
 export type ToastAction =
   | 'open'
   | 'extend'
@@ -25,31 +29,60 @@ export type ToastAction =
   | 'upload-now'
   | 'resume-recording'
   | 'record-now'
+  | InviteeToastVerb
 
 export function toastUri(action: ToastAction): string {
   return `${TOAST_PROTOCOL_SCHEME}://${action}`
 }
 
+const INVITEE_TOAST_VERBS: readonly InviteeToastVerb[] = ['invitees-approve', 'invitees-decline']
+
+export function inviteeToastUri(verb: InviteeToastVerb, meetingId: string): string {
+  return `${toastUri(verb)}?meeting=${encodeURIComponent(meetingId)}`
+}
+
+export interface ParsedToastAction {
+  action: ToastAction
+  /** Set only for the invitee prompt's buttons; null for every bare action. */
+  meetingId: string | null
+}
+
+function bareToastAction(arg: string): ToastAction | null {
+  if (arg === toastUri('extend') || arg === 'mn-extend') return 'extend'
+  if (arg === toastUri('update-restart') || arg === 'mn-update-restart') return 'update-restart'
+  if (arg === toastUri('update-defer') || arg === 'mn-update-defer') return 'update-defer'
+  if (arg === toastUri('open') || arg === 'mn-open') return 'open'
+  if (arg === toastUri('upload-now')) return 'upload-now'
+  if (arg === toastUri('resume-recording')) return 'resume-recording'
+  if (arg === toastUri('record-now')) return 'record-now'
+  return null
+}
+
 /**
- * Extract the toast action from a process argv. Understands the current
- * `notetaker://<action>` URIs and the legacy `mn-*` foreground arguments
- * (still emitted by toasts shown by app versions before the IN-483 fix,
- * which can outlive the update that fixes them). `upload-now`,
- * `resume-recording`, and `record-now` postdate that fix, so they have no
- * legacy `mn-*` form.
+ * Extract the toast action, and for the invitee prompt its meeting id, from a
+ * process argv. Understands the current `notetaker://<action>` URIs and the
+ * legacy `mn-*` foreground arguments (still emitted by toasts shown by app
+ * versions before the IN-483 fix, which can outlive the update that fixes
+ * them). An invitee URI without a usable meeting id is ignored, never guessed:
+ * answering the wrong meeting would email the wrong people.
  */
-export function toastActionFromArgv(argv: readonly string[]): ToastAction | null {
+export function parseToastArgv(argv: readonly string[]): ParsedToastAction | null {
   for (const raw of argv) {
-    const arg = raw.replace(/\/$/, '')
-    if (arg === toastUri('extend') || arg === 'mn-extend') return 'extend'
-    if (arg === toastUri('update-restart') || arg === 'mn-update-restart') return 'update-restart'
-    if (arg === toastUri('update-defer') || arg === 'mn-update-defer') return 'update-defer'
-    if (arg === toastUri('open') || arg === 'mn-open') return 'open'
-    if (arg === toastUri('upload-now')) return 'upload-now'
-    if (arg === toastUri('resume-recording')) return 'resume-recording'
-    if (arg === toastUri('record-now')) return 'record-now'
+    const queryAt = raw.indexOf('?')
+    const head = (queryAt === -1 ? raw : raw.slice(0, queryAt)).replace(/\/$/, '')
+    const bare = bareToastAction(head)
+    if (bare) return { action: bare, meetingId: null }
+    const verb = INVITEE_TOAST_VERBS.find((candidate) => head === toastUri(candidate))
+    if (!verb || queryAt === -1) continue
+    const meetingId = (new URLSearchParams(raw.slice(queryAt + 1)).get('meeting') ?? '').replace(/\/$/, '')
+    if (meetingId) return { action: verb, meetingId }
   }
   return null
+}
+
+/** The action alone, for callers that do not need a meeting id. */
+export function toastActionFromArgv(argv: readonly string[]): ToastAction | null {
+  return parseToastArgv(argv)?.action ?? null
 }
 
 export function xmlEscape(value: string): string {
@@ -168,6 +201,55 @@ export function buildJoinPromptToastXml(title: string): string {
     '<audio silent="true"/>' +
     '<actions>' +
     `<action content="Record now" activationType="protocol" arguments="${toastUri('record-now')}"/>` +
+    '</actions>' +
+    '</toast>'
+  )
+}
+
+const INVITEE_TOAST_NAME_LIMIT = 3
+
+/**
+ * The invitee prompt's text lines (IN-488, D9). A Windows toast is three short
+ * lines with no hover text, so: the first three names, then "+N more"; the
+ * full list lives on the in-app card. One invitee reads as a sentence about
+ * that person, and the name is not repeated on a third line (Q6).
+ */
+export function inviteeToastLines(title: string, names: readonly string[]): string[] {
+  const headline = title ? `Notes ready: ${title}` : 'Notes ready'
+  if (names.length === 1) return [headline, `Email the transcript to ${names[0]}?`]
+  const shown = names.slice(0, INVITEE_TOAST_NAME_LIMIT).join(', ')
+  const extra = names.length - INVITEE_TOAST_NAME_LIMIT
+  return [
+    headline,
+    `Email the transcript to ${names.length} invitees?`,
+    extra > 0 ? `${shown} +${extra} more` : shown
+  ]
+}
+
+/**
+ * "Notes ready. Email the transcript to N invitees?" (IN-488). Sticky like the
+ * others; invitee-prompt closes it after TOAST_LIFETIME_MS, and that expiry
+ * fires the safe default (organiser only), the same shape as the
+ * paused-recording grace toast. Both buttons render grey: Windows does not let
+ * an app style one as primary, so the wording carries the emphasis.
+ */
+export function buildInviteePromptToastXml(input: {
+  meetingId: string
+  title: string
+  names: readonly string[]
+}): string {
+  const text = inviteeToastLines(input.title, input.names)
+    .map((line) => `<text>${xmlEscape(line)}</text>`)
+    .join('')
+  const approve = xmlEscape(inviteeToastUri('invitees-approve', input.meetingId))
+  const decline = xmlEscape(inviteeToastUri('invitees-decline', input.meetingId))
+  return (
+    `<toast scenario="reminder" activationType="protocol" launch="${toastUri('open')}">` +
+    `<visual><binding template="ToastGeneric">${text}</binding></visual>` +
+    '<audio silent="true"/>' +
+    '<actions>' +
+    `<action content="Email invitees" activationType="protocol" arguments="${approve}"/>` +
+    `<action content="Just me" activationType="protocol" arguments="${decline}"/>` +
     '</actions>' +
     '</toast>'
   )
