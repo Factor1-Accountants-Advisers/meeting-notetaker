@@ -31,6 +31,7 @@ from app.schemas import (
     GrantAccessRequest,
     InviteeDecision,
     InviteeDecisionRequest,
+    InviteeDeliveryStatus,
     InviteeState,
     Meeting,
     MeetingAccessEntry,
@@ -76,6 +77,7 @@ from app.services.pipeline import (
     kick_pipeline,
     mic_track_path,
     set_delivery_state,
+    set_invitee_delivery_state,
     set_pipeline_state,
 )
 
@@ -689,6 +691,181 @@ def _delivery_artifacts(meeting_id: UUID) -> tuple[Meeting, list, list, str, lis
     return meeting, participants, segments, summary, action_items
 
 
+_INVITEE_UNCONFIRMED_MESSAGE = (
+    "The invitee email attempt was not confirmed — it may already have been "
+    "delivered. Check with an invitee before resending."
+)
+
+
+def _merge_recipients(*groups: list[str]) -> list[str]:
+    merged: list[str] = []
+    for group in groups:
+        for address in group:
+            if address not in merged:
+                merged.append(address)
+    return merged
+
+
+def _email_replay(meeting: Meeting, recorder_email: str | None) -> EmailResult:
+    """The idempotent answer once a meeting's email work is done (IN-94).
+
+    ``recipients`` means "everyone who has it": the organiser send plus any
+    invitee send. ``sent_now`` stays empty, which is how the desktop tells a
+    replay from a real send.
+    """
+    return EmailResult(
+        recipients=_merge_recipients(
+            meeting.delivery_recipients or _email_recipients(meeting, recorder_email),
+            meeting.invitee_recipients,
+        ),
+        sent_at=meeting.delivery_emailed_at
+        or meeting.pipeline_updated_at
+        or datetime.now(timezone.utc),
+    )
+
+
+def _notes_email_payload(
+    meeting: Meeting,
+    meeting_id: UUID,
+    note: str | None,
+    participants: list,
+    segments: list,
+    summary: str,
+    action_items: list,
+) -> tuple[str, list]:
+    """The HTML body and transcript attachment, identical for both sends."""
+    email_body = build_meeting_notes_email_html(
+        meeting_title=meeting.title,
+        summary_html=store.SUMMARY_HTML.get(meeting_id),
+        summary_text=summary,
+        note=note,
+        action_items=action_items,
+    )
+    transcript_text = _format_transcript(
+        segments, meeting.title, participants,
+        summary_text=summary,
+        action_items=action_items,
+        meeting=meeting,
+    )
+    attachments = [
+        build_transcript_attachment(
+            filename=f"transcript-{meeting.title[:40]}.txt",
+            content=transcript_text,
+        )
+    ]
+    return email_body, attachments
+
+
+async def _send_to_invitees_later(
+    meeting_id: UUID,
+    meeting: Meeting,
+    body: EmailRequest,
+    actor: str,
+    graph_token: str,
+    participants: list,
+    segments: list,
+    summary: str,
+    action_items: list,
+) -> EmailResult:
+    """The invitee-only send after the organiser already has theirs (IN-488).
+
+    Drives ``invitee_delivery_status`` and nothing else. Every exit leaves
+    ``delivery_status = emailed`` with ``delivery_recipients`` intact, so no
+    failure here can cause the organiser to be emailed again (D7).
+    """
+    if meeting.invitee_delivery_status is InviteeDeliveryStatus.sending:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "The transcript is already being sent to invitees for this meeting",
+        )
+    already = set(meeting.delivery_recipients)
+    targets = [
+        candidate.email
+        for candidate in invitee_candidates(meeting, body.recorder_email, channel="email")
+        if candidate.email not in already
+    ]
+    if not targets:
+        return _email_replay(meeting, body.recorder_email)
+
+    if not graph_token:
+        reason = FailureReason.for_category(
+            FailureCategory.azure_signin, detail="signin_check"
+        )
+        log_delivery_failure(meeting_id, "email", reason, code="signin_check")
+        set_invitee_delivery_state(
+            meeting_id,
+            InviteeDeliveryStatus.failed,
+            "Outlook sign-in is required before the transcript can be sent to invitees",
+            error_code=FailureCategory.azure_signin.value,
+        )
+        store.save_snapshot()
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "Outlook sign-in is required before the transcript can be sent to invitees",
+        )
+
+    set_invitee_delivery_state(meeting_id, InviteeDeliveryStatus.sending)
+    # Same durability order as the organiser send (IN-478): `sending` is on
+    # disk before the Graph call, so a crash restarts into `unconfirmed`.
+    store.save_snapshot()
+    email_body, attachments = _notes_email_payload(
+        meeting, meeting_id, body.note, participants, segments, summary, action_items
+    )
+    try:
+        await get_email_provider(graph_token or None).send_meeting_notes(
+            targets,
+            f"Meeting notes: {meeting.title}",
+            email_body,
+            attachments=attachments,
+            access_token=graph_token or None,
+            content_type="HTML",
+        )
+    except EmailDeliveryUnconfirmed as exc:
+        logger.exception("Invitee email delivery unconfirmed for %s", meeting_id)
+        set_invitee_delivery_state(
+            meeting_id,
+            InviteeDeliveryStatus.unconfirmed,
+            _INVITEE_UNCONFIRMED_MESSAGE,
+            error_code=None,
+        )
+        store.save_snapshot()
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Invitee email delivery unconfirmed: {exc}",
+        )
+    except Exception as exc:
+        logger.exception("Invitee email delivery failed for %s", meeting_id)
+        reason = classify(exc, stage="email")
+        log_delivery_failure(meeting_id, "email", reason, code=exc.__class__.__name__)
+        set_invitee_delivery_state(
+            meeting_id,
+            InviteeDeliveryStatus.failed,
+            reason.user_sentence,
+            error_code=reason.category.value,
+        )
+        store.save_snapshot()
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Invitee email delivery failed: {exc}",
+        )
+
+    sent_at = datetime.now(timezone.utc)
+    set_invitee_delivery_state(meeting_id, InviteeDeliveryStatus.sent, recipients=targets)
+    store.save_snapshot()
+    store.add_audit(
+        actor,
+        "meeting.email_invitees",
+        meeting.title,
+        after=", ".join(targets),
+        meeting_id=meeting_id,
+    )
+    return EmailResult(
+        recipients=_merge_recipients(meeting.delivery_recipients, targets),
+        sent_at=sent_at,
+        sent_now=targets,
+    )
+
+
 @router.post("/{meeting_id}/email", response_model=EmailResult)
 async def email_notes(
     meeting_id: UUID,
@@ -696,26 +873,30 @@ async def email_notes(
     actor: str = Actor,
     graph_token: str = Header("", alias="X-MN-Graph-Token"),
 ) -> EmailResult:
-    """Email transcript after processing completes (Jira IN-93/IN-94).
+    """Email the transcript from the signed-in user's Outlook (IN-93/IN-94).
 
-    Slice 1 delivery is transcript-by-email using the signed-in user's Outlook:
-    calendar recordings go to Graph attendees; manual/ad-hoc recordings go to
-    the recorder. SharePoint and Teams delivery are later slices.
+    Two paths (IN-488). FIRST SEND: one message to the organiser, the recorder
+    and, when ``invitees_approved``, the invitees. LATER SEND: the organiser
+    already has theirs and the owner has since approved, so only the invitees
+    are emailed, on their own state machine. Anything else while ``emailed``
+    is an idempotent replay.
     """
     require(meeting_id, actor, AccessRole.editor)
     meeting, participants, segments, summary, action_items = _delivery_artifacts(meeting_id)
 
     # Idempotency guard (Jira IN-94 follow-up: ad-hoc transcripts arrived
-    # twice). delivery_status was recorded but never consulted, so any second
-    # POST — a renderer retry after a SharePoint-only failure, or overlapping
-    # post-capture watchers — sent a second real email. Replay the original
-    # result instead; a genuine resend requires a failed state (or a re-upload,
-    # which resets delivery to not_started).
+    # twice). Once emailed, a second POST must never re-send to the organiser.
+    # It either sends to newly approved invitees, or replays.
     if meeting.delivery_status is DeliveryStatus.emailed:
-        return EmailResult(
-            recipients=meeting.delivery_recipients or _email_recipients(meeting, body.recorder_email),
-            sent_at=meeting.delivery_emailed_at or meeting.pipeline_updated_at or datetime.now(timezone.utc),
-        )
+        if (
+            invitees_approved(meeting)
+            and meeting.invitee_delivery_status is not InviteeDeliveryStatus.sent
+        ):
+            return await _send_to_invitees_later(
+                meeting_id, meeting, body, actor, graph_token,
+                participants, segments, summary, action_items,
+            )
+        return _email_replay(meeting, body.recorder_email)
     if meeting.delivery_status is DeliveryStatus.emailing:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -728,6 +909,17 @@ async def email_notes(
             status.HTTP_409_CONFLICT,
             "No email recipients resolved — no invitee is on an allowed company domain",
         )
+    # The invitees riding on this first send. Empty unless approved, which is
+    # what keeps the invitee machine untouched for an organiser-only send.
+    invitee_subset = (
+        [
+            candidate.email
+            for candidate in invitee_candidates(meeting, body.recorder_email, channel="email")
+            if candidate.email in recipients
+        ]
+        if invitees_approved(meeting)
+        else []
+    )
     if not graph_token:
         reason = FailureReason.for_category(
             FailureCategory.azure_signin, detail="signin_check"
@@ -746,32 +938,17 @@ async def email_notes(
         )
 
     set_delivery_state(meeting_id, DeliveryStatus.emailing)
+    if invitee_subset:
+        set_invitee_delivery_state(meeting_id, InviteeDeliveryStatus.sending)
     # Durability before the side effect (IN-478): the snapshot middleware only
     # persists after the response, so a crash mid-send used to restart into a
     # fully re-armed not_started — and the post-capture watcher then sent a
     # second real email. With `emailing` on disk, startup reconcile flips it
     # to `unconfirmed` instead.
     store.save_snapshot()
-    email_body = build_meeting_notes_email_html(
-        meeting_title=meeting.title,
-        summary_html=store.SUMMARY_HTML.get(meeting_id),
-        summary_text=summary,
-        note=body.note,
-        action_items=action_items,
+    email_body, attachments = _notes_email_payload(
+        meeting, meeting_id, body.note, participants, segments, summary, action_items
     )
-
-    transcript_text = _format_transcript(
-        segments, meeting.title, participants,
-        summary_text=summary,
-        action_items=action_items,
-        meeting=meeting,
-    )
-    attachments = [
-        build_transcript_attachment(
-            filename=f"transcript-{meeting.title[:40]}.txt",
-            content=transcript_text,
-        )
-    ]
 
     try:
         await get_email_provider(graph_token or None).send_meeting_notes(
@@ -794,6 +971,13 @@ async def email_notes(
             "have been delivered. Check your inbox before resending.",
             error_code=None,
         )
+        if invitee_subset:
+            set_invitee_delivery_state(
+                meeting_id,
+                InviteeDeliveryStatus.unconfirmed,
+                _INVITEE_UNCONFIRMED_MESSAGE,
+                error_code=None,
+            )
         store.save_snapshot()
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
@@ -809,6 +993,10 @@ async def email_notes(
             reason.user_sentence,
             error_code=reason.category.value,
         )
+        if invitee_subset:
+            # Nobody received anything, and the retry is another FIRST send to
+            # everyone, so the invitee machine simply re-arms.
+            set_invitee_delivery_state(meeting_id, InviteeDeliveryStatus.not_started)
         store.save_snapshot()
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
@@ -817,6 +1005,10 @@ async def email_notes(
 
     sent_at = datetime.now(timezone.utc)
     set_delivery_state(meeting_id, DeliveryStatus.emailed, recipients=recipients, emailed_at=sent_at)
+    if invitee_subset:
+        set_invitee_delivery_state(
+            meeting_id, InviteeDeliveryStatus.sent, recipients=invitee_subset
+        )
     # Persist success before anything else can fail — a crash between the
     # send and the middleware snapshot would forget the email was ever sent.
     store.save_snapshot()
@@ -827,7 +1019,7 @@ async def email_notes(
         after=", ".join(recipients),
         meeting_id=meeting_id,
     )
-    return EmailResult(recipients=recipients, sent_at=sent_at)
+    return EmailResult(recipients=recipients, sent_at=sent_at, sent_now=recipients)
 
 
 @router.post("/{meeting_id}/sharepoint", response_model=Meeting)

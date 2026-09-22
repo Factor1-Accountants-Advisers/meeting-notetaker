@@ -10,6 +10,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from app import store
+from app.config import get_settings
 from app.routers import meetings as meetings_router
 from app.services import sharepoint
 from app.services.email import EmailDeliveryUnconfirmed
@@ -19,6 +20,7 @@ from app.schemas import (
     ActionItem,
     ActionItemStatus,
     DeliveryStatus,
+    InviteeDecision,
     ManualMeetingAttendee,
     Meeting,
     MeetingAccessEntry,
@@ -29,6 +31,11 @@ from app.schemas import (
     SharePointStatus,
     TranscriptSegment,
 )
+
+
+def _delivery_mode(value: str):
+    override = get_settings().model_copy(update={"delivery_recipients": value})
+    return patch("app.services.recipient_policy.get_settings", return_value=override)
 
 
 class FailingEmailProvider:
@@ -542,6 +549,40 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
         finally:
             del os.environ["MN_SHAREPOINT_DRIVE_ID"]
             get_settings.cache_clear()
+
+    async def test_sharepoint_repost_after_a_later_approval_grants_the_invitees(self):
+        uploads = []
+        grants = []
+        meetings_router.get_sharepoint_provider = (
+            lambda token=None: CaptureSharePointProvider(uploads, grants)
+        )
+
+        async def save():
+            # Post-hardening signature (Task 0 gate): the owner email header.
+            await meetings_router.save_transcript_to_sharepoint(
+                self.meeting_id,
+                actor="Joseph",
+                graph_token="token",
+                user_email="joseph@factor1.com.au",
+            )
+
+        with _delivery_mode("ask"):
+            await save()  # held decision answered "Just me": nobody is granted
+            self.assertEqual([g["recipients"] for g in grants], [[], []])
+
+            store.MEETINGS[self.meeting_id] = store.MEETINGS[self.meeting_id].model_copy(
+                update={"invitee_decision": InviteeDecision.approved}
+            )
+            await save()  # "Send to 1 invitee"
+
+        self.assertEqual(
+            [g["recipients"] for g in grants[2:]],
+            [["benjamin@factor1.com.au"], ["benjamin@factor1.com.au"]],
+        )
+        # A PUT by path: the same two files are overwritten, not duplicated.
+        self.assertEqual(
+            [u["filename"] for u in uploads[:2]], [u["filename"] for u in uploads[2:]]
+        )
 
 
 if __name__ == "__main__":

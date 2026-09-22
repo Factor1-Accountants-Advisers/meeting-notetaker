@@ -23,16 +23,22 @@ survives the send window. Two leaks remained:
 import json
 import unittest
 from datetime import datetime, timezone
+from typing import ClassVar
+from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi import HTTPException
 
 from app import store
+from app.config import get_settings
 from app.paths import snapshot_path
 from app.routers import meetings as meetings_router
 from app.schemas import (
     AccessRole,
     DeliveryStatus,
+    InviteeDecision,
+    InviteeDeliveryStatus,
+    ManualMeetingAttendee,
     Meeting,
     MeetingAccessEntry,
     MeetingParticipant,
@@ -44,7 +50,13 @@ from app.services.email import EmailDeliveryUnconfirmed
 from app.services.pipeline import (
     reconcile_interrupted_pipelines,
     set_delivery_state,
+    set_invitee_delivery_state,
 )
+
+
+def _mode(value: str):
+    override = get_settings().model_copy(update={"delivery_recipients": value})
+    return patch("app.services.recipient_policy.get_settings", return_value=override)
 
 
 class CountingEmailProvider:
@@ -244,6 +256,215 @@ class EmailDeliveryDurabilityTests(_EmailEndpointTestBase):
         # An unconfirmed state re-opens the (informed) retry path.
         await self._email()
         self.assertEqual(len(self.provider.sends), 1)
+
+
+class InviteeEmailPathTests(_EmailEndpointTestBase):
+    """IN-488: one held send, plus a later invitee-only send that can never
+    email the organiser twice."""
+
+    INVITEES: ClassVar[list[str]] = ["da@factor1.com.au", "mel@factor1.com.au"]
+
+    def setUp(self):
+        super().setUp()
+        store.MEETINGS[self.meeting_id] = store.MEETINGS[self.meeting_id].model_copy(
+            update={
+                "manual_attendees": [
+                    ManualMeetingAttendee(name="David Ahlhaus", email="da@factor1.com.au"),
+                    ManualMeetingAttendee(name="Mel Tran", email="mel@factor1.com.au"),
+                ]
+            }
+        )
+        ask = _mode("ask")
+        ask.start()
+        self.addCleanup(ask.stop)
+
+    def _set_decision(self, decision: InviteeDecision) -> None:
+        store.MEETINGS[self.meeting_id] = store.MEETINGS[self.meeting_id].model_copy(
+            update={"invitee_decision": decision}
+        )
+
+    def _meeting(self):
+        return store.MEETINGS[self.meeting_id]
+
+    def _persisted(self, field: str):
+        data = json.loads(snapshot_path().read_text(encoding="utf-8"))
+        return data["meetings"][str(self.meeting_id)].get(field)
+
+    async def test_first_send_pending_goes_to_the_organiser_only(self):
+        result = await self._email()
+        self.assertEqual(self.provider.sends, [["joseph@factor1.com.au"]])
+        self.assertEqual(result.sent_now, ["joseph@factor1.com.au"])
+        self.assertIs(self._meeting().invitee_delivery_status, InviteeDeliveryStatus.not_started)
+
+    async def test_first_send_under_approval_is_one_email_to_everyone(self):
+        self._set_decision(InviteeDecision.approved)
+        result = await self._email()
+
+        everyone = [*self.INVITEES, "joseph@factor1.com.au"]
+        self.assertEqual(self.provider.sends, [everyone], "one message, one To: line (D3)")
+        self.assertEqual(result.recipients, everyone)
+        self.assertEqual(result.sent_now, everyone)
+        meeting = self._meeting()
+        self.assertIs(meeting.invitee_delivery_status, InviteeDeliveryStatus.sent)
+        self.assertEqual(meeting.invitee_recipients, self.INVITEES)
+
+        replay = await self._email()
+        self.assertEqual(len(self.provider.sends), 1)
+        self.assertEqual(replay.sent_now, [])
+
+    async def test_later_send_reaches_invitees_only_and_never_the_organiser(self):
+        await self._email()  # "Just me" or timeout
+        self._set_decision(InviteeDecision.approved)  # "Send to 2 invitees"
+
+        result = await self._email()
+
+        self.assertEqual(self.provider.sends, [["joseph@factor1.com.au"], self.INVITEES])
+        self.assertEqual(result.sent_now, self.INVITEES)
+        self.assertEqual(result.recipients, ["joseph@factor1.com.au", *self.INVITEES])
+        meeting = self._meeting()
+        self.assertIs(meeting.delivery_status, DeliveryStatus.emailed)
+        self.assertEqual(meeting.delivery_recipients, ["joseph@factor1.com.au"])
+        self.assertIs(meeting.invitee_delivery_status, InviteeDeliveryStatus.sent)
+        self.assertEqual(meeting.invitee_recipients, self.INVITEES)
+        audits = [a for a in store.AUDIT_LOG if a.meeting_id == self.meeting_id]
+        self.assertEqual(
+            [a.action for a in audits if a.action.startswith("meeting.email")],
+            ["meeting.email", "meeting.email_invitees"],
+        )
+
+        replay = await self._email()
+        self.assertEqual(len(self.provider.sends), 2, "a third call sends nothing")
+        self.assertEqual(replay.sent_now, [])
+        self.assertEqual(replay.recipients, ["joseph@factor1.com.au", *self.INVITEES])
+
+    async def test_later_send_failure_leaves_the_organiser_record_intact(self):
+        first = await self._email()
+        self._set_decision(InviteeDecision.approved)
+
+        class RejectedProvider:
+            async def send_meeting_notes(self, recipients, subject, body, **kwargs):
+                raise RuntimeError("Graph sendMail failed: 400")
+
+        meetings_router.get_email_provider = lambda token=None: RejectedProvider()
+        with self.assertRaises(HTTPException) as raised:
+            await self._email()
+        self.assertEqual(raised.exception.status_code, 502)
+
+        meeting = self._meeting()
+        self.assertIs(meeting.delivery_status, DeliveryStatus.emailed)
+        self.assertEqual(meeting.delivery_recipients, first.recipients)
+        self.assertEqual(meeting.delivery_emailed_at, first.sent_at)
+        self.assertIs(meeting.invitee_delivery_status, InviteeDeliveryStatus.failed)
+        self.assertTrue(meeting.invitee_error_code)
+
+        # Retry re-sends to the invitees only.
+        meetings_router.get_email_provider = lambda token=None: self.provider
+        await self._email()
+        self.assertEqual(self.provider.sends, [["joseph@factor1.com.au"], self.INVITEES])
+
+    async def test_later_send_unconfirmed_is_not_a_failure(self):
+        await self._email()
+        self._set_decision(InviteeDecision.approved)
+
+        class UnconfirmedProvider:
+            async def send_meeting_notes(self, recipients, subject, body, **kwargs):
+                raise EmailDeliveryUnconfirmed("Graph sendMail timed out after 30s")
+
+        meetings_router.get_email_provider = lambda token=None: UnconfirmedProvider()
+        with self.assertRaises(HTTPException) as raised:
+            await self._email()
+        self.assertEqual(raised.exception.status_code, 502)
+
+        meeting = self._meeting()
+        self.assertIs(meeting.invitee_delivery_status, InviteeDeliveryStatus.unconfirmed)
+        self.assertIn("may already have been delivered", meeting.invitee_error_message or "")
+        self.assertIsNone(meeting.invitee_error_code)
+        self.assertIs(meeting.delivery_status, DeliveryStatus.emailed)
+        self.assertEqual(self._persisted("invitee_delivery_status"), "unconfirmed")
+
+    async def test_later_send_persists_sending_before_the_graph_call(self):
+        await self._email()
+        self._set_decision(InviteeDecision.approved)
+        seen: dict = {}
+        outer = self
+
+        class SnapshotReadingProvider:
+            async def send_meeting_notes(self, recipients, subject, body, **kwargs):
+                seen["invitee"] = outer._persisted("invitee_delivery_status")
+                seen["organiser"] = outer._persisted("delivery_status")
+
+        meetings_router.get_email_provider = lambda token=None: SnapshotReadingProvider()
+        await self._email()
+
+        self.assertEqual(seen, {"invitee": "sending", "organiser": "emailed"})
+
+    async def test_later_send_conflicts_while_one_is_in_flight(self):
+        await self._email()
+        self._set_decision(InviteeDecision.approved)
+        set_invitee_delivery_state(self.meeting_id, InviteeDeliveryStatus.sending)
+
+        with self.assertRaises(HTTPException) as raised:
+            await self._email()
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(len(self.provider.sends), 1)
+
+    async def test_later_send_without_a_token_marks_only_the_invitee_send_failed(self):
+        await self._email()
+        self._set_decision(InviteeDecision.approved)
+
+        with self.assertRaises(HTTPException) as raised:
+            await meetings_router.email_notes(
+                self.meeting_id,
+                meetings_router.EmailRequest(recorder_email="joseph@factor1.com.au"),
+                actor="Joseph",
+                graph_token="",
+            )
+        self.assertEqual(raised.exception.status_code, 401)
+        meeting = self._meeting()
+        self.assertIs(meeting.invitee_delivery_status, InviteeDeliveryStatus.failed)
+        self.assertEqual(meeting.invitee_error_code, "azure_signin")
+        self.assertIs(meeting.delivery_status, DeliveryStatus.emailed)
+
+    async def test_kill_switch_blocks_a_stored_approval(self):
+        await self._email()
+        self._set_decision(InviteeDecision.approved)
+
+        with _mode("organizer"):
+            result = await self._email()
+
+        self.assertEqual(len(self.provider.sends), 1, "the leftover button must send nothing")
+        self.assertEqual(result.sent_now, [])
+        self.assertIs(self._meeting().invitee_delivery_status, InviteeDeliveryStatus.not_started)
+
+    async def test_first_send_unconfirmed_marks_the_invitee_send_unconfirmed_too(self):
+        self._set_decision(InviteeDecision.approved)
+
+        class UnconfirmedProvider:
+            async def send_meeting_notes(self, recipients, subject, body, **kwargs):
+                raise EmailDeliveryUnconfirmed("Graph sendMail timed out after 30s")
+
+        meetings_router.get_email_provider = lambda token=None: UnconfirmedProvider()
+        with self.assertRaises(HTTPException):
+            await self._email()
+
+        meeting = self._meeting()
+        self.assertIs(meeting.delivery_status, DeliveryStatus.unconfirmed)
+        self.assertIs(meeting.invitee_delivery_status, InviteeDeliveryStatus.unconfirmed)
+
+    async def test_first_send_definitive_failure_re_arms_the_invitee_send(self):
+        self._set_decision(InviteeDecision.approved)
+
+        class RejectedProvider:
+            async def send_meeting_notes(self, recipients, subject, body, **kwargs):
+                raise RuntimeError("Graph sendMail failed: 400")
+
+        meetings_router.get_email_provider = lambda token=None: RejectedProvider()
+        with self.assertRaises(HTTPException):
+            await self._email()
+
+        meeting = self._meeting()
+        self.assertIs(meeting.delivery_status, DeliveryStatus.failed)
+        self.assertIs(meeting.invitee_delivery_status, InviteeDeliveryStatus.not_started)
 
 
 if __name__ == "__main__":
