@@ -201,6 +201,25 @@ assert.match(
 )
 assert.equal(inviteeNotStarted.errorCode, undefined, 'not_started is never a Failed: label')
 
+// A second Send click lands on a send that is still running: in flight is not
+// a failure either.
+const inviteeSending = deliveryOutcomeNotice({
+  ...base,
+  attempt: 'retry',
+  sharePointSaved: true,
+  deliveryStatus: 'emailed',
+  inviteeDeliveryStatus: 'sending'
+})
+assert.deepEqual(
+  inviteeSending,
+  {
+    state: 'email_failed',
+    message: 'The transcript is being sent to the invitees now.',
+    errorCode: undefined
+  },
+  'a send still in flight is not a failure and gets no Failed: label'
+)
+
 // Every delivery goes through the one pass.
 {
   const app = readFileSync(join(process.cwd(), 'src', 'renderer', 'src', 'App.tsx'), 'utf8')

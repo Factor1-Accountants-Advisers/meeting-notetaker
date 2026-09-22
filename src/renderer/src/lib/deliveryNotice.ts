@@ -108,9 +108,9 @@ export function deliveryOutcomeNotice(input: DeliveryOutcomeInput): DeliveryOutc
     // The email call failed (returned null/threw — e.g. the 90s proxy budget
     // aborted a slow-but-completing Graph send, IN-478) although the
     // organiser already has theirs: this was the later, invitee-only send
-    // (IN-488). Re-fetching can reveal the send actually went through, or
-    // never started — neither is a failure, so neither gets the "could not
-    // be sent" wording or a Failed: label.
+    // (IN-488). Re-fetching can reveal the send actually went through, never
+    // started, or is still running — none of those is a failure, so none gets
+    // the "could not be sent" wording or a Failed: label.
     if (input.inviteeDeliveryStatus === 'sent') {
       return {
         state: 'email_failed',
@@ -122,6 +122,13 @@ export function deliveryOutcomeNotice(input: DeliveryOutcomeInput): DeliveryOutc
       return {
         state: 'email_failed',
         message: 'Your own copy was already delivered; nothing was sent to invitees.',
+        errorCode: undefined
+      }
+    }
+    if (input.inviteeDeliveryStatus === 'sending') {
+      return {
+        state: 'email_failed',
+        message: 'The transcript is being sent to the invitees now.',
         errorCode: undefined
       }
     }

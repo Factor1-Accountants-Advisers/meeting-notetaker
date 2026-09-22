@@ -326,6 +326,9 @@ function App(): JSX.Element {
   >([])
   // IN-488: meetings whose delivery is held on the owner's answer.
   const inviteeHoldsRef = useRef(new Map<string, (answer: InviteeAnswer) => void>())
+  // IN-488: "Send to N invitees" passes already running. A second click while
+  // the first is in flight would race the backend's own state machine.
+  const inviteeSendsRef = useRef(new Set<string>())
   // IN-488: questions and send-later actions that survived a restart.
   const [inviteeCards, setInviteeCards] = useState<InviteeResurfacedCard[]>([])
   const { theme, setTheme } = useTheme()
@@ -1248,25 +1251,34 @@ function App(): JSX.Element {
    *  The backend knows the organiser has their copy, so only invitees are
    *  emailed, and the SharePoint re-post overwrites the files and adds grants. */
   const sendToInvitees = async (meetingId: string, title: string, count: number): Promise<void> => {
-    setPostCaptureNotice({
-      state: 'emailing',
-      meetingId,
-      title,
-      message: sendingLaterMessage(count)
-    })
-    const recorded = await postInviteeDecision(meetingId, true, 'app')
-    if (!recorded) {
+    if (inviteeSendsRef.current.has(meetingId)) return
+    inviteeSendsRef.current.add(meetingId)
+    try {
       setPostCaptureNotice({
-        state: 'email_failed',
+        state: 'emailing',
         meetingId,
         title,
-        message:
-          'Could not start sending to invitees. Nothing was sent to invitees; your own copy was already delivered.',
-        errorCode: null
+        message: sendingLaterMessage(count)
       })
-      return
+      const recorded = await postInviteeDecision(meetingId, true, 'app')
+      if (!recorded) {
+        // The decision request failed OR lost its response — including the 409
+        // race where an approval is already stored. Either way the send may
+        // have started, so Retry email, not "nothing was sent".
+        setPostCaptureNotice({
+          state: 'email_failed',
+          meetingId,
+          title,
+          message:
+            'Could not confirm the invitee send started. Use Retry email to send it; your own copy was already delivered.',
+          errorCode: null
+        })
+        return
+      }
+      await runDeliveryPass(meetingId, title, user.email, 'retry')
+    } finally {
+      inviteeSendsRef.current.delete(meetingId)
     }
-    await runDeliveryPass(meetingId, title, user.email, 'retry')
   }
 
   // Restart cards (IN-488). Each leaves the list at once and hands over to the
