@@ -558,12 +558,13 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
         )
 
         async def save():
-            # Post-hardening signature (Task 0 gate): the owner email header.
+            # IN-488 ships ahead of the SharePoint permission hardening (Joseph,
+            # 22 Sep 2026), so this is the pre-hardening route signature. When
+            # the hardening lands, add `user_email="joseph@factor1.com.au"`.
             await meetings_router.save_transcript_to_sharepoint(
                 self.meeting_id,
                 actor="Joseph",
                 graph_token="token",
-                user_email="joseph@factor1.com.au",
             )
 
         with _delivery_mode("ask"):
