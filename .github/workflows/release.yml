@@ -194,7 +194,7 @@ jobs:
             $lines += "MN_DELIVERY_RECIPIENTS=$env:MN_DELIVERY_RECIPIENTS"
             Write-Host "Delivery recipients mode: $env:MN_DELIVERY_RECIPIENTS"
           } else {
-            Write-Host "Delivery recipients mode: organizer (code default; invitee fan-out OFF)"
+            Write-Host "Delivery recipients mode: ask (code default; the owner is asked before invitees are emailed). Kill switch: set the MN_DELIVERY_RECIPIENTS repo variable to organizer."
           }
           if ($env:MN_AUTO_START_TRIGGER) {
             $lines += "MN_AUTO_START_TRIGGER=$env:MN_AUTO_START_TRIGGER"

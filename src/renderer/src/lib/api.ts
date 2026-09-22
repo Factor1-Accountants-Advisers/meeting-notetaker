@@ -12,6 +12,13 @@ import type {
   SharePointStatus,
   StaffMember
 } from '@renderer/data/mock'
+import {
+  interpretInviteesResponse,
+  type InviteeDecision,
+  type InviteeDecisionSource,
+  type InviteeDeliveryStatus,
+  type InviteeState
+} from './inviteePrompt'
 
 // ---------------------------------------------------------------------------
 // Wire shapes (backend/app/schemas.py). Keep in sync.
@@ -46,6 +53,14 @@ export interface MeetingDto {
   delivery_status: DeliveryStatus
   delivery_error_message: string | null
   delivery_error_code: string | null
+  /** When the organiser's email went out (IN-478 replay field). */
+  delivery_emailed_at?: string | null
+  // IN-488. Optional: a backend from before IN-488 sends none of these.
+  invitee_decision?: InviteeDecision
+  invitee_delivery_status?: InviteeDeliveryStatus
+  invitee_recipients?: string[]
+  invitee_error_message?: string | null
+  invitee_error_code?: string | null
   sharepoint_status: SharePointStatus
   sharepoint_error_message: string | null
   sharepoint_error_code: string | null
@@ -385,8 +400,12 @@ export async function patchActionItem(
 }
 
 export interface EmailResultDto {
+  /** Everyone who has the transcript by email. */
   recipients: string[]
   sent_at: string
+  /** Who THIS call emailed (IN-488): everyone on a first send, the invitees
+   *  only on a later send, empty on a replay. Absent on an older backend. */
+  sent_now?: string[]
 }
 
 export async function emailNotes(
@@ -402,6 +421,45 @@ export async function emailNotes(
 
 export async function saveTranscriptToSharePoint(meetingId: string): Promise<MeetingDto | null> {
   return call<MeetingDto>('POST', `/meetings/${meetingId}/sharepoint`)
+}
+
+/** Raw DTOs, for the IN-488 restart filter, which reads fields mapMeeting drops. */
+export async function fetchMeetingDtos(): Promise<MeetingDto[] | null> {
+  return get<MeetingDto[]>('/meetings')
+}
+
+/** Null means "cannot ask: deliver now" (see interpretInviteesResponse). Needs
+ *  the HTTP status, which `call` discards, so it uses the bridge directly. */
+export async function fetchInvitees(
+  meetingId: string,
+  recorderEmail?: string | null
+): Promise<InviteeState | null> {
+  if (typeof window.api?.request !== 'function') return null
+  const query = recorderEmail ? `?recorder_email=${encodeURIComponent(recorderEmail)}` : ''
+  try {
+    return interpretInviteesResponse(
+      await window.api.request<unknown>('GET', `${PREFIX}/meetings/${meetingId}/invitees${query}`)
+    )
+  } catch {
+    return null
+  }
+}
+
+/** Null when the answer could not be recorded (including a 409 because the
+ *  meeting was already approved). Sends nothing by itself. */
+export async function postInviteeDecision(
+  meetingId: string,
+  approved: boolean,
+  source: InviteeDecisionSource
+): Promise<MeetingDto | null> {
+  try {
+    return await call<MeetingDto>('POST', `/meetings/${meetingId}/invitees/decision`, {
+      approved,
+      source
+    })
+  } catch {
+    return null
+  }
 }
 
 export interface AuditEntryDto {

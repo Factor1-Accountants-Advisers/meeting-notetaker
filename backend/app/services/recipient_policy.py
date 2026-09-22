@@ -30,6 +30,7 @@ import logging
 from typing import Iterable
 
 from app.config import get_settings
+from app.schemas import InviteeCandidate, InviteeDecision, Meeting
 
 logger = logging.getLogger(__name__)
 
@@ -45,15 +46,49 @@ DEFAULT_DELIVERY_DOMAINS: tuple[str, ...] = (
     "kppartners.com.au",
 )
 
+# Delivery mode (IN-488, spec D10). `ask` is the code default. `organizer` is
+# exactly the v2.0.29+ behaviour and therefore the kill switch. `attendees` is
+# the unchanged escape hatch: everyone gets it, nobody is asked.
+DELIVERY_MODE_ASK = "ask"
+DELIVERY_MODE_ORGANIZER = "organizer"
+DELIVERY_MODE_ATTENDEES = "attendees"
+_DELIVERY_MODES = frozenset(
+    {DELIVERY_MODE_ASK, DELIVERY_MODE_ORGANIZER, DELIVERY_MODE_ATTENDEES}
+)
 
-def attendee_fan_out_enabled() -> bool:
-    """Whether meeting artifacts fan out to invitees (email + SharePoint
-    grants) or go to the recording owner only.
 
-    Organiser-only is the default and the fail-closed reading of anything
-    unrecognised: only the exact value ``attendees`` opens fan-out.
+def delivery_mode() -> str:
+    """The configured delivery mode, failing closed to ``organizer``.
+
+    Anything unrecognised, including a blank value, reads as ``organizer``:
+    a typo in a repo variable or a %PROGRAMDATA% override must degrade to
+    today's organiser-only delivery, never to prompting or fan-out.
     """
-    return get_settings().delivery_recipients.strip().lower() == "attendees"
+    value = get_settings().delivery_recipients.strip().lower()
+    return value if value in _DELIVERY_MODES else DELIVERY_MODE_ORGANIZER
+
+
+def prompt_enabled() -> bool:
+    """Whether the owner is asked about invitees at all (``ask`` mode only)."""
+    return delivery_mode() == DELIVERY_MODE_ASK
+
+
+def invitees_approved(meeting: Meeting) -> bool:
+    """Whether this meeting's invitees may receive email and SharePoint grants.
+
+    ``attendees``: always. ``ask``: only with a stored approval. ``organizer``:
+    never, even with a stored approval (Joseph, 21 Sep 2026). The example that
+    settled it: Monday "Just me" leaves a "Send to 5 invitees" button on Home;
+    Tuesday the switch is flipped after an incident; Wednesday a click on that
+    leftover button must send nothing. The stored decision is kept, so
+    flipping back to ``ask`` restores it.
+    """
+    mode = delivery_mode()
+    if mode == DELIVERY_MODE_ATTENDEES:
+        return True
+    if mode == DELIVERY_MODE_ASK:
+        return meeting.invitee_decision is InviteeDecision.approved
+    return False
 
 
 def allowed_delivery_domains() -> frozenset[str]:
@@ -123,3 +158,43 @@ def filter_deliverable(
             address,
         )
     return kept
+
+
+def _clean_email(value: str | None) -> str | None:
+    cleaned = (value or "").strip().lower()
+    return cleaned if "@" in cleaned else None
+
+
+def invitee_candidates(
+    meeting: Meeting,
+    recorder_email: str | None = None,
+    *,
+    channel: str = "invitees",
+) -> list[InviteeCandidate]:
+    """The other people this meeting's transcript could be emailed to (IN-488).
+
+    Graph attendees for a calendar meeting, the attendee-picker selections for
+    an ad-hoc one (the calendar branch wins when both exist, matching
+    ``_sharepoint_recipients``). Never the organiser and never the recorder,
+    so "5 invitees" always means five OTHER people. Everything passes the
+    domain allowlist BEFORE it is counted, so an external address never
+    appears in the toast or the card. First-seen order, deduped
+    case-insensitively; the first name seen for an address wins.
+    """
+    if meeting.graph_metadata:
+        source = [(a.name, a.email) for a in meeting.graph_metadata.attendees]
+        organizer = _clean_email(meeting.graph_metadata.organizer_email)
+    else:
+        source = [(a.name, a.email) for a in meeting.manual_attendees]
+        organizer = None
+    excluded = {email for email in (organizer, _clean_email(recorder_email)) if email}
+
+    names: dict[str, str | None] = {}
+    for name, raw in source:
+        email = _clean_email(raw)
+        if email is None or email in excluded or email in names:
+            continue
+        names[email] = (name or "").strip() or None
+
+    kept = filter_deliverable(list(names), channel=channel, meeting_id=meeting.id)
+    return [InviteeCandidate(name=names[email], email=email) for email in kept]

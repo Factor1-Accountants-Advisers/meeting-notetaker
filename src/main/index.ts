@@ -35,7 +35,7 @@ import { registerRecordingStorageIpc } from './recording-storage'
 import { ensureDefaultAutoLaunchEnabled, isBackgroundLaunch, registerStartupIpc } from './startup'
 import {
   buildUpdateReadyToastXml,
-  toastActionFromArgv,
+  parseToastArgv,
   TOAST_PROTOCOL_SCHEME
 } from './toast-xml'
 import { createTray, destroyTray, setTraySkipped, setUpdateReady, setUpdateRestartHandler, updateTrayMenu } from './tray'
@@ -61,6 +61,7 @@ import {
 } from './join-watch'
 import { createWindow, registerWindowSizingIpc } from './window'
 import { AudioEndpointService, resolveAudioEndpointHelperPath } from './audio-endpoint-service'
+import { disposeInviteePrompt, inviteePromptToastAnswered, registerInviteePromptIpc } from './invitee-prompt'
 import type { GraphEventDecision } from './graph/types'
 
 loadPublicEnv()
@@ -95,6 +96,7 @@ registerRecordingStorageIpc()
 registerUpdaterIpc()
 registerStartupIpc()
 registerWindowSizingIpc()
+registerInviteePromptIpc()
 ipcMain.handle('audio-endpoints:get', () => audioEndpointService?.getSnapshot() ?? null)
 
 function registerRecordingIpcHandlers(): void {
@@ -199,7 +201,8 @@ app.on('second-instance', (_event, argv) => {
   // activationType="foreground" arguments were silently dropped by Windows
   // because Electron has no COM activation callback; legacy mn-* args are
   // still parsed for toasts shown by pre-fix app versions).
-  const toastAction = toastActionFromArgv(argv)
+  const parsedToast = parseToastArgv(argv)
+  const toastAction = parsedToast?.action ?? null
   if (toastAction === 'extend') {
     // IN-124: extend in place without stealing focus to the window.
     logger().info('[app] extend requested from toast notification')
@@ -225,6 +228,16 @@ app.on('second-instance', (_event, argv) => {
     // without stealing focus (same rationale as extend/upload-now above).
     logger().info('[app] record-now requested from join prompt')
     joinWatchPromptAccepted()
+    return
+  }
+  if (toastAction === 'invitees-approve' || toastAction === 'invitees-decline') {
+    // IN-488: answer the invitee prompt in place, without stealing focus (same
+    // rationale as extend/upload-now above). The meeting id rides on the URI
+    // because more than one prompt can be up; a click for a meeting whose
+    // timer already fired is dropped by the engine as a stale click.
+    const approved = toastAction === 'invitees-approve'
+    logger().info('[app] invitee prompt answered from toast notification', { approved })
+    if (parsedToast?.meetingId) inviteePromptToastAnswered(parsedToast.meetingId, approved)
     return
   }
   if (toastAction === 'update-restart') {
@@ -471,6 +484,9 @@ app.on('before-quit', () => {
   cleanupRecordingIpc()
   // Join watcher: clear its timers and any visible prompt (no-op in calendar mode).
   disposeJoinWatch()
+  // Invitee prompts: clear timers and toasts. Quitting decides nothing; an
+  // unanswered meeting resurfaces as a card on the next launch.
+  disposeInviteePrompt()
   // Flush any registrar state writes already in flight before shutdown.
   void callWatchRegistrar?.flushState()
   audioEndpointService?.stop()

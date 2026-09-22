@@ -34,6 +34,9 @@ jobs:
           npm run verify:call-watch-registrar
           npm run verify:graph
           npm run verify:toast-xml
+          npm run verify:invitee-prompt
+          npm run verify:invitee-cards
+          npm run verify:email-notice
           npm run verify:backend-supervisor
 
   rust-helper:

@@ -19,23 +19,25 @@ from uuid import UUID
 
 from app import store
 from app.config import get_settings
+from app.paths import audio_dir
 from app.schemas import (
     AccessRole,
     BlobStatus,
     DeliveryStatus,
+    InviteeDecision,
+    InviteeDeliveryStatus,
     MeetingAccessEntry,
     MeetingSource,
     PipelineStage,
     PipelineStatus,
 )
-from app.paths import audio_dir
 from app.services import audio_checks
 from app.services.blob_delivery import deliver_meeting_to_blob
 from app.services.context_file import get_company_context
 from app.services.failure_reasons import (
+    USER_SENTENCES,
     FailureCategory,
     FailureReason,
-    USER_SENTENCES,
     classify,
     log_delivery_failure,
 )
@@ -47,8 +49,8 @@ from app.services.llm import (
 )
 from app.services.meeting_export import derive_meeting_type, refresh_meeting_export
 from app.services.meeting_voiceprints import resolve_meeting_voiceprints
-from app.services.speech import get_speech_provider
 from app.services.speaker_matching import get_speaker_matcher
+from app.services.speech import get_speech_provider
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +177,52 @@ def set_delivery_state(
         )
 
 
+def set_invitee_delivery_state(
+    meeting_id: UUID,
+    status: InviteeDeliveryStatus,
+    error_message: str | None = None,
+    *,
+    error_code: str | None = None,
+    recipients: list[str] | None = None,
+) -> None:
+    """Drive the invitee send's own state machine (IN-488, D7).
+
+    Deliberately writes NO ``delivery_*`` field. ``set_delivery_state`` clears
+    ``delivery_recipients`` on any move out of ``emailed``; doing that from an
+    invitee failure would forget the organiser already has their copy, and the
+    next retry would email them twice (the IN-478 history).
+    """
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is not None:
+        store.MEETINGS[meeting_id] = meeting.model_copy(
+            update={
+                "invitee_delivery_status": status,
+                "invitee_error_message": error_message,
+                "invitee_error_code": error_code,
+                "invitee_recipients": (
+                    list(recipients)
+                    if status is InviteeDeliveryStatus.sent and recipients
+                    else []
+                ),
+            }
+        )
+
+
+def reset_invitee_state(meeting_id: UUID) -> None:
+    """A regenerated transcript is new content, so it gets a new question."""
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is not None:
+        store.MEETINGS[meeting_id] = meeting.model_copy(
+            update={
+                "invitee_decision": InviteeDecision.pending,
+                "invitee_delivery_status": InviteeDeliveryStatus.not_started,
+                "invitee_error_message": None,
+                "invitee_error_code": None,
+                "invitee_recipients": [],
+            }
+        )
+
+
 def _increment_attempt(meeting_id: UUID) -> None:
     meeting = store.MEETINGS.get(meeting_id)
     if meeting is not None:
@@ -209,6 +257,20 @@ def reconcile_interrupted_pipelines() -> int:
                 # unconfirmed is not a failure category (IN-478 regression
                 # guard) — explicit to match the router's emailing→unconfirmed
                 # site (meetings.py:614) rather than relying on the default.
+                error_code=None,
+            )
+            changed += 1
+        # IN-488: same reasoning for the invitee send. `sending` on disk means
+        # the process died mid-send and the outcome is unknowable, so it must
+        # not become `failed` ("resend safe"). Only the invitee machine moves:
+        # the organiser's `emailed` record stays exactly as it was.
+        if meeting.invitee_delivery_status is InviteeDeliveryStatus.sending:
+            set_invitee_delivery_state(
+                meeting_id,
+                InviteeDeliveryStatus.unconfirmed,
+                "The invitee email was interrupted by a backend restart — it "
+                "may already have been delivered. Check with an invitee before "
+                "resending.",
                 error_code=None,
             )
             changed += 1
@@ -488,6 +550,7 @@ def kick_pipeline(
         meeting.blob_error_code = None
     store.BLOB_DELIVERY_STARTED_AT.pop(meeting_id, None)
     set_delivery_state(meeting_id, DeliveryStatus.not_started)
+    reset_invitee_state(meeting_id)
     set_pipeline_state(
         meeting_id,
         PipelineStatus.queued,

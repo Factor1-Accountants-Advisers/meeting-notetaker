@@ -10,15 +10,14 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from app import store
+from app.config import get_settings
 from app.routers import meetings as meetings_router
-from app.services import sharepoint
-from app.services.email import EmailDeliveryUnconfirmed
-from app.services.failure_reasons import FailureCategory, USER_SENTENCES
 from app.schemas import (
     AccessRole,
     ActionItem,
     ActionItemStatus,
     DeliveryStatus,
+    InviteeDecision,
     ManualMeetingAttendee,
     Meeting,
     MeetingAccessEntry,
@@ -29,6 +28,14 @@ from app.schemas import (
     SharePointStatus,
     TranscriptSegment,
 )
+from app.services import sharepoint
+from app.services.email import EmailDeliveryUnconfirmed
+from app.services.failure_reasons import USER_SENTENCES, FailureCategory
+
+
+def _delivery_mode(value: str):
+    override = get_settings().model_copy(update={"delivery_recipients": value})
+    return patch("app.services.recipient_policy.get_settings", return_value=override)
 
 
 class FailingEmailProvider:
@@ -514,10 +521,10 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_sharepoint_configured_drive_no_token_returns_401(self):
         """D1: configured SharePoint drive + missing token → 401."""
-        from app.config import get_settings
-
         # Temporarily set sharepoint_drive_id via env
         import os
+
+        from app.config import get_settings
         os.environ["MN_SHAREPOINT_DRIVE_ID"] = "fake-drive-id"
         get_settings.cache_clear()
         try:
@@ -542,6 +549,43 @@ class DeliveryReliabilityTests(unittest.IsolatedAsyncioTestCase):
         finally:
             del os.environ["MN_SHAREPOINT_DRIVE_ID"]
             get_settings.cache_clear()
+
+    async def test_sharepoint_repost_after_a_later_approval_grants_the_invitees(self):
+        uploads = []
+        grants = []
+        meetings_router.get_sharepoint_provider = (
+            lambda token=None: CaptureSharePointProvider(uploads, grants)
+        )
+
+        async def save():
+            # IN-488 ships ahead of the SharePoint permission hardening (Joseph,
+            # 22 Sep 2026), so this is the pre-hardening route signature. When
+            # the hardening lands, add `user_email="joseph@factor1.com.au"`.
+            await meetings_router.save_transcript_to_sharepoint(
+                self.meeting_id,
+                actor="Joseph",
+                graph_token="token",
+            )
+
+        with _delivery_mode("ask"):
+            await save()  # held decision answered "Just me": nobody is granted
+            self.assertEqual([g["recipients"] for g in grants], [[], []])
+
+            store.MEETINGS[self.meeting_id] = store.MEETINGS[self.meeting_id].model_copy(
+                update={"invitee_decision": InviteeDecision.approved}
+            )
+            await save()  # "Send to 1 invitee"
+
+        self.assertEqual(
+            [g["recipients"] for g in grants[2:]],
+            [["benjamin@factor1.com.au"], ["benjamin@factor1.com.au"]],
+        )
+        # A PUT by path: the same two files are overwritten, not duplicated.
+        # The folder is half the path, so compare it too.
+        self.assertEqual(
+            [(u["owner_folder"], u["filename"]) for u in uploads[:2]],
+            [(u["owner_folder"], u["filename"]) for u in uploads[2:]],
+        )
 
 
 if __name__ == "__main__":

@@ -66,6 +66,41 @@ class SharePointStatus(str, Enum):
     failed = "failed"
 
 
+class InviteeDecision(str, Enum):
+    """IN-488: the recording owner's answer to "email the invitees?".
+
+    `pending` is also what every meeting recorded before IN-488 loads as.
+    A timeout is stored as `declined` (the audit entry carries the source),
+    so "send later" is the same declined → approved move either way.
+    """
+
+    pending = "pending"
+    approved = "approved"
+    declined = "declined"
+
+
+class InviteeDeliveryStatus(str, Enum):
+    """State of the invitee send, kept apart from DeliveryStatus on purpose.
+
+    DeliveryStatus clears delivery_recipients on any move out of `emailed`
+    (IN-478). Sharing that machine with a later invitee-only send would let a
+    crash mid-send forget the organiser already has theirs, and the next
+    retry would email them again.
+    """
+
+    not_started = "not_started"
+    sending = "sending"
+    sent = "sent"
+    unconfirmed = "unconfirmed"
+    failed = "failed"
+
+
+class InviteeDecisionSource(str, Enum):
+    toast = "toast"
+    app = "app"
+    timeout = "timeout"
+
+
 class GraphMeetingAttendeeMetadata(BaseModel):
     name: str | None = None
     email: str | None = None
@@ -197,6 +232,15 @@ class Meeting(BaseModel):
     # sharepoint_web_url stays pointed at the transcript for the existing
     # single-URL consumers.
     sharepoint_summary_url: str | None = None
+    # IN-488: ask-before-emailing-invitees. Stored locally like
+    # delivery_status; nothing here goes to the central storage API.
+    invitee_decision: InviteeDecision = InviteeDecision.pending
+    invitee_delivery_status: InviteeDeliveryStatus = InviteeDeliveryStatus.not_started
+    # The invitees this meeting has actually been emailed to. Only populated
+    # while invitee_delivery_status is `sent`.
+    invitee_recipients: list[str] = Field(default_factory=list)
+    invitee_error_message: str | None = None
+    invitee_error_code: str | None = None  # FailureCategory value (IN-391)
     # The uploaded mic track measured as digital silence (recorder's own voice
     # absent). Set at upload; surfaced in the minutes header.
     recorder_audio_missing: bool = False
@@ -334,8 +378,35 @@ class EmailRequest(BaseModel):
 
 
 class EmailResult(BaseModel):
+    # Everyone who has the transcript by email: organiser send + invitee send.
     recipients: list[str]
     sent_at: datetime
+    # Who THIS call emailed (IN-488). Equal to `recipients` on a first send,
+    # the invitees only on a later send, and empty on an idempotent replay.
+    sent_now: list[str] = Field(default_factory=list)
+
+
+class InviteeCandidate(BaseModel):
+    """One person the owner may choose to email (IN-488)."""
+
+    name: str | None = None
+    email: str
+
+
+class InviteeDecisionRequest(BaseModel):
+    approved: bool
+    source: InviteeDecisionSource
+
+
+class InviteeState(BaseModel):
+    candidates: list[InviteeCandidate]
+    # The EFFECTIVE decision: reports `approved` under the `attendees` mode.
+    decision: InviteeDecision
+    invitee_delivery_status: InviteeDeliveryStatus
+    invitee_recipients: list[str]
+    # True only in `ask` mode. The desktop prompts, and offers "Send to N
+    # invitees", only when this is true (spec Q2 and the 21 Sep amendment).
+    prompt_enabled: bool
 
 
 class SystemAudioSegment(BaseModel):

@@ -1274,3 +1274,26 @@ Jira item drafted for DA (parent IN-64; amends the IN-106 rules).
   NowInfinity, XPM, CorpSec) into the IN-383 company-context doc; transcript
   ended mid-sentence on the $25 fee item (recording stopped early or the
   meeting overran — ask Ayda).
+
+## IN-488 — Ask before emailing invitees (branch `feature/invitee-email-prompt`)
+
+Spec `docs/superpowers/specs/2026-09-21-in488-invitee-prompt-design.md`, plan
+`docs/superpowers/plans/2026-09-21-in488-invitee-prompt.md`.
+
+- [x] Backend: `invitee_decision` + a separate `invitee_delivery_status` machine
+  (D7); delivery mode `ask` / `organizer` / `attendees`; `GET /invitees`,
+  `POST /invitees/decision`; held first send and an invitee-only later send.
+  Tests: `test_invitee_candidates.py`, `test_invitee_decision.py`, plus
+  additions to `test_email_idempotency.py`, `test_delivery_reliability.py`,
+  `test_organizer_only_delivery.py`, `test_email_recipients.py`.
+- [x] Pinned: a failed or interrupted invitee send never touches
+  `delivery_status` / `delivery_recipients`, so the organiser is never
+  re-emailed; the `organizer` kill switch blocks a stored approval.
+- [x] Desktop: toast with `?meeting=` routing, pure prompt engine with a
+  timeout that fires the safe default, pending / emailing / send-later cards,
+  restart resurfacing. Harnesses `verify:invitee-prompt`,
+  `verify:invitee-cards`, `verify:toast-xml`, `verify:email-notice` (all in CI).
+- [x] Behaviour change, deliberate (D2): ad-hoc attendees are emailable once
+  approved. `test_adhoc_recording_still_emails_recorder_only` was replaced.
+- [ ] Live checks L1–L8 (Joseph + DA, packaged test build).
+- [ ] Release: own version, FIC subject patched to the exact tag first.

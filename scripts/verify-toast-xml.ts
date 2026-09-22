@@ -3,11 +3,15 @@ import {
   ENDING_SOON_TOAST_LIFETIME_MS,
   TOAST_LIFETIME_MS,
   buildEndingSoonToastXml,
+  buildInviteePromptToastXml,
   buildJoinPromptToastXml,
   buildRecordingPausedToastXml,
   buildRecordingStartedToastXml,
   buildUpdateCountdownToastXml,
   buildUpdateReadyToastXml,
+  inviteeToastLines,
+  inviteeToastUri,
+  parseToastArgv,
   toastActionFromArgv,
   toastUri
 } from '../src/main/toast-xml'
@@ -174,6 +178,91 @@ assert.equal(toastActionFromArgv(['exe', '--background']), null, 'unrelated argv
   assert.equal(TOAST_LIFETIME_MS, 2 * 60_000, 'standard toast lifetime is 2 min')
   assert.equal(ENDING_SOON_TOAST_LIFETIME_MS, 5 * 60_000, 'ending-soon warning stays 5 min')
   assert.equal(JOIN_WATCH_PROMPT_LIFETIME_MS, TOAST_LIFETIME_MS, 'join prompt follows the standard lifetime')
+}
+
+// IN-488 invitee prompt: "Notes ready" + the question + up to three names.
+// Unlike every toast above, more than one can be up at once (an ad-hoc upload
+// and a scheduled meeting finishing together), so the buttons carry the
+// meeting id as a query and the parser learns to read it.
+{
+  const meetingId = '3f0c1f4e-9a57-4b0e-8d5a-0c6f1f6f2a11'
+  const five = ['David Ahlhaus', 'Priya Nair', 'Sam Whitfield', 'Alex Morgan', 'Jordan Lee']
+
+  assert.deepEqual(inviteeToastLines('Innovations sync', five), [
+    'Notes ready: Innovations sync',
+    'Email the transcript to 5 invitees?',
+    'David Ahlhaus, Priya Nair, Sam Whitfield +2 more'
+  ])
+  assert.deepEqual(
+    inviteeToastLines('Innovations sync', five.slice(0, 3))[2],
+    'David Ahlhaus, Priya Nair, Sam Whitfield',
+    'exactly three names: no "+0 more"'
+  )
+  assert.deepEqual(inviteeToastLines('Innovations sync', five.slice(0, 2)), [
+    'Notes ready: Innovations sync',
+    'Email the transcript to 2 invitees?',
+    'David Ahlhaus, Priya Nair'
+  ])
+  assert.deepEqual(
+    inviteeToastLines('Innovations sync', ['David Ahlhaus']),
+    ['Notes ready: Innovations sync', 'Email the transcript to David Ahlhaus?'],
+    'one invitee: singular wording, and the name is not repeated on a third line (Q6)'
+  )
+  assert.equal(inviteeToastLines('', five)[0], 'Notes ready', 'no title: no dangling colon')
+
+  const xml = buildInviteePromptToastXml({ meetingId, title: 'Innovations sync', names: five })
+  assert.match(xml, /<toast[^>]*scenario="reminder"/, 'sticky; the runtime closes it after TOAST_LIFETIME_MS')
+  assert.match(xml, /launch="notetaker:\/\/open"/, 'body click opens the app')
+  assert.match(xml, /<audio silent="true"\/>/, 'silent: the chime comes from the renderer')
+  assert.equal((xml.match(/<text>/g) ?? []).length, 3, 'three text lines is the Windows limit')
+  assert.match(
+    xml,
+    new RegExp(
+      `<action content="Email invitees" activationType="protocol" arguments="notetaker://invitees-approve\\?meeting=${meetingId}"/>`
+    )
+  )
+  assert.match(
+    xml,
+    new RegExp(
+      `<action content="Just me" activationType="protocol" arguments="notetaker://invitees-decline\\?meeting=${meetingId}"/>`
+    )
+  )
+  assert.doesNotMatch(xml, /activationType="foreground"/, 'IN-483: no dead foreground buttons')
+
+  const escaped = buildInviteePromptToastXml({
+    meetingId,
+    title: 'Q&A <Board>',
+    names: ['O"Brien & Co', 'Sam']
+  })
+  assert.match(escaped, /Notes ready: Q&amp;A &lt;Board&gt;/, 'title is XML-escaped')
+  assert.match(escaped, /O&quot;Brien &amp; Co, Sam/, 'names are XML-escaped')
+  assert.doesNotMatch(escaped, /<Board>/, 'raw angle brackets never reach the toast XML')
+
+  assert.equal(inviteeToastUri('invitees-approve', meetingId), `notetaker://invitees-approve?meeting=${meetingId}`)
+  assert.deepEqual(parseToastArgv(['exe', inviteeToastUri('invitees-approve', meetingId)]), {
+    action: 'invitees-approve',
+    meetingId
+  })
+  assert.deepEqual(
+    parseToastArgv(['exe', `notetaker://invitees-decline/?meeting=${meetingId}`]),
+    { action: 'invitees-decline', meetingId },
+    'Windows can normalise a slash in before the query'
+  )
+  assert.equal(parseToastArgv(['exe', 'notetaker://invitees-approve']), null, 'no meeting id: ignored, never guessed')
+  assert.equal(parseToastArgv(['exe', 'notetaker://invitees-approve?meeting=']), null, 'blank meeting id: ignored')
+  assert.deepEqual(
+    parseToastArgv([
+      'exe',
+      'notetaker://invitees-approve?meeting=',
+      inviteeToastUri('invitees-decline', meetingId)
+    ]),
+    { action: 'invitees-decline', meetingId },
+    'a blank-id arg is skipped, not taken as the answer: the parser reads on'
+  )
+  assert.deepEqual(parseToastArgv(['exe', toastUri('extend')]), { action: 'extend', meetingId: null }, 'bare URIs still parse')
+  assert.deepEqual(parseToastArgv(['exe', 'mn-open']), { action: 'open', meetingId: null }, 'legacy mn-* still parse')
+  assert.equal(toastActionFromArgv(['exe', inviteeToastUri('invitees-decline', meetingId)]), 'invitees-decline')
+  assert.equal(parseToastArgv(['exe', '--background']), null)
 }
 
 console.log('Toast XML verification passed')
