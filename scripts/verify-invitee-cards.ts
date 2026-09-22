@@ -107,6 +107,21 @@ assert.deepEqual(
   state({ candidates: [{ name: null, email: 'da@factor1.com.au' }] }),
   'blank names normalise to null; malformed candidates are dropped'
 )
+assert.equal(
+  interpretInviteesResponse({
+    ok: true,
+    status: 200,
+    body: {
+      candidates: [],
+      decision: 'declined',
+      invitee_delivery_status: 'bogus',
+      invitee_recipients: [],
+      prompt_enabled: true
+    }
+  })?.invitee_delivery_status,
+  'not_started',
+  'an unrecognised status falls back to the safe default, like the decision check'
+)
 
 // ---- restart resurfacing ----------------------------------------------------
 const NOW = Date.parse('2026-09-21T02:00:00Z')
@@ -148,6 +163,46 @@ assert.equal(
   null
 )
 assert.equal(
+  resurfaceKind(
+    meeting({ invitee_decision: 'approved', delivery_status: 'emailed', invitee_delivery_status: 'sending' }),
+    NOW,
+    none
+  ),
+  null,
+  'a live send is never resurfaced underneath itself'
+)
+assert.equal(
+  resurfaceKind(
+    meeting({
+      invitee_decision: 'approved',
+      delivery_status: 'emailed',
+      invitee_delivery_status: 'unconfirmed'
+    }),
+    NOW,
+    none
+  ),
+  'send_later',
+  'an unconfirmed send still owes the owner a way to resend'
+)
+
+// The owner answered, the decision persisted, and the app died before the
+// delivery pass: nothing else ever brings that meeting back.
+assert.equal(
+  resurfaceKind(meeting({ invitee_decision: 'declined' }), NOW, none),
+  'deliver',
+  'answered "Just me" but never delivered'
+)
+assert.equal(
+  resurfaceKind(meeting({ invitee_decision: 'approved' }), NOW, none),
+  'deliver',
+  'answered "Email invitees" but never delivered'
+)
+assert.equal(
+  resurfaceKind(meeting({ invitee_decision: 'declined' }), NOW, new Set(['m1'])),
+  null,
+  'a delivery that can never succeed (e.g. a 409 "no transcript") must have an exit'
+)
+assert.equal(
   resurfaceKind(meeting({ invitee_decision: 'declined', delivery_status: 'failed' }), NOW, none),
   null,
   'the send-later card says "Emailed to you on…", which would be false here'
@@ -180,6 +235,11 @@ assert.match(
 )
 assert.equal(resurfacedSendLaterMessage(null), "Emailed to you. Invitees haven't received it.")
 assert.equal(resurfacedSendLaterMessage('not a date'), "Emailed to you. Invitees haven't received it.")
+assert.equal(
+  resurfacedSendLaterMessage(null, 'unconfirmed'),
+  'Emailed to you. The invitee email may already have been delivered; check with an invitee before resending.',
+  'an interrupted invitee send must not promise the invitees have nothing (IN-478 rule)'
+)
 
 // ---- dismissed set ----------------------------------------------------------
 assert.deepEqual(parseDismissed(null), [])

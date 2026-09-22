@@ -494,21 +494,41 @@ function App(): JSX.Element {
           const kind = resurfaceKind(meeting, now, dismissed)
           // A meeting whose hold is live in this session already has its card.
           if (!kind || inviteeHoldsRef.current.has(meeting.id)) continue
-          const state = await fetchInvitees(meeting.id, signedInEmail)
-          if (cancelled) return
-          // prompt_enabled=false is the kill switch (or the attendees override):
-          // no question and no send-later action may be offered.
-          if (!state || !state.prompt_enabled || state.candidates.length === 0) continue
+          let cardKind = kind
+          let candidates: InviteeCandidate[] = []
+          // A `deliver` card asks nothing, so it needs neither the candidate
+          // list nor the kill-switch filter: delivery runs under every mode.
+          if (kind !== 'deliver') {
+            const state = await fetchInvitees(meeting.id, signedInEmail)
+            if (cancelled) return
+            // prompt_enabled=false is the kill switch (or the attendees override):
+            // no question and no send-later action may be offered.
+            if (!state || !state.prompt_enabled || state.candidates.length === 0) {
+              // A question with no valid answer must not be asked — but a
+              // meeting that was never delivered must not be lost either.
+              if (kind !== 'pending') continue
+              cardKind = 'deliver'
+            } else {
+              candidates = state.candidates
+            }
+          }
           cards.push({
             meetingId: meeting.id,
             title: meeting.title,
-            kind,
-            candidates: state.candidates,
-            emailedAt: meeting.delivery_emailed_at ?? null
+            kind: cardKind,
+            candidates,
+            emailedAt: meeting.delivery_emailed_at ?? null,
+            inviteeDeliveryStatus: meeting.invitee_delivery_status ?? 'not_started'
           })
           if (cards.length >= RESURFACED_INVITEE_CARD_LIMIT) break
         }
-        if (!cancelled && cards.length) setInviteeCards(cards)
+        // A recording that finished during the scan owns its meeting's card
+        // already: never leave both a resurfaced card and the live hold up.
+        if (!cancelled && cards.length) {
+          setInviteeCards((list) =>
+            [...list, ...cards].filter((card) => !inviteeHoldsRef.current.has(card.meetingId))
+          )
+        }
       } catch {
         // Best-effort; the scan simply runs again on the next launch.
       }
@@ -1182,7 +1202,14 @@ function App(): JSX.Element {
     // override, or an older backend (404): deliver now. Without a stored
     // approval the backend sends to the organiser only.
     let emailingMessageText = notAskedMessage
-    if (shouldPrompt(state) && state && typeof window.api?.promptInvitees === 'function') {
+    // onInviteeDecision is what resolves the hold: without it the toast's
+    // buttons and main's timeout would never reach us and delivery would stall.
+    if (
+      shouldPrompt(state) &&
+      state &&
+      typeof window.api?.promptInvitees === 'function' &&
+      typeof window.api?.onInviteeDecision === 'function'
+    ) {
       const { candidates } = state
       // A restart card for this meeting would now be a second copy of the question.
       setInviteeCards((list) => list.filter((entry) => entry.meetingId !== meetingId))
@@ -1266,6 +1293,20 @@ function App(): JSX.Element {
   const sendInviteeCard = (meetingId: string): void => {
     const card = takeInviteeCard(meetingId)
     if (card) void sendToInvitees(meetingId, card.title, card.candidates.length)
+  }
+
+  /** "Deliver now": the decision is already stored, so the pass simply runs.
+   *  The backend sends per that decision and the current delivery mode. */
+  const deliverInviteeCard = async (meetingId: string): Promise<void> => {
+    const card = takeInviteeCard(meetingId)
+    if (!card) return
+    setPostCaptureNotice({
+      state: 'emailing',
+      meetingId,
+      title: card.title,
+      message: 'Saving to SharePoint and emailing transcript…'
+    })
+    await runDeliveryPass(meetingId, card.title, user.email, 'first')
   }
 
   const dismissInviteeCard = (meetingId: string): void => {
@@ -1857,6 +1898,7 @@ function App(): JSX.Element {
           inviteeCards={inviteeCards}
           onAnswerInviteeCard={(meetingId, approved) => void answerInviteeCard(meetingId, approved)}
           onSendInviteeCard={sendInviteeCard}
+          onDeliverInviteeCard={(meetingId) => void deliverInviteeCard(meetingId)}
           onDismissInviteeCard={dismissInviteeCard}
           blobDeliveryNotices={Object.values(blobDeliveryNotices)}
           onDismissBlobDeliveryNotice={dismissBlobDeliveryNotice}

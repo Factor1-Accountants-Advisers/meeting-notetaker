@@ -23,7 +23,8 @@ import {
   inviteeQuestion,
   resurfacedSendLaterMessage,
   sendLaterLabel,
-  type InviteeCandidate
+  type InviteeCandidate,
+  type InviteeDeliveryStatus
 } from '../lib/inviteePrompt'
 import { useLive } from '@renderer/lib/useLive'
 
@@ -62,13 +63,16 @@ export function clampAdhocDurationMinutes(raw: string): number {
   )
 }
 
-/** IN-488: a question or a send-later action that survived a restart. */
+/** IN-488: a question, an interrupted delivery or a send-later action that
+ *  survived a restart. */
 export interface InviteeResurfacedCard {
   meetingId: string
   title: string
-  kind: 'pending' | 'send_later'
+  kind: 'pending' | 'send_later' | 'deliver'
+  /** Empty for `deliver`: that card asks nothing, it just finishes delivery. */
   candidates: InviteeCandidate[]
   emailedAt: string | null
+  inviteeDeliveryStatus: InviteeDeliveryStatus
 }
 
 interface HomeProps {
@@ -110,6 +114,7 @@ interface HomeProps {
   inviteeCards?: InviteeResurfacedCard[]
   onAnswerInviteeCard?: (meetingId: string, approved: boolean) => void
   onSendInviteeCard?: (meetingId: string) => void
+  onDeliverInviteeCard?: (meetingId: string) => void
   onDismissInviteeCard?: (meetingId: string) => void
   blobDeliveryNotices?: {
     status: BlobStatus
@@ -142,6 +147,7 @@ export function HomeScreen({
   inviteeCards,
   onAnswerInviteeCard,
   onSendInviteeCard,
+  onDeliverInviteeCard,
   onDismissInviteeCard,
   blobDeliveryNotices,
   onDismissBlobDeliveryNotice,
@@ -176,6 +182,7 @@ export function HomeScreen({
           card={card}
           onAnswer={onAnswerInviteeCard}
           onSend={onSendInviteeCard}
+          onDeliver={onDeliverInviteeCard}
           onDismiss={onDismissInviteeCard}
         />
       ))}
@@ -396,16 +403,21 @@ function InviteeResurfacedNotice({
   card,
   onAnswer,
   onSend,
+  onDeliver,
   onDismiss
 }: {
   card: InviteeResurfacedCard
   onAnswer?: (meetingId: string, approved: boolean) => void
   onSend?: (meetingId: string) => void
+  onDeliver?: (meetingId: string) => void
   onDismiss?: (meetingId: string) => void
 }): JSX.Element {
   const pending = card.kind === 'pending'
+  const deliver = card.kind === 'deliver'
+  // Both unfinished states are the info tone; only send-later reports success.
+  const unfinished = pending || deliver
   const namesLine = pending ? inviteeNamesLine(card.candidates) : null
-  const toneClass = pending
+  const toneClass = unfinished
     ? 'border-edge-info bg-bg-info text-content-info'
     : 'border-edge-success bg-bg-success text-content-success'
   const buttonClass =
@@ -415,7 +427,7 @@ function InviteeResurfacedNotice({
     <div className={`rounded-md border-[0.5px] px-3 py-2.5 ${toneClass}`}>
       <div className="flex items-start gap-2">
         <div className="mt-0.5 shrink-0">
-          {pending ? (
+          {unfinished ? (
             <Mail size={16} strokeWidth={1.75} />
           ) : (
             <CheckCircle2 size={16} strokeWidth={1.75} />
@@ -424,7 +436,11 @@ function InviteeResurfacedNotice({
         <div className="min-w-0 flex-1">
           <div className="truncate text-[13px] font-medium">{card.title}</div>
           <div className="mt-0.5 text-[12px] opacity-90">
-            {pending ? inviteeQuestion(card.candidates) : resurfacedSendLaterMessage(card.emailedAt)}
+            {pending
+              ? inviteeQuestion(card.candidates)
+              : deliver
+                ? 'Notes are ready but nothing was sent yet.'
+                : resurfacedSendLaterMessage(card.emailedAt, card.inviteeDeliveryStatus)}
           </div>
           {namesLine && <div className="mt-0.5 text-[12px] opacity-90">{namesLine}</div>}
         </div>
@@ -439,13 +455,19 @@ function InviteeResurfacedNotice({
               </button>
             </>
           )}
-          {!pending && onSend && (
+          {deliver && onDeliver && (
+            <button type="button" className={buttonClass} onClick={() => onDeliver(card.meetingId)}>
+              Deliver now
+            </button>
+          )}
+          {card.kind === 'send_later' && onSend && (
             <button type="button" className={buttonClass} onClick={() => onSend(card.meetingId)}>
               {sendLaterLabel(card.candidates.length)}
             </button>
           )}
-          {/* Only a send-later card can be dismissed; a pending question is
-              answered, and "Just me" is its way out. */}
+          {/* A pending question is answered, and "Just me" is its way out; the
+              other two can be dismissed (a delivery that can never succeed
+              still needs an exit). */}
           {!pending && onDismiss && (
             <button
               type="button"

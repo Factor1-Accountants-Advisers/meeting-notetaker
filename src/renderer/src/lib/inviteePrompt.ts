@@ -27,6 +27,13 @@ export interface InviteeState {
 }
 
 const DECISIONS: readonly InviteeDecision[] = ['pending', 'approved', 'declined']
+const DELIVERY_STATUSES: readonly InviteeDeliveryStatus[] = [
+  'not_started',
+  'sending',
+  'sent',
+  'unconfirmed',
+  'failed'
+]
 
 /**
  * Null means "cannot ask: deliver now". That covers an older backend with no
@@ -62,10 +69,11 @@ export function interpretInviteesResponse(res: {
   return {
     candidates,
     decision: body.decision as InviteeDecision,
-    invitee_delivery_status:
-      typeof body.invitee_delivery_status === 'string'
-        ? (body.invitee_delivery_status as InviteeDeliveryStatus)
-        : 'not_started',
+    invitee_delivery_status: DELIVERY_STATUSES.includes(
+      body.invitee_delivery_status as InviteeDeliveryStatus
+    )
+      ? (body.invitee_delivery_status as InviteeDeliveryStatus)
+      : 'not_started',
     invitee_recipients: Array.isArray(body.invitee_recipients)
       ? body.invitee_recipients.filter((value): value is string => typeof value === 'string')
       : [],
@@ -160,23 +168,35 @@ export interface ResurfaceMeeting {
  * would put a card on Home for every meeting of the past week on the first
  * launch after the update.
  *
+ * `deliver`: the owner answered, the decision persisted and the app died
+ * before the delivery pass — nothing else ever brings that meeting back. It
+ * runs under every mode (the stored decision and the mode decide who is
+ * emailed), so it needs no candidates and no prompt_enabled check.
+ *
  * `send_later`: the organiser has their copy and the invitees do not, either
  * because the owner said "Just me" / did not answer, or because they said yes
  * and the invitee send never completed. It requires `emailed` because the card
- * reads "Emailed to you on …". Only send-later cards can be dismissed.
+ * reads "Emailed to you on …".
+ *
+ * A pending question can never be dismissed ("Just me" is its way out); the
+ * other two can — a delivery that can never succeed (e.g. a 409 "no
+ * transcript") needs an exit, and blob delivery to central storage is
+ * independent of this pass, so nothing is lost.
  */
 export function resurfaceKind(
   meeting: ResurfaceMeeting,
   nowMs: number,
   dismissed: ReadonlySet<string>
-): 'pending' | 'send_later' | null {
+): 'pending' | 'send_later' | 'deliver' | null {
   if (!meeting.invitee_decision || !meeting.invitee_delivery_status) return null
   const createdMs = Date.parse(meeting.created_at)
   if (!Number.isFinite(createdMs) || nowMs - createdMs > RESURFACE_WINDOW_MS) return null
   if (meeting.pipeline_status !== 'ready') return null
-  if (meeting.invitee_decision === 'pending') {
-    return meeting.delivery_status === 'not_started' ? 'pending' : null
+  if (meeting.delivery_status === 'not_started') {
+    if (meeting.invitee_decision === 'pending') return 'pending'
+    return dismissed.has(meeting.id) ? null : 'deliver'
   }
+  if (meeting.invitee_decision === 'pending') return null
   if (meeting.delivery_status !== 'emailed') return null
   if (meeting.invitee_delivery_status === 'sent' || meeting.invitee_delivery_status === 'sending') {
     return null
@@ -195,13 +215,23 @@ export function formatEmailedAt(date: Date): string {
   return `${DAYS[date.getDay()]} ${date.getDate()} ${MONTHS[date.getMonth()]}, ${hh}:${mm}`
 }
 
+const INVITEES_MAY_HAVE_BEEN_SENT =
+  'The invitee email may already have been delivered; check with an invitee before resending.'
+
 /** By restart time the delivery detail is history; the date is what helps the
- *  owner recognise the meeting (mock-up 5, approved 15 Sep). */
-export function resurfacedSendLaterMessage(emailedAtIso: string | null | undefined): string {
+ *  owner recognise the meeting (mock-up 5, approved 15 Sep). An `unconfirmed`
+ *  invitee send may have gone through (IN-478's rule), so the card must not
+ *  promise the invitees have nothing. */
+export function resurfacedSendLaterMessage(
+  emailedAtIso: string | null | undefined,
+  inviteeDeliveryStatus?: InviteeDeliveryStatus
+): string {
   const at = emailedAtIso ? new Date(emailedAtIso) : null
+  const tail =
+    inviteeDeliveryStatus === 'unconfirmed' ? INVITEES_MAY_HAVE_BEEN_SENT : INVITEES_NOT_SENT
   return at && Number.isFinite(at.getTime())
-    ? `Emailed to you on ${formatEmailedAt(at)}. ${INVITEES_NOT_SENT}`
-    : `Emailed to you. ${INVITEES_NOT_SENT}`
+    ? `Emailed to you on ${formatEmailedAt(at)}. ${tail}`
+    : `Emailed to you. ${tail}`
 }
 
 // ---- dismissed send-later cards (a UI preference, so localStorage) -----------
