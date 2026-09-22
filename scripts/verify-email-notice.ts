@@ -170,6 +170,37 @@ const inviteeUnconfirmed = deliveryOutcomeNotice({
 assert.equal(inviteeUnconfirmed.message, 'It may already have been delivered. Check with an invitee before resending.')
 assert.equal(inviteeUnconfirmed.errorCode, undefined, 'unconfirmed is never a Failed: label')
 
+// Fix round 1: a lost response after a completed (or never-started) invitee
+// send is not a failure either — the 90s proxy budget can abort just after
+// Graph finishes, or before an invitee send even begins.
+const inviteeAlreadySent = deliveryOutcomeNotice({
+  ...base,
+  attempt: 'retry',
+  sharePointSaved: true,
+  deliveryStatus: 'emailed',
+  inviteeDeliveryStatus: 'sent'
+})
+assert.match(
+  inviteeAlreadySent.message,
+  /already sent to the invitees/,
+  'a lost response after a completed invitee send must not read as a failure'
+)
+assert.equal(inviteeAlreadySent.errorCode, undefined, 'sent is never a Failed: label')
+
+const inviteeNotStarted = deliveryOutcomeNotice({
+  ...base,
+  attempt: 'retry',
+  sharePointSaved: true,
+  deliveryStatus: 'emailed',
+  inviteeDeliveryStatus: 'not_started'
+})
+assert.match(
+  inviteeNotStarted.message,
+  /nothing was sent to invitees/,
+  'not_started must not claim an invitee send was attempted'
+)
+assert.equal(inviteeNotStarted.errorCode, undefined, 'not_started is never a Failed: label')
+
 // Every delivery goes through the one pass.
 {
   const app = readFileSync(join(process.cwd(), 'src', 'renderer', 'src', 'App.tsx'), 'utf8')

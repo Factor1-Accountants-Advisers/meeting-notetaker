@@ -105,8 +105,26 @@ export function deliveryOutcomeNotice(input: DeliveryOutcomeInput): DeliveryOutc
     return { state: 'email_failed', message: wording.sharePointFailed, errorCode: null }
   }
   if (input.deliveryStatus === 'emailed') {
-    // The email call failed although the organiser already has theirs: this
-    // was the later, invitee-only send (IN-488). Same unconfirmed rule.
+    // The email call failed (returned null/threw — e.g. the 90s proxy budget
+    // aborted a slow-but-completing Graph send, IN-478) although the
+    // organiser already has theirs: this was the later, invitee-only send
+    // (IN-488). Re-fetching can reveal the send actually went through, or
+    // never started — neither is a failure, so neither gets the "could not
+    // be sent" wording or a Failed: label.
+    if (input.inviteeDeliveryStatus === 'sent') {
+      return {
+        state: 'email_failed',
+        message: 'The transcript was already sent to the invitees. Your own copy was already delivered.',
+        errorCode: undefined
+      }
+    }
+    if (input.inviteeDeliveryStatus === 'not_started') {
+      return {
+        state: 'email_failed',
+        message: 'Your own copy was already delivered; nothing was sent to invitees.',
+        errorCode: undefined
+      }
+    }
     const unconfirmed = input.inviteeDeliveryStatus === 'unconfirmed'
     const cause = input.inviteeErrorMessage?.trim().replace(/\.$/, '')
     return {
