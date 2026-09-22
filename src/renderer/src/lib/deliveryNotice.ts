@@ -1,4 +1,5 @@
 import type { DeliveryStatus } from '@renderer/data/mock'
+import { INVITEES_NOT_SENT, type InviteeDeliveryStatus } from './inviteePrompt'
 
 const UNCONFIRMED_WARNING =
   'The transcript email attempt was interrupted — it may already have been delivered. ' +
@@ -33,6 +34,15 @@ export interface DeliveryOutcomeInput {
   deliveryStatus?: DeliveryStatus
   deliveryErrorMessage?: string | null
   deliveryErrorCode?: string | null
+  /** Who THIS pass emailed (EmailResultDto.sent_now). A non-empty strict
+   *  subset of emailRecipients means this was a later, invitee-only send. */
+  sentNow?: string[]
+  /** "Send to N invitees" is being offered on this card (IN-488). */
+  sendLaterOffered?: boolean
+  // Re-fetched after an email failure, like the delivery_* trio.
+  inviteeDeliveryStatus?: InviteeDeliveryStatus
+  inviteeErrorMessage?: string | null
+  inviteeErrorCode?: string | null
 }
 
 export interface DeliveryOutcomeNotice {
@@ -60,6 +70,11 @@ const OUTCOME_WORDING = {
   }
 } as const
 
+const INVITEE_UNCONFIRMED_WARNING =
+  'The invitee email attempt was interrupted — it may already have been delivered. ' +
+  'Check with an invitee before retrying.'
+const ORGANISER_COPY_SAFE = 'Nothing was sent to invitees; your own copy was already delivered.'
+
 /**
  * The card for one delivery pass (POST /sharepoint, then POST /email). The
  * single home for IN-478's rule: an `unconfirmed` email is not a failure, so
@@ -68,12 +83,19 @@ const OUTCOME_WORDING = {
 export function deliveryOutcomeNotice(input: DeliveryOutcomeInput): DeliveryOutcomeNotice {
   const wording = OUTCOME_WORDING[input.attempt]
   if (input.emailRecipients && input.sharePointSaved) {
+    const sentNow = input.sentNow ?? []
+    const laterSend = sentNow.length > 0 && sentNow.length < input.emailRecipients.length
     return {
       state: 'ready',
-      // Option A (IN-398): a saved delivery can still carry a view-grant
-      // warning for ungrantable attendees — say so instead of hiding it.
       message:
-        `Transcript saved to SharePoint and emailed to ${input.emailRecipients.join(', ')}.` +
+        (laterSend
+          ? `Sent to ${sentNow.join(', ')}.`
+          : `Transcript saved to SharePoint and emailed to ${input.emailRecipients.join(', ')}.`) +
+        // Without this line the card reads as if delivery is finished and the
+        // Send button looks like a resend (mock-ups, approved 15 Sep).
+        (input.sendLaterOffered ? ` ${INVITEES_NOT_SENT}` : '') +
+        // Option A (IN-398): a saved delivery can still carry a view-grant
+        // warning for ungrantable attendees — say so instead of hiding it.
         (input.grantWarning ? ` ${input.grantWarning}` : '')
     }
   }
@@ -81,6 +103,19 @@ export function deliveryOutcomeNotice(input: DeliveryOutcomeInput): DeliveryOutc
     // The save endpoint raises rather than returning a DTO, so no fresh
     // sharepoint_error_code is in scope: fall back to the chips' default label.
     return { state: 'email_failed', message: wording.sharePointFailed, errorCode: null }
+  }
+  if (input.deliveryStatus === 'emailed') {
+    // The email call failed although the organiser already has theirs: this
+    // was the later, invitee-only send (IN-488). Same unconfirmed rule.
+    const unconfirmed = input.inviteeDeliveryStatus === 'unconfirmed'
+    const cause = input.inviteeErrorMessage?.trim().replace(/\.$/, '')
+    return {
+      state: 'email_failed',
+      message: unconfirmed
+        ? input.inviteeErrorMessage?.trim() || INVITEE_UNCONFIRMED_WARNING
+        : `${cause || 'The transcript could not be sent to invitees'}. ${ORGANISER_COPY_SAFE}`,
+      errorCode: unconfirmed ? undefined : (input.inviteeErrorCode ?? null)
+    }
   }
   return {
     state: 'email_failed',

@@ -12,8 +12,10 @@ import {
   emailNotes,
   ensureCurrentPerson,
   fetchEnrolmentStatus,
+  fetchInvitees,
   fetchMeetings,
   fetchMeetingReview,
+  postInviteeDecision,
   retryBlobDelivery,
   retryPipeline,
   saveTranscriptToSharePoint,
@@ -28,6 +30,15 @@ import { capture, type CaptureStatus, type SystemSegment } from './lib/capture'
 import { resolveDryRunMatch, formatDryRunLog } from './lib/audioRoutingDryRun'
 import { chooseMicDeviceId } from './lib/micDeviceChoice'
 import { deliveryOutcomeNotice } from './lib/deliveryNotice'
+import {
+  canSendLater,
+  emailingMessage,
+  inviteeQuestion,
+  sendingLaterMessage,
+  shouldPrompt,
+  type InviteeCandidate,
+  type InviteeDecisionSource
+} from './lib/inviteePrompt'
 import notificationChimeUrl from './assets/notification.wav'
 import { loadPrefs } from './lib/prefs'
 import { createSingleFlight } from './lib/singleFlight'
@@ -74,7 +85,15 @@ async function toSegmentUploads(segments: SystemSegment[]): Promise<SystemAudioS
   )
 }
 
-type PostCaptureState = 'processing' | 'emailing' | 'ready' | 'upload_failed' | 'processing_failed' | 'email_failed'
+type PostCaptureState =
+  | 'processing'
+  // IN-488: notes are ready and delivery is held on the owner's answer.
+  | 'awaiting_invitees'
+  | 'emailing'
+  | 'ready'
+  | 'upload_failed'
+  | 'processing_failed'
+  | 'email_failed'
 
 type PostCaptureNotice = {
   state: PostCaptureState
@@ -88,7 +107,26 @@ type PostCaptureNotice = {
   // when the notice is NOT actually a failure (the email-unconfirmed
   // sub-case of 'email_failed' — IN-478 — must never show a Failed: label).
   errorCode?: string | null
+  // IN-488. awaiting_invitees: the people being asked about. ready: present
+  // only when "Send to N invitees" is offered.
+  invitees?: InviteeCandidate[]
 } | null
+
+type InviteeAnswer = { approved: boolean; source: InviteeDecisionSource }
+
+/** First answer wins (spec §4): the resolver is removed as it is used, so a
+ *  toast click, a card click and main's timeout can never both act. */
+function settleInviteeHold(
+  holds: Map<string, (answer: InviteeAnswer) => void>,
+  meetingId: string,
+  answer: InviteeAnswer
+): boolean {
+  const resolve = holds.get(meetingId)
+  if (!resolve) return false
+  holds.delete(meetingId)
+  resolve(answer)
+  return true
+}
 
 type BlobDeliveryNotice = {
   status: BlobStatus
@@ -258,6 +296,8 @@ function App(): JSX.Element {
   const [unuploaded, setUnuploaded] = useState<
     { meetingId: string; title: string; savedAtUtc: string }[]
   >([])
+  // IN-488: meetings whose delivery is held on the owner's answer.
+  const inviteeHoldsRef = useRef(new Map<string, (answer: InviteeAnswer) => void>())
   const { theme, setTheme } = useTheme()
 
   useEffect(() => {
@@ -430,6 +470,17 @@ function App(): JSX.Element {
     return window.api.onNotificationChime(() => {
       chime.currentTime = 0
       void chime.play().catch(() => undefined)
+    })
+  }, [])
+
+  // IN-488: a toast button, or main's timeout (the safe default), answers the hold.
+  useEffect(() => {
+    if (typeof window.api?.onInviteeDecision !== 'function') return
+    return window.api.onInviteeDecision((decision) => {
+      settleInviteeHold(inviteeHoldsRef.current, decision.meetingId, {
+        approved: decision.approved,
+        source: decision.source
+      })
     })
   }, [])
 
@@ -1003,8 +1054,9 @@ function App(): JSX.Element {
   }
 
   // The one delivery pass: SharePoint, then email, then the card. Shared by the
-  // post-capture watcher and Retry email so IN-478's unconfirmed handling
-  // lives in one place (lib/deliveryNotice).
+  // post-capture watcher, Retry email and "Send to N invitees" (IN-488). The
+  // backend routes POST /email to a first send, a later invitee-only send or a
+  // replay from its stored state; the card is derived from what comes back.
   const runDeliveryPass = async (
     meetingId: string,
     title: string,
@@ -1016,22 +1068,103 @@ function App(): JSX.Element {
     // IN-478: a failed email call may still have delivered (transport error or
     // backend restart mid-send). Re-check delivery state so the notice warns
     // "check your inbox" instead of inviting a blind resend.
-    const deliveryAfterFailure = emailResult
-      ? null
-      : (await fetchMeetingReview(meetingId))?.meeting
+    const afterFailure = emailResult ? null : (await fetchMeetingReview(meetingId))?.meeting
+    const sharePointSaved = Boolean(sharePointResult?.sharepoint_web_url)
+    // Whether to offer "Send to N invitees" is the backend's call, asked after
+    // every successful pass so Retry and the restart cards get it right too.
+    const invitees = emailResult && sharePointSaved ? await fetchInvitees(meetingId, recorderEmail) : null
+    const sendLaterOffered = canSendLater(invitees)
     setPostCaptureNotice({
       meetingId,
       title,
       ...deliveryOutcomeNotice({
         attempt,
         emailRecipients: emailResult?.recipients ?? null,
-        sharePointSaved: Boolean(sharePointResult?.sharepoint_web_url),
+        sentNow: emailResult?.sent_now ?? [],
+        sharePointSaved,
         grantWarning: sharePointResult?.sharepoint_grant_warning,
-        deliveryStatus: deliveryAfterFailure?.delivery_status,
-        deliveryErrorMessage: deliveryAfterFailure?.delivery_error_message,
-        deliveryErrorCode: deliveryAfterFailure?.delivery_error_code
-      })
+        sendLaterOffered,
+        deliveryStatus: afterFailure?.delivery_status,
+        deliveryErrorMessage: afterFailure?.delivery_error_message,
+        deliveryErrorCode: afterFailure?.delivery_error_code,
+        inviteeDeliveryStatus: afterFailure?.invitee_delivery_status,
+        inviteeErrorMessage: afterFailure?.invitee_error_message,
+        inviteeErrorCode: afterFailure?.invitee_error_code
+      }),
+      invitees: sendLaterOffered ? invitees?.candidates : undefined
     })
+  }
+
+  // IN-488 (D3, D4): nothing is delivered until the owner answers. Both the
+  // SharePoint save and the email are held, because the SharePoint grants ARE
+  // the sharing; one decision then leads to one delivery pass.
+  const deliverWithInviteeHold = async (
+    meetingId: string,
+    title: string,
+    recorderEmail: string,
+    notAskedMessage: string
+  ): Promise<void> => {
+    const state = await fetchInvitees(meetingId, recorderEmail)
+    // Nobody to ask about, already answered, the kill switch, the attendees
+    // override, or an older backend (404): deliver now. Without a stored
+    // approval the backend sends to the organiser only.
+    let emailingMessageText = notAskedMessage
+    if (shouldPrompt(state) && state && typeof window.api?.promptInvitees === 'function') {
+      const { candidates } = state
+      setPostCaptureNotice({
+        state: 'awaiting_invitees',
+        meetingId,
+        title,
+        message: inviteeQuestion(candidates),
+        invitees: candidates
+      })
+      const answer = await new Promise<InviteeAnswer>((resolve) => {
+        inviteeHoldsRef.current.set(meetingId, resolve)
+        window.api.promptInvitees({ meetingId, title, candidates })
+      })
+      window.api.debugLog?.('[invitee-prompt] answered', { meetingId, ...answer })
+
+      // Recorded BEFORE delivery starts, on its own request, so every retry of
+      // the pass runs with the same recipient list. If recording fails the pass
+      // still runs: the backend then sends to the organiser only, and the ready
+      // card offers "Send to N invitees".
+      await postInviteeDecision(meetingId, answer.approved, answer.source)
+      emailingMessageText = emailingMessage(answer.approved, candidates.length)
+    }
+    setPostCaptureNotice({ state: 'emailing', meetingId, title, message: emailingMessageText })
+    await runDeliveryPass(meetingId, title, recorderEmail, 'first')
+  }
+
+  /** The pending card's buttons. Closing main's prompt first means its timeout
+   *  cannot fire "declined" while the owner is looking at the card. */
+  const answerInviteePrompt = (meetingId: string, approved: boolean): void => {
+    window.api.closeInviteePrompt?.(meetingId)
+    settleInviteeHold(inviteeHoldsRef.current, meetingId, { approved, source: 'app' })
+  }
+
+  /** "Send to N invitees": declined → approved, then the same delivery pass.
+   *  The backend knows the organiser has their copy, so only invitees are
+   *  emailed, and the SharePoint re-post overwrites the files and adds grants. */
+  const sendToInvitees = async (meetingId: string, title: string, count: number): Promise<void> => {
+    setPostCaptureNotice({
+      state: 'emailing',
+      meetingId,
+      title,
+      message: sendingLaterMessage(count)
+    })
+    const recorded = await postInviteeDecision(meetingId, true, 'app')
+    if (!recorded) {
+      setPostCaptureNotice({
+        state: 'email_failed',
+        meetingId,
+        title,
+        message:
+          'Could not start sending to invitees. Nothing was sent to invitees; your own copy was already delivered.',
+        errorCode: null
+      })
+      return
+    }
+    await runDeliveryPass(meetingId, title, user.email, 'retry')
   }
 
   const watchProcessing = (meetingId: string, title: string): void => {
@@ -1062,13 +1195,12 @@ function App(): JSX.Element {
           blobDeliveryEpoch,
           false
         )
-        setPostCaptureNotice({
-          state: 'emailing',
+        await deliverWithInviteeHold(
           meetingId,
           title,
-          message: `Notes are ready: ${review.segments.length} transcript segments and ${review.action_items.length} action items. Saving to SharePoint and emailing transcript…`
-        })
-        await runDeliveryPass(meetingId, title, user.email, 'first')
+          user.email,
+          `Notes are ready: ${review.segments.length} transcript segments and ${review.action_items.length} action items. Saving to SharePoint and emailing transcript…`
+        )
         return
       }
       if (status === 'failed') {
@@ -1614,6 +1746,8 @@ function App(): JSX.Element {
           postCaptureNotice={postCaptureNotice}
           onDismissPostCaptureNotice={() => setPostCaptureNotice(null)}
           onRetryPostCapture={(meetingId, title) => void retryPostCapture(meetingId, title)}
+          onAnswerInviteePrompt={answerInviteePrompt}
+          onSendToInvitees={(meetingId, title, count) => void sendToInvitees(meetingId, title, count)}
           blobDeliveryNotices={Object.values(blobDeliveryNotices)}
           onDismissBlobDeliveryNotice={dismissBlobDeliveryNotice}
           onRetryBlobDelivery={(meetingId, title) =>

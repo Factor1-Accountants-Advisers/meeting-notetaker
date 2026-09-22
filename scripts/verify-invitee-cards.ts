@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   INVITEES_NOT_SENT,
   RESURFACE_WINDOW_MS,
@@ -191,5 +193,26 @@ assert.equal(
   200,
   'capped, so localStorage cannot grow without bound'
 )
+
+// ---- wiring pins (Task 12) ---------------------------------------------------
+{
+  const read = (...parts: string[]): string => readFileSync(join(process.cwd(), 'src', 'renderer', 'src', ...parts), 'utf8')
+  const app = read('App.tsx')
+  assert.match(app, /'awaiting_invitees'/, 'the hold has its own post-capture state')
+  assert.match(app, /window\.api\.promptInvitees\(/, 'the renderer asks main to show the toast')
+  assert.match(app, /window\.api\.closeInviteePrompt/, "an in-app answer cancels main's timer")
+  assert.match(app, /window\.api\.onInviteeDecision\(/, 'toast answers and the timeout reach the renderer')
+  const hold = app.slice(app.indexOf('const deliverWithInviteeHold'))
+  assert.ok(
+    hold.indexOf('postInviteeDecision(') < hold.indexOf('runDeliveryPass('),
+    'the decision is recorded BEFORE delivery starts, so every retry uses the same recipient list'
+  )
+  const activeNotice = app.slice(app.indexOf('const activePostCaptureNotice'), app.indexOf('const shellRecordingState'))
+  assert.doesNotMatch(activeNotice, /awaiting_invitees/, 'waiting for an answer is not "processing" in the status bar')
+
+  const home = read('screens', 'HomeScreen.tsx')
+  assert.match(home, /sendLaterLabel\(/, 'the ready card offers Send to N invitees')
+  assert.match(home, /inviteeNamesLine\(/, 'the pending card shows the full list')
+}
 
 console.log('Invitee cards verification passed')

@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Loader2,
+  Mail,
   Mic,
   Upload,
   Users,
@@ -17,6 +18,7 @@ import {
 import { staff as sampleStaff, type BlobStatus, type StaffMember } from '@renderer/data/mock'
 import { fetchPeople } from '@renderer/lib/api'
 import { categoryLabel } from '@renderer/lib/failureDisplay'
+import { inviteeNamesLine, sendLaterLabel, type InviteeCandidate } from '../lib/inviteePrompt'
 import { useLive } from '@renderer/lib/useLive'
 
 /** A recording interrupted by sleep/crash, recoverable from its spill file (IN-129). */
@@ -66,7 +68,14 @@ interface HomeProps {
   onRetryUnuploaded?: (meetingId: string, title: string) => void
   onDiscardUnuploaded?: (meetingId: string) => void
   postCaptureNotice?: {
-    state: 'processing' | 'emailing' | 'ready' | 'upload_failed' | 'processing_failed' | 'email_failed'
+    state:
+      | 'processing'
+      | 'awaiting_invitees'
+      | 'emailing'
+      | 'ready'
+      | 'upload_failed'
+      | 'processing_failed'
+      | 'email_failed'
     meetingId: string
     title: string
     message: string
@@ -75,9 +84,14 @@ interface HomeProps {
     // omitted/undefined when the notice isn't actually a failure (e.g. the
     // email-unconfirmed sub-case of 'email_failed' — IN-478).
     errorCode?: string | null
+    // IN-488: who is being asked about (awaiting_invitees), or who "Send to N
+    // invitees" would reach (ready).
+    invitees?: InviteeCandidate[]
   } | null
   onDismissPostCaptureNotice?: () => void
   onRetryPostCapture?: (meetingId: string, title: string) => void
+  onAnswerInviteePrompt?: (meetingId: string, approved: boolean) => void
+  onSendToInvitees?: (meetingId: string, title: string, count: number) => void
   blobDeliveryNotices?: {
     status: BlobStatus
     meetingId: string
@@ -104,6 +118,8 @@ export function HomeScreen({
   postCaptureNotice,
   onDismissPostCaptureNotice,
   onRetryPostCapture,
+  onAnswerInviteePrompt,
+  onSendToInvitees,
   blobDeliveryNotices,
   onDismissBlobDeliveryNotice,
   onRetryBlobDelivery
@@ -131,15 +147,17 @@ export function HomeScreen({
           onDiscard={onDiscardUnuploaded}
         />
       ))}
-      {postCaptureNotice &&
-        postCaptureNotice.state !== 'processing' &&
-        postCaptureNotice.state !== 'emailing' && (
+      {/* `processing` stays status-bar only. `emailing` is a card since IN-488
+          (Q10): the approved mock-ups draw it between the question and the result. */}
+      {postCaptureNotice && postCaptureNotice.state !== 'processing' && (
         <PostCaptureNotice
           notice={postCaptureNotice}
           onDismiss={onDismissPostCaptureNotice}
           onRetry={onRetryPostCapture}
+          onAnswerInvitees={onAnswerInviteePrompt}
+          onSendToInvitees={onSendToInvitees}
         />
-        )}
+      )}
       {blobDeliveryNotices?.map((notice) => (
         <BlobDeliveryNoticeCard
           key={notice.meetingId}
@@ -345,18 +363,25 @@ function UnuploadedRecordingNotice({
 function PostCaptureNotice({
   notice,
   onDismiss,
-  onRetry
+  onRetry,
+  onAnswerInvitees,
+  onSendToInvitees
 }: {
   notice: NonNullable<HomeProps['postCaptureNotice']>
   onDismiss?: () => void
   onRetry?: (meetingId: string, title: string) => void
+  onAnswerInvitees?: (meetingId: string, approved: boolean) => void
+  onSendToInvitees?: (meetingId: string, title: string, count: number) => void
 }): JSX.Element {
   const failed = notice.state.endsWith('_failed')
+  const awaiting = notice.state === 'awaiting_invitees'
   const icon =
     notice.state === 'ready' ? (
       <CheckCircle2 size={16} strokeWidth={1.75} />
     ) : failed ? (
       <XCircle size={16} strokeWidth={1.75} />
+    ) : awaiting ? (
+      <Mail size={16} strokeWidth={1.75} />
     ) : (
       <Loader2 className="animate-spin" size={16} strokeWidth={1.75} />
     )
@@ -374,6 +399,12 @@ function PostCaptureNotice({
         : notice.state === 'email_failed'
           ? 'Retry email'
           : null
+  const invitees = notice.invitees ?? []
+  // The card carries the FULL list; the toast only fits three names (D9).
+  const namesLine = awaiting ? inviteeNamesLine(invitees) : null
+  const sendLater = notice.state === 'ready' && invitees.length > 0
+  const buttonClass =
+    'rounded-sm border-[0.5px] border-current px-2 py-1 text-[12px] opacity-85 hover:opacity-100'
 
   return (
     <div className={`rounded-md border-[0.5px] px-3 py-2.5 ${toneClass}`}>
@@ -387,18 +418,47 @@ function PostCaptureNotice({
             </div>
           )}
           <div className="mt-0.5 text-[12px] opacity-90">{notice.message}</div>
+          {namesLine && <div className="mt-0.5 text-[12px] opacity-90">{namesLine}</div>}
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {awaiting && onAnswerInvitees && (
+            <>
+              <button
+                type="button"
+                className={buttonClass}
+                onClick={() => onAnswerInvitees(notice.meetingId, true)}
+              >
+                Email invitees
+              </button>
+              <button
+                type="button"
+                className={buttonClass}
+                onClick={() => onAnswerInvitees(notice.meetingId, false)}
+              >
+                Just me
+              </button>
+            </>
+          )}
+          {sendLater && onSendToInvitees && (
+            <button
+              type="button"
+              className={buttonClass}
+              onClick={() => onSendToInvitees(notice.meetingId, notice.title, invitees.length)}
+            >
+              {sendLaterLabel(invitees.length)}
+            </button>
+          )}
           {actionLabel && onRetry && (
             <button
               type="button"
-              className="rounded-sm border-[0.5px] border-current px-2 py-1 text-[12px] opacity-85 hover:opacity-100"
+              className={buttonClass}
               onClick={() => onRetry(notice.meetingId, notice.title)}
             >
               {actionLabel}
             </button>
           )}
-          {notice.state !== 'processing' && notice.state !== 'emailing' && onDismiss && (
+          {/* No Dismiss while awaiting: the timeout resolves it (spec §3.1). */}
+          {notice.state !== 'processing' && notice.state !== 'emailing' && !awaiting && onDismiss && (
             <button type="button" className="text-[12px] opacity-80 hover:opacity-100" onClick={onDismiss}>
               Dismiss
             </button>

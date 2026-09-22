@@ -108,6 +108,68 @@ assert.equal(
   "IN-478: 'unconfirmed' is not a failure, so HomeScreen must never render a Failed: label for it"
 )
 
+// IN-488 outcomes.
+assert.equal(
+  deliveryOutcomeNotice({
+    attempt: 'first',
+    emailRecipients: ['joseph@factor1.com.au'],
+    sentNow: ['joseph@factor1.com.au'],
+    sharePointSaved: true,
+    sendLaterOffered: true
+  }).message,
+  "Transcript saved to SharePoint and emailed to joseph@factor1.com.au. Invitees haven't received it.",
+  'after "Just me" or a timeout the card must not read as if delivery is finished'
+)
+assert.equal(
+  deliveryOutcomeNotice({
+    attempt: 'retry',
+    emailRecipients: ['joseph@factor1.com.au', 'da@factor1.com.au', 'mel@factor1.com.au'],
+    sentNow: ['da@factor1.com.au', 'mel@factor1.com.au'],
+    sharePointSaved: true
+  }).message,
+  'Sent to da@factor1.com.au, mel@factor1.com.au.',
+  'a later send names only the people THIS send reached'
+)
+assert.equal(
+  deliveryOutcomeNotice({
+    attempt: 'retry',
+    emailRecipients: ['joseph@factor1.com.au', 'da@factor1.com.au'],
+    sentNow: [],
+    sharePointSaved: true
+  }).message,
+  'Transcript saved to SharePoint and emailed to joseph@factor1.com.au, da@factor1.com.au.',
+  'a replay (nothing sent now) lists everyone who has it'
+)
+assert.deepEqual(
+  deliveryOutcomeNotice({
+    ...base,
+    attempt: 'retry',
+    sharePointSaved: true,
+    deliveryStatus: 'emailed',
+    inviteeDeliveryStatus: 'failed',
+    inviteeErrorMessage: 'Outlook sign-in is required before the transcript can be sent to invitees',
+    inviteeErrorCode: 'azure_signin'
+  }),
+  {
+    state: 'email_failed',
+    message:
+      'Outlook sign-in is required before the transcript can be sent to invitees. ' +
+      'Nothing was sent to invitees; your own copy was already delivered.',
+    errorCode: 'azure_signin'
+  },
+  'a failed later send reassures the owner about their own copy (mock-up 4)'
+)
+const inviteeUnconfirmed = deliveryOutcomeNotice({
+  ...base,
+  attempt: 'retry',
+  sharePointSaved: true,
+  deliveryStatus: 'emailed',
+  inviteeDeliveryStatus: 'unconfirmed',
+  inviteeErrorMessage: 'It may already have been delivered. Check with an invitee before resending.'
+})
+assert.equal(inviteeUnconfirmed.message, 'It may already have been delivered. Check with an invitee before resending.')
+assert.equal(inviteeUnconfirmed.errorCode, undefined, 'unconfirmed is never a Failed: label')
+
 // Every delivery goes through the one pass.
 {
   const app = readFileSync(join(process.cwd(), 'src', 'renderer', 'src', 'App.tsx'), 'utf8')
