@@ -27,15 +27,14 @@ if (!ffmpegCandidates.some((p) => fs.existsSync(p))) {
   process.exit(1)
 }
 
-// 3. Idle + recording tray icons, plus the recording window icon. Shipping only
-// one tray theme is the IN-472 bug (white glyph invisible on a light taskbar).
-// Colour correctness is pinned separately by `npm run verify:tray-icon`.
+// 3. Idle + recording (IN-495) tray icons. Shipping only one tray theme is the
+// IN-472 bug (white glyph invisible on a light taskbar). Colour correctness is
+// pinned separately by `npm run verify:tray-icon`.
 const iconFiles = [
   'resources/tray-icon-light.ico',
   'resources/tray-icon-dark.ico',
   'resources/tray-icon-light-rec.ico',
-  'resources/tray-icon-dark-rec.ico',
-  'build/icon-rec.ico'
+  'resources/tray-icon-dark-rec.ico'
 ]
 const missingIcons = iconFiles.filter((p) => !fs.existsSync(p))
 if (missingIcons.length > 0) {

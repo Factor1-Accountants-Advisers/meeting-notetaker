@@ -36,7 +36,8 @@ extraResources:
     to: backend
   # IN-472 fix: theme-paired tray icons. Both must ship — shipping only one is the
   # IN-472 bug (a white glyph is invisible on a light taskbar). Recording twins
-  # carry a red dot; the runtime swaps them when capture starts/stops.
+  # carry a red dot; the runtime swaps them when capture starts/stops (IN-495).
+  # The taskbar button's red dot is an overlay drawn in code, not an asset.
   - from: resources/tray-icon-light.ico
     to: tray-icon-light.ico
   - from: resources/tray-icon-dark.ico
@@ -47,8 +48,6 @@ extraResources:
     to: tray-icon-dark-rec.ico
   - from: build/icon.ico
     to: app-icon.ico
-  - from: build/icon-rec.ico
-    to: app-icon-rec.ico
   # Native Core Audio observer. Kept outside ASAR so Electron can spawn it.
   # Staged directory copy: electron-builder 26 bypasses its Windows signing
   # transformer for single-file extraResources mappings, and a directory

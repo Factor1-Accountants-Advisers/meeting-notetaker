@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import zlib from 'node:zlib'
 import {
-  appIconFileName,
+  APP_ICON_FILE_NAME,
   appIconPath,
   parseRegDword,
   resolveTrayTheme,
@@ -129,8 +129,7 @@ async function main(): Promise<void> {
   assert.equal(trayIconFileName('dark'), 'tray-icon-dark.ico')
   assert.equal(trayIconFileName('light', 'recording'), 'tray-icon-light-rec.ico')
   assert.equal(trayIconFileName('dark', 'recording'), 'tray-icon-dark-rec.ico')
-  assert.equal(appIconFileName(false), 'app-icon.ico')
-  assert.equal(appIconFileName(true), 'app-icon-rec.ico')
+  assert.equal(APP_ICON_FILE_NAME, 'app-icon.ico')
 
   assert.equal(
     trayIconPath('dark', {
@@ -164,16 +163,16 @@ async function main(): Promise<void> {
     'packaged recording tray icons are extraResources next to the idle pair'
   )
   assert.equal(
-    appIconPath(true, {
+    appIconPath({
       isPackaged: true,
       resourcesPath: join('C:', 'app', 'resources'),
       mainDir: join('C:', 'unused')
     }),
-    join('C:', 'app', 'resources', 'app-icon-rec.ico'),
-    'packaged window recording icon is extraResources app-icon-rec.ico'
+    join('C:', 'app', 'resources', 'app-icon.ico'),
+    'packaged window icon is extraResources app-icon.ico'
   )
   assert.equal(
-    appIconPath(false, {
+    appIconPath({
       isPackaged: false,
       resourcesPath: join('C:', 'unused'),
       mainDir: join('C:', 'repo', 'out', 'main')
@@ -366,10 +365,13 @@ function checkAssets(): void {
   }
 }
 
-/** Recording (red-dot) twins — same sizes as idle, actually contain red, and differ. */
+/**
+ * Recording (red-dot) twins — same sizes as idle, actually contain red, and
+ * differ. The dot must cover at least 12% of the icon: the first IN-495 dot
+ * (~8% at 16px) was too small to spot in the tray during live testing.
+ */
 function checkRecordingAssets(): void {
   const expectedSizes = [16, 20, 24, 32]
-  const buildDir = join(__dirname, '..', 'build')
 
   for (const theme of ['light', 'dark'] as const) {
     const idleFile = join(RESOURCES, trayIconFileName(theme, 'idle'))
@@ -391,29 +393,17 @@ function checkRecordingAssets(): void {
         entry.redPixels > 0,
         `${theme} rec @${entry.size}: missing the red recording dot (${entry.redPixels} red pixels)`
       )
+      const minRed = Math.ceil(entry.size * entry.size * 0.12)
+      assert.ok(
+        entry.redPixels >= minRed,
+        `${theme} rec @${entry.size}: recording dot too small (${entry.redPixels} red px, need ${minRed})`
+      )
     }
 
     const idleBytes = readFileSync(idleFile)
     const recBytes = readFileSync(recFile)
     assert.ok(!idleBytes.equals(recBytes), `${theme}: recording tray icon is identical to idle`)
   }
-
-  const appRec = readIco(join(buildDir, 'icon-rec.ico'))
-  assert.deepEqual(
-    appRec.map((e) => e.size),
-    [16, 32, 48, 64, 128, 256],
-    'icon-rec.ico must keep the same sizes as build/icon.ico'
-  )
-  for (const entry of appRec) {
-    assert.ok(
-      entry.redPixels > 0,
-      `icon-rec.ico @${entry.size}: missing the red recording dot`
-    )
-  }
-
-  const idleApp = readFileSync(join(buildDir, 'icon.ico'))
-  const recApp = readFileSync(join(buildDir, 'icon-rec.ico'))
-  assert.ok(!idleApp.equals(recApp), 'icon-rec.ico is identical to icon.ico')
 }
 
 void main().catch((error) => {

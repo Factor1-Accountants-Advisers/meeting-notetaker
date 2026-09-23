@@ -291,7 +291,7 @@ jobs:
         # IN-472 fix: catches an extraResources misconfiguration, which would leave
         # the tray falling back to the generated circle (or, if only one variant
         # shipped, invisible on half the fleet's taskbars). Recording twins must
-        # ship too, or the taskbar/tray would stay idle while capturing.
+        # ship too, or the tray would stay idle while capturing (IN-495).
         shell: pwsh
         run: |
           foreach ($theme in @('light', 'dark')) {
@@ -304,14 +304,12 @@ jobs:
               Write-Host "Packaged tray icon present: $icon"
             }
           }
-          foreach ($icon in @('app-icon.ico', 'app-icon-rec.ico')) {
-            $path = "dist/win-unpacked/resources/$icon"
-            if (-not (Test-Path $path)) {
-              Write-Error "Packaged output is missing $path — window icon would not swap while recording"
-              exit 1
-            }
-            Write-Host "Packaged window icon present: $path"
+          $appIcon = "dist/win-unpacked/resources/app-icon.ico"
+          if (-not (Test-Path $appIcon)) {
+            Write-Error "Packaged output is missing $appIcon — window icon would not load"
+            exit 1
           }
+          Write-Host "Packaged window icon present: $appIcon"
 
       - name: Publish to Blob update feed (IN-469)
         # Live since 31 Jul 2026. The REPLACE_ME guard below is regression

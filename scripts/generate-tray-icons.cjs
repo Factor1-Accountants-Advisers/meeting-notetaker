@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Generates the theme-paired Windows tray icons (IN-472 fix) and the
- * recording variants used to swap the tray + taskbar icon while capturing.
+ * recording variants used to swap the tray icon while capturing (IN-495).
  *
  * Source of truth is the two hand-drawn white masters in resources/:
  *   tray-icon-32.png (32x32) and tray-icon-16.png (16x16).
@@ -15,8 +15,8 @@
  *   resources/tray-icon-light-rec.ico  — light-theme glyph + red recording dot
  *   resources/tray-icon-dark-rec.ico   — dark-theme glyph + red recording dot
  *
- * Also stamps the same red dot onto each size in build/icon.ico and writes
- * build/icon-rec.ico (taskbar / window icon while recording).
+ * The taskbar button's recording dot is an overlay badge drawn at runtime
+ * (src/main/window.ts), so build/icon.ico needs no recording twin.
  *
  * The suffix names the THEME THE ICON IS FOR, not the glyph colour.
  *
@@ -29,7 +29,6 @@ const zlib = require('zlib')
 
 const ROOT = path.join(__dirname, '..')
 const RESOURCES = path.join(ROOT, 'resources')
-const BUILD = path.join(ROOT, 'build')
 
 /** Glyph colour per taskbar theme. Change these to restyle both icons. */
 const GLYPH = {
@@ -257,13 +256,27 @@ function paintGlyphRgba(size, alpha, colour) {
 /**
  * Composite a recording dot in the bottom-right. Coverage is a cheap analytic
  * anti-alias so 16px tray sizes still read as a circle rather than a square.
+ * Half the icon wide, with a transparent gap cut into the glyph around it: at
+ * 16px a smaller dot merged into the mic and was hard to spot (IN-495 test).
  */
 function overlayRedDot(width, height, rgba) {
   const short = Math.min(width, height)
-  const radius = Math.max(2, short * 0.16)
-  const inset = Math.max(0.75, short * 0.07)
+  const radius = Math.max(3, short * 0.25)
+  const gap = Math.max(1, short * 0.06)
+  const inset = 0
   const cx = width - inset - radius
   const cy = height - inset - radius
+
+  // Knock the glyph out of a ring around the dot so the badge stands apart.
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy)
+      const knock = Math.max(0, Math.min(1, radius + gap + 0.5 - d))
+      if (knock <= 0) continue
+      const o = (y * width + x) * 4
+      rgba[o + 3] = Math.round(rgba[o + 3] * (1 - knock))
+    }
+  }
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -305,27 +318,6 @@ function encodeIco(entries) {
   })
 
   return Buffer.concat([header, directory, ...entries.map((e) => e.png)])
-}
-
-function readIcoPngs(file) {
-  const buf = fs.readFileSync(file)
-  if (buf.readUInt16LE(0) !== 0 || buf.readUInt16LE(2) !== 1) {
-    throw new Error(`${file}: not an ICO`)
-  }
-  const count = buf.readUInt16LE(4)
-  const entries = []
-  for (let i = 0; i < count; i++) {
-    const at = 6 + i * 16
-    const length = buf.readUInt32LE(at + 8)
-    const offset = buf.readUInt32LE(at + 12)
-    const png = buf.subarray(offset, offset + length)
-    const decoded = decodePng(png, `${file}#${i}`)
-    if (decoded.width !== decoded.height) {
-      throw new Error(`${file}#${i}: expected a square PNG, got ${decoded.width}x${decoded.height}`)
-    }
-    entries.push(decoded)
-  }
-  return entries
 }
 
 function rel(file) {
@@ -375,25 +367,8 @@ function writeTrayIcons() {
   }
 }
 
-function writeAppIconRec() {
-  const src = path.join(BUILD, 'icon.ico')
-  const target = path.join(BUILD, 'icon-rec.ico')
-  const entries = readIcoPngs(src)
-  const rec = encodeIco(
-    entries.map(({ width, height, rgba }) => {
-      overlayRedDot(width, height, rgba)
-      return { size: width, png: encodePngFromRgba(width, rgba) }
-    })
-  )
-  fs.writeFileSync(target, rec)
-  console.log(
-    `wrote ${rel(target)} (from ${rel(src)}, ${entries.map((e) => e.width).join('/')}px, ${rec.length} bytes)`
-  )
-}
-
 function main() {
   writeTrayIcons()
-  writeAppIconRec()
 }
 
 main()

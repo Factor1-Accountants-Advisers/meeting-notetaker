@@ -109,21 +109,20 @@ export function trayIconPath(
 }
 
 /** Packaged extraResources name for the window / taskbar icon. */
-export function appIconFileName(recording: boolean): string {
-  return recording ? 'app-icon-rec.ico' : 'app-icon.ico'
-}
+export const APP_ICON_FILE_NAME = 'app-icon.ico'
 
 /**
- * Absolute path to the window / taskbar icon.
+ * Absolute path to the window / taskbar icon. The recording state is shown as
+ * a taskbar overlay badge (window.ts), not by swapping this icon.
  *
- * Packaged: extraResources copies of build/icon.ico and build/icon-rec.ico.
- * Dev: the files in build/, next to the electron-builder icon.
+ * Packaged: extraResources copy of build/icon.ico.
+ * Dev: build/icon.ico, the electron-builder icon itself.
  */
-export function appIconPath(recording: boolean, paths: TrayIconPaths): string {
+export function appIconPath(paths: TrayIconPaths): string {
   if (paths.isPackaged) {
-    return join(paths.resourcesPath, appIconFileName(recording))
+    return join(paths.resourcesPath, APP_ICON_FILE_NAME)
   }
-  return join(paths.mainDir, '..', '..', 'build', recording ? 'icon-rec.ico' : 'icon.ico')
+  return join(paths.mainDir, '..', '..', 'build', 'icon.ico')
 }
 
 /**

@@ -47,7 +47,7 @@ export function createWindow(options: CreateWindowOptions = {}): void {
     titleBarStyle: 'hidden',
     titleBarOverlay: titleBarOverlay(initialTheme),
     backgroundColor: windowBackground(initialTheme),
-    icon: loadWindowIcon(false),
+    icon: loadWindowIcon(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
       sandbox: false,
@@ -58,6 +58,9 @@ export function createWindow(options: CreateWindowOptions = {}): void {
   // Expose the window for main→renderer IPC (recording commands, etc.)
   setMainWindow(mainWindow)
   setWindowRecordingIcon(getRecordingStateMachine().getState() === 'recording')
+  // Hiding to tray removes the taskbar button, and its overlay with it; put
+  // the badge back whenever the button reappears.
+  mainWindow.on('show', () => applyRecordingOverlay(mainWindow))
   mainWindow.center()
 
   mainWindow.on('ready-to-show', () => {
@@ -134,34 +137,75 @@ export function registerWindowSizingIpc(): void {
   })
 }
 
-function windowIconFilePath(recording: boolean): string {
-  return appIconPath(recording, {
+function loadWindowIcon(): Electron.NativeImage {
+  const iconPath = appIconPath({
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     mainDir: __dirname
   })
-}
-
-function loadWindowIcon(recording: boolean): Electron.NativeImage {
-  const iconPath = windowIconFilePath(recording)
   try {
     const icon = nativeImage.createFromPath(iconPath)
     if (!icon.isEmpty()) return icon
   } catch {
-    // Fall through to the idle path / empty image.
+    // Fall through to the empty image.
   }
-  if (recording) return loadWindowIcon(false)
   logger().warn('[window] app icon not found', { path: iconPath })
   return nativeImage.createEmpty()
 }
 
-/** Swap the taskbar / window icon when recording starts or stops. */
-export function setWindowRecordingIcon(recording: boolean): void {
-  const icon = loadWindowIcon(recording)
-  if (icon.isEmpty()) return
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.setIcon(icon)
+// IN-495: the taskbar button shows a red-dot badge while recording. This is an
+// overlay (ITaskbarList3::SetOverlayIcon), not setIcon(): the window shares
+// the Start Menu shortcut's AppUserModelID, so Windows draws the button with
+// the shortcut's icon and ignores setIcon() (confirmed in the IN-495 test).
+let recordingOverlayOn = false
+let recordingOverlayImage: Electron.NativeImage | null = null
+
+/** Red dot, drawn in code so no extra asset has to ship. */
+function recordingOverlay(): Electron.NativeImage {
+  if (recordingOverlayImage) return recordingOverlayImage
+  const image = nativeImage.createEmpty()
+  for (const scaleFactor of [1, 1.25, 1.5, 2]) {
+    const size = Math.round(16 * scaleFactor)
+    image.addRepresentation({
+      scaleFactor,
+      width: size,
+      height: size,
+      buffer: redDotBitmap(size)
+    })
   }
+  recordingOverlayImage = image
+  return image
+}
+
+/** size×size premultiplied BGRA (Skia N32 on Windows), anti-aliased edge. */
+function redDotBitmap(size: number): Buffer {
+  const buf = Buffer.alloc(size * size * 4)
+  const c = size / 2
+  const r = size / 2 - 0.5
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const a = Math.max(0, Math.min(1, r + 0.5 - Math.hypot(x + 0.5 - c, y + 0.5 - c)))
+      const o = (y * size + x) * 4
+      buf[o] = Math.round(0x2b * a) // B
+      buf[o + 1] = Math.round(0x2b * a) // G
+      buf[o + 2] = Math.round(0xe0 * a) // R
+      buf[o + 3] = Math.round(255 * a)
+    }
+  }
+  return buf
+}
+
+function applyRecordingOverlay(win: BrowserWindow): void {
+  if (win.isDestroyed()) return
+  win.setOverlayIcon(recordingOverlayOn ? recordingOverlay() : null, recordingOverlayOn ? 'Recording' : '')
+}
+
+/** Show / clear the taskbar red-dot badge when recording starts or stops. */
+export function setWindowRecordingIcon(recording: boolean): void {
+  if (recording === recordingOverlayOn) return
+  recordingOverlayOn = recording
+  for (const win of BrowserWindow.getAllWindows()) applyRecordingOverlay(win)
+  logger().info('[window] taskbar recording badge', { recording })
 }
 
 function safeOrigin(url: string): string {
