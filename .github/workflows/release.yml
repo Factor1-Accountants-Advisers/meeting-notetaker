@@ -287,20 +287,29 @@ jobs:
           }
           Write-Host "Packaged credentials present: $packagedEnv"
 
-      - name: Assert both tray icons shipped in packaged output
+      - name: Assert tray and recording icons shipped in packaged output
         # IN-472 fix: catches an extraResources misconfiguration, which would leave
         # the tray falling back to the generated circle (or, if only one variant
-        # shipped, invisible on half the fleet's taskbars).
+        # shipped, invisible on half the fleet's taskbars). Recording twins must
+        # ship too, or the tray would stay idle while capturing (IN-495).
         shell: pwsh
         run: |
           foreach ($theme in @('light', 'dark')) {
-            $icon = "dist/win-unpacked/resources/tray-icon-$theme.ico"
-            if (-not (Test-Path $icon)) {
-              Write-Error "Packaged output is missing $icon — tray icon would not render correctly"
-              exit 1
+            foreach ($suffix in @('', '-rec')) {
+              $icon = "dist/win-unpacked/resources/tray-icon-$theme$suffix.ico"
+              if (-not (Test-Path $icon)) {
+                Write-Error "Packaged output is missing $icon — tray icon would not render correctly"
+                exit 1
+              }
+              Write-Host "Packaged tray icon present: $icon"
             }
-            Write-Host "Packaged tray icon present: $icon"
           }
+          $appIcon = "dist/win-unpacked/resources/app-icon.ico"
+          if (-not (Test-Path $appIcon)) {
+            Write-Error "Packaged output is missing $appIcon — window icon would not load"
+            exit 1
+          }
+          Write-Host "Packaged window icon present: $appIcon"
 
       - name: Publish to Blob update feed (IN-469)
         # Live since 31 Jul 2026. The REPLACE_ME guard below is regression

@@ -27,13 +27,18 @@ if (!ffmpegCandidates.some((p) => fs.existsSync(p))) {
   process.exit(1)
 }
 
-// 3. Both tray icons must exist (IN-472 fix). Shipping only one variant is the
-// IN-472 bug: a white glyph is invisible on Windows' light taskbar. Colour
-// correctness is pinned separately by `npm run verify:tray-icon`.
-const trayIcons = ['resources/tray-icon-light.ico', 'resources/tray-icon-dark.ico']
-const missingTrayIcons = trayIcons.filter((p) => !fs.existsSync(p))
-if (missingTrayIcons.length > 0) {
-  console.error('Tray icons missing: ' + missingTrayIcons.join(', '))
+// 3. Idle + recording (IN-495) tray icons. Shipping only one tray theme is the
+// IN-472 bug (white glyph invisible on a light taskbar). Colour correctness is
+// pinned separately by `npm run verify:tray-icon`.
+const iconFiles = [
+  'resources/tray-icon-light.ico',
+  'resources/tray-icon-dark.ico',
+  'resources/tray-icon-light-rec.ico',
+  'resources/tray-icon-dark-rec.ico'
+]
+const missingIcons = iconFiles.filter((p) => !fs.existsSync(p))
+if (missingIcons.length > 0) {
+  console.error('Icons missing: ' + missingIcons.join(', '))
   console.error('Run: node scripts/generate-tray-icons.cjs')
   process.exit(1)
 }

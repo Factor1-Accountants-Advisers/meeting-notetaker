@@ -8,6 +8,7 @@
   "type": "module",
   "scripts": {
     "dev": "electron-vite dev",
+    "dev:test": "electron-vite --mode skip-enrolment",
     "dev:ui": "electron-vite --mode ui-preview",
     "build": "electron-vite build",
     "preview": "electron-vite preview",

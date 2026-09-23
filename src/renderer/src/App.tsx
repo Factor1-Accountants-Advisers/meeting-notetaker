@@ -14,6 +14,7 @@ import {
   fetchEnrolmentStatus,
   fetchInvitees,
   fetchMeetingDtos,
+  toneFor,
   fetchMeetings,
   fetchMeetingReview,
   postInviteeDecision,
@@ -54,6 +55,11 @@ import type { ScreenId } from './lib/nav'
 import type { BlobStatus, StaffMember } from './data/mock'
 
 const USER_KEY = 'mn.user'
+
+// Local icon/UI testing only. `npm run dev:test` sets this mode. Production
+// builds never have DEV set, so the gate stays in force there.
+const DEV_SKIP_ENROLMENT =
+  import.meta.env.DEV && import.meta.env.MODE === 'skip-enrolment'
 
 function loadUser(): User | null {
   try {
@@ -593,6 +599,25 @@ function App(): JSX.Element {
 
     setEnrollmentLoading(true)
     setEnrollmentError(null)
+
+    if (DEV_SKIP_ENROLMENT) {
+      setCurrentPerson({
+        id: user.email,
+        name: user.name,
+        role: 'Factor1 staff',
+        tone: toneFor(user.name),
+        enrollment: 'enrolled',
+        modelVersion: null
+      })
+      setEnrolmentStatus({
+        enrolled_locally: true,
+        centrally_enrolled: false,
+        central_required: false
+      })
+      setEnrollmentLoading(false)
+      window.api?.debugLog?.('dev enrolment gate skipped', {})
+      return
+    }
 
     // At Windows-boot launch (IN-71) the packaged backend takes up to ~20s to
     // spawn and pass health checks, so a single fetch races it and strands the

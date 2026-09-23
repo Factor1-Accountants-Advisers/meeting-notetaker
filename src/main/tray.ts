@@ -11,9 +11,11 @@ import {
   parseRegDword,
   resolveTrayTheme,
   trayIconPath,
+  type TrayIconVariant,
   type TrayTheme,
   type TrayThemeSignals
 } from './tray-icon'
+import { setWindowRecordingIcon } from './window'
 import {
   extendActiveRecordingFromMain,
   getRecordingStateMachine,
@@ -28,8 +30,9 @@ let tray: Tray | null = null
 let showWindowCallback: (() => void) | null = null
 
 // IN-472 fix: which icon variant is currently on screen, so we only call setImage
-// when the theme actually flips.
+// when the theme actually flips. Recording (red-dot) is tracked the same way.
 let appliedTrayTheme: TrayTheme | null = null
+let appliedRecording = false
 let themeListener: (() => void) | null = null
 
 // IN-469: downloaded-update surfacing. tray.ts deliberately does not import
@@ -80,10 +83,11 @@ export function createTray(onShowWindow: () => void): void {
 }
 
 export function updateTrayMenu(): void {
-  if (!tray) return
-
   const sm = getRecordingStateMachine()
   const state = sm.getState()
+  setWindowRecordingIcon(state === 'recording')
+  if (!tray) return
+
   // Surface the meeting title in the tooltip per IN-77 acceptance criteria.
   // Auto-recordings carry it in metadata; manual/ad-hoc fall back to generic.
   const title = meetingTitleFrom(sm.getActiveRecording()?.metadata)
@@ -143,6 +147,7 @@ export function updateTrayMenu(): void {
 
   tray.setContextMenu(contextMenu)
   tray.setToolTip(`Meeting Notetaker — ${statusLabel}`)
+  applyTrayIcon()
 }
 
 export function destroyTray(): void {
@@ -155,6 +160,7 @@ export function destroyTray(): void {
     tray = null
   }
   appliedTrayTheme = null
+  appliedRecording = false
   showWindowCallback = null
 }
 
@@ -239,35 +245,46 @@ function currentTrayTheme(): TrayTheme {
   return nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
 }
 
-/** Re-resolve and swap the icon if the taskbar theme changed. */
+function trayRecordingVariant(): TrayIconVariant {
+  return getRecordingStateMachine().getState() === 'recording' ? 'recording' : 'idle'
+}
+
+/** Re-resolve and swap the icon if the taskbar theme or recording state changed. */
 function applyTrayIcon(): void {
   if (!tray) return
   const theme = currentTrayTheme()
-  if (theme === appliedTrayTheme) return
-  tray.setImage(createTrayIcon(theme))
+  const recording = trayRecordingVariant() === 'recording'
+  if (theme === appliedTrayTheme && recording === appliedRecording) return
+  tray.setImage(createTrayIcon(theme, recording))
   appliedTrayTheme = theme
-  logger().info('[tray] icon theme changed', { theme })
+  appliedRecording = recording
+  logger().info('[tray] icon updated', { theme, recording })
 }
 
-function createTrayIcon(theme: TrayTheme): Electron.NativeImage {
+function createTrayIcon(theme: TrayTheme, recording = false): Electron.NativeImage {
   // IN-472 fix: multi-size .ico (16/20/24/32) per taskbar theme, from resources/
-  // (dev) or extraResources (packaged).
-  const iconPath = trayIconPath(theme, {
+  // (dev) or extraResources (packaged). Recording uses the red-dot twin.
+  const paths = {
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     mainDir: __dirname
-  })
+  }
+  const variants: TrayIconVariant[] = recording ? ['recording', 'idle'] : ['idle']
 
-  try {
-    const icon = nativeImage.createFromPath(iconPath)
-    if (!icon.isEmpty()) {
-      return icon
+  for (const variant of variants) {
+    const iconPath = trayIconPath(theme, paths, variant)
+    try {
+      const icon = nativeImage.createFromPath(iconPath)
+      if (!icon.isEmpty()) {
+        return icon
+      }
+    } catch {
+      // Try the next variant, then the generated fallback.
     }
-  } catch {
-    // Fall through to generated fallback.
   }
 
-  logger().warn('[tray] logo not found, using generated fallback', { path: iconPath, theme })
+  const iconPath = trayIconPath(theme, paths, recording ? 'recording' : 'idle')
+  logger().warn('[tray] logo not found, using generated fallback', { path: iconPath, theme, recording })
   // Generated fallback — same blue circle as before, kept as a safety net.
   // Deliberately brand blue rather than monochrome: it has to stay legible on
   // both taskbar themes, since reaching here means we could not load either
