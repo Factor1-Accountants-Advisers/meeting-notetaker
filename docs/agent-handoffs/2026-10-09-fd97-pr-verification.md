@@ -72,10 +72,11 @@ the published artifact of that version. Choose/bump the next release version and
 use the existing signing/updater release workflow only after explicit release
 approval. The release workflow publishes from v* tags; this PR does not invoke it.
 
-Desktop prompted-call enablement remains opt-in. Broader rollout/cohort changes,
-DA enablement, merge and publication are separate approval gates. The temporary
-cloud diagnostic was disabled after investigation; production correlation and
-voice-matching thresholds were not relaxed.
+Desktop prompted-call enablement remains opt-in. The later approved full-dev
+trial enables it only in the dedicated launcher; its exact additional tester
+cohort was verified separately. Broader rollout, merge and installer publication
+remain separate approval gates. The temporary cloud diagnostic remains disabled;
+production correlation and voice-matching thresholds were not relaxed.
 
 This is not installed-Windows UAT or proof of every reconnect/group-call case.
 The healthy-observer-recovery unanswered-timeout case remains outside earlier
@@ -94,7 +95,10 @@ scheduled-stop/native conditions were checked in source, not live fault-injected
 The four repairs were approved and completed in the integration worktree.
 Fresh post-repair regressions, native build, Windows package and isolated
 packaged-component checks passed; see 2026-10-13-fd97-review-repairs.md.
-Desktop implementation remains uncommitted; no PR, installation or publication.
-The user's fresh live Teams smoke test remains the next acceptance step.
+Desktop source and the later full-function dev launcher are committed in
+`bfda458`; see `2026-10-13-full-dev-verification.md` for fresh setup/startup,
+regression and narrow-cohort evidence. GitHub carries current PR/CI status.
+No installer installation/release is implied. Fresh account-specific live Teams
+acceptance remains separate from the successful synthetic checks.
 No private live-call handoff/history or machine-specific test launcher is included
 in this public-source branch.

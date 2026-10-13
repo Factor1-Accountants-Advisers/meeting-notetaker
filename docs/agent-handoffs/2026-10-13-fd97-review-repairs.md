@@ -2,9 +2,13 @@
 
 ## Scope and status
 
-The four approved review repairs are complete in `feature/fd97-desktop-integration`.
-All implementation remains uncommitted. No PR, CI run, merge, installation,
-publication, additional tester enablement or participant send was performed.
+The four approved review repairs are committed in `bfda458` on
+`feature/fd97-desktop-integration`. The checks and installer recorded below are
+an earlier local repair checkpoint, not the later full-dev trial artifact.
+For week-long full-function use, follow `full-function-dev-trial.md` and
+`2026-10-13-full-dev-verification.md`; do not substitute this capture-only relay.
+No installer release, installation, main merge or participant send was performed
+by this checkpoint. Current feature-branch PR/CI state is authoritative on GitHub.
 The original private QA worktree is not the rebuilt source of truth.
 
 ## Repairs
