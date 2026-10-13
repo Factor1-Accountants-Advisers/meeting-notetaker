@@ -79,7 +79,8 @@ or consume/install normal updater releases. There is no hot-reload server.
 
 ## Isolation and private configuration
 
-- UI/tray: Meeting Notetaker Dev; separate AUMID and `notetaker-dev://` activation.
+- Window title: Meeting Notetaker Dev; separate AUMID and `notetaker-dev://`
+  activation. The existing tray menu/tooltips are retained.
 - Profile: `%LOCALAPPDATA%/MeetingNotetaker-Dev`.
 - Local meetings, audio/spill, authentication, logs and temp files stay under that
   profile, not the installed app or backend/var.

@@ -85,5 +85,9 @@ its owned backend stops. Do not uninstall or delete either profile.
 No main merge, version bump, release tag, installer execution/upload or updater
 publication is authorized by this preparation. The earlier unsigned 2.0.41
 installer repair candidate is historical and is not this full-dev trial route.
-CI retains one pre-existing backend concurrency-test deselection; report its
-actual run separately rather than calling it the local full-suite gate.
+Published CI run `38334424597` on `c7e6657` passed all three jobs (renderer,
+native helper and backend), including the real Windows job-ownership fixture.
+Its backend result was 513 passed, 4 skipped, 1 pre-existing deselection and 51
+subtests passed. This differs from the local network-blocked full-suite gate
+above; neither result is account-specific live acceptance. Later documentation-
+only revisions do not change the verified application source.
