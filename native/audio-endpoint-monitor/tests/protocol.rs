@@ -1,4 +1,7 @@
-use notetaker_audio_endpoints::{AudioEndpoint, AudioEndpointSet, SnapshotEmitter};
+use notetaker_audio_endpoints::{
+    is_teams_process_basename, AudioEndpoint, AudioEndpointSet, SnapshotEmitter,
+    TeamsObservationEmitter,
+};
 
 fn endpoint(id: &str, label: &str) -> Option<AudioEndpoint> {
     Some(AudioEndpoint {
@@ -68,4 +71,60 @@ fn serializes_the_typescript_v1_shape() {
         json["endpoints"]["captureCommunications"]["id"],
         "capture-a"
     );
+}
+
+#[test]
+fn serializes_a_teams_call_heartbeat_shape() {
+    let mut emitter = TeamsObservationEmitter::default();
+    let observation = emitter.observe(Some(true), false, vec!["Meeting join".to_owned()]);
+    let json = serde_json::to_value(observation).unwrap();
+
+    assert_eq!(json["schemaVersion"], 1);
+    assert_eq!(json["kind"], "teams-call");
+    assert_eq!(json["generation"], 1);
+    assert_eq!(json["active"], true);
+    assert_eq!(json["preJoin"], false);
+    assert_eq!(json["windowTitles"][0], "Meeting join");
+}
+
+#[test]
+fn window_scan_failure_cannot_turn_pre_join_into_a_connected_call() {
+    let mut emitter = TeamsObservationEmitter::default();
+    let observation = emitter.observe_scan(Some(true), true, vec!["Meeting join".to_owned()]);
+    assert_eq!(observation.active, None);
+    assert!(observation.pre_join);
+}
+
+#[test]
+fn window_scan_failure_makes_audio_disconnect_unknown() {
+    let mut emitter = TeamsObservationEmitter::default();
+    let observation = emitter.observe_scan(Some(false), true, vec![]);
+    assert_eq!(observation.active, None);
+}
+
+#[test]
+fn healthy_scan_without_call_audio_preserves_disconnect() {
+    let mut emitter = TeamsObservationEmitter::default();
+    let observation = emitter.observe_scan(Some(false), false, vec![]);
+    assert_eq!(observation.active, Some(false));
+}
+
+#[test]
+fn healthy_scan_preserves_pre_join_and_connected_call_evidence() {
+    let mut emitter = TeamsObservationEmitter::default();
+    let pre_join = emitter.observe_scan(Some(true), false, vec!["Meeting join".to_owned()]);
+    assert_eq!(pre_join.active, Some(true));
+    assert!(pre_join.pre_join);
+    let connected = emitter.observe_scan(Some(true), false, vec!["Call with Fixture".to_owned()]);
+    assert_eq!(connected.active, Some(true));
+    assert!(!connected.pre_join);
+}
+
+#[test]
+fn recognizes_only_supported_teams_process_basenames() {
+    assert!(is_teams_process_basename("ms-teams.exe"));
+    assert!(is_teams_process_basename("Teams.exe"));
+    assert!(is_teams_process_basename("ms-teams.EXE"));
+    assert!(!is_teams_process_basename("msedgewebview2.exe"));
+    assert!(!is_teams_process_basename("teams-helper.exe"));
 }

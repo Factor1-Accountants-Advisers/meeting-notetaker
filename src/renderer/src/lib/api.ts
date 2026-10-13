@@ -70,6 +70,12 @@ export interface MeetingDto {
   blob_status: BlobStatus
   blob_error_message: string | null
   blob_error_code: string | null
+  call_lookup_status?: 'not_applicable' | 'pending' | 'unavailable' | 'ambiguous' | 'resolved' | 'expired'
+  call_lookup_next_retry_at?: string | null
+  call_lookup_deadline_at?: string | null
+  call_lookup_last_attempt_at?: string | null
+  call_lookup_attempts?: number
+  call_lookup_error_message?: string | null
   graph_metadata?: GraphMeetingMetadataDto | null
   manual_attendees: ManualMeetingAttendee[]
 }
@@ -92,6 +98,11 @@ export interface GraphMeetingMetadata {
   scheduledStartUtc?: string
   description?: string
   icalUid?: string
+  promptedTeamsCall?: {
+    nonce: string
+    observedStartUtc: string
+    observedEndUtc?: string
+  }
 }
 
 export interface GraphMeetingMetadataDto {
@@ -105,6 +116,11 @@ export interface GraphMeetingMetadataDto {
   scheduled_start_utc?: string | null
   description?: string | null
   ical_uid?: string | null
+  prompted_call?: {
+    nonce: string
+    observed_start_utc: string
+    observed_end_utc?: string | null
+  } | null
 }
 
 export interface ActionItemDto {
@@ -324,6 +340,23 @@ export async function createMeeting(
   })
 }
 
+/** Persist the observed hang-up of a consented prompted Teams call. The
+ * backend derives the start/source from the stored marker. */
+export async function recordPromptedCallEnded(
+  meetingId: string,
+  endedAtUtc: string
+): Promise<MeetingDto | null> {
+  return call<MeetingDto>('POST', `/meetings/${meetingId}/call-observation`, {
+    ended_at_utc: endedAtUtc
+  })
+}
+
+/** Ask the local owner-only resolver to consult the Storage API. The response
+ * contains only durable local state and trusted attendees. */
+export async function resolveCallParticipants(meetingId: string): Promise<MeetingDto | null> {
+  return call<MeetingDto>('POST', `/meetings/${meetingId}/call-participants/resolve`)
+}
+
 /** Owner-only tidy-up of a meeting that never received audio (join-trigger
  *  false start, spec J4). Resolves true when the backend accepted the delete;
  *  false on any error — callers must not block on it. */
@@ -372,7 +405,14 @@ function toGraphMetadataDto(metadata: GraphMeetingMetadata): GraphMeetingMetadat
     organizer_name: metadata.organizerName ?? null,
     scheduled_start_utc: metadata.scheduledStartUtc ?? null,
     description: metadata.description ?? null,
-    ical_uid: metadata.icalUid ?? null
+    ical_uid: metadata.icalUid ?? null,
+    prompted_call: metadata.promptedTeamsCall
+      ? {
+          nonce: metadata.promptedTeamsCall.nonce,
+          observed_start_utc: metadata.promptedTeamsCall.observedStartUtc,
+          observed_end_utc: metadata.promptedTeamsCall.observedEndUtc ?? null
+        }
+      : null
   }
 }
 

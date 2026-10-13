@@ -63,6 +63,27 @@ export class GraphClient {
   }
 
   private async fetchCollection(url: string): Promise<GraphCollectionResponse<RawGraphEvent>> {
+    const base = new URL(this.baseUrl)
+    const seen = new Set<string>()
+    const events: RawGraphEvent[] = []
+    let page: GraphCollectionResponse<RawGraphEvent>
+    for (;;) {
+      const target = new URL(url)
+      if (target.origin !== base.origin || !target.pathname.startsWith(base.pathname + '/') ||
+          target.username || target.password || target.hash || seen.has(url) || seen.size >= 1000) {
+        throw new GraphClientError(502, 'Unsafe or cyclic Microsoft Graph pagination link')
+      }
+      seen.add(url)
+      page = await this.fetchPage(url)
+      if (!Array.isArray(page.value)) throw new GraphClientError(502, 'Incomplete Microsoft Graph calendar response')
+      events.push(...page.value)
+      if (!page['@odata.nextLink']) break
+      url = new URL(page['@odata.nextLink'] as string, url).href
+    }
+    return { value: events, '@odata.deltaLink': page['@odata.deltaLink'] }
+  }
+
+  private async fetchPage(url: string): Promise<GraphCollectionResponse<RawGraphEvent>> {
     const token = await this.getAccessToken()
     const response = await this.fetchImpl(url, {
       method: 'GET',

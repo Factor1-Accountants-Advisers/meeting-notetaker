@@ -3,8 +3,12 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { EventEmitter } from 'node:events'
 
-import { parseAudioEndpointLine } from './audio-endpoint-protocol'
-import type { AudioEndpointSet, AudioEndpointSnapshot } from '../shared/audio-endpoints'
+import { parseAudioEndpointLine, parseTeamsCallLine } from './audio-endpoint-protocol'
+import type {
+  AudioEndpointSet,
+  AudioEndpointSnapshot,
+  TeamsCallObservation
+} from '../shared/audio-endpoints'
 
 const MAX_PENDING_STDOUT_BYTES = 64 * 1024
 const RESTART_DELAY_MS = 1_000
@@ -21,13 +25,16 @@ interface AudioEndpointLog {
   error(message: string, details?: unknown): void
 }
 
-interface AudioEndpointServiceOptions {
+export interface AudioEndpointServiceOptions {
   helperPath: string
-  spawnHelper?: (helperPath: string) => AudioEndpointChild
+  spawnHelper?: (helperPath: string, args?: readonly string[]) => AudioEndpointChild
   existsFn?: (path: string) => boolean
   scheduleRestart?: (callback: () => void, delayMs: number) => unknown
   cancelRestart?: (handle: unknown) => void
   onSnapshot?: (snapshot: AudioEndpointSnapshot) => void
+  observeTeams?: () => boolean
+  onTeamsCall?: (observation: TeamsCallObservation) => void
+  onTeamsUnavailable?: () => void
   log: AudioEndpointLog
 }
 
@@ -51,8 +58,11 @@ export function resolveAudioEndpointHelperPath(options: HelperPathOptions): stri
   )
 }
 
-function spawnAudioEndpointHelper(helperPath: string): AudioEndpointChild {
-  return spawn(helperPath, [], {
+function spawnAudioEndpointHelper(
+  helperPath: string,
+  args: readonly string[] = []
+): AudioEndpointChild {
+  return spawn(helperPath, args, {
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe']
   }) as AudioEndpointChild
@@ -85,13 +95,19 @@ function endpointSetsMatch(left: AudioEndpointSet, right: AudioEndpointSet): boo
  * capture until the app is restarted.
  */
 export class AudioEndpointService {
-  private readonly spawnHelper: (helperPath: string) => AudioEndpointChild
+  private readonly spawnHelper: (
+    helperPath: string,
+    args?: readonly string[]
+  ) => AudioEndpointChild
   private readonly scheduleRestart: (callback: () => void, delayMs: number) => unknown
   private readonly cancelRestart: (handle: unknown) => void
   private child: AudioEndpointChild | null = null
   private restartHandle: unknown = null
   private restartCount = 0
   private helperGeneration = 0
+  private teamsHelperGeneration = 0
+  private observingTeams = false
+  private teamsUnavailableNotified = false
   private stdoutBuffer = ''
   private snapshot: AudioEndpointSnapshot | null = null
   private started = false
@@ -122,6 +138,7 @@ export class AudioEndpointService {
   stop(): void {
     this.stopRequested = true
     this.started = false
+    this.invalidateTeamsObservation()
     if (this.restartHandle !== null) {
       this.cancelRestart(this.restartHandle)
       this.restartHandle = null
@@ -147,14 +164,19 @@ export class AudioEndpointService {
     if (this.stopRequested) return
     this.stdoutBuffer = ''
     this.helperGeneration = 0
+    this.teamsHelperGeneration = 0
+    this.observingTeams = this.options.observeTeams?.() === true
+    this.teamsUnavailableNotified = false
+    const spawnArgs = this.observingTeams ? ['--observe-teams'] : []
     let child: AudioEndpointChild
     try {
-      child = this.spawnHelper(this.options.helperPath)
+      child = this.spawnHelper(this.options.helperPath, spawnArgs)
     } catch (error) {
       this.options.log.error('[audio-endpoints] observer could not start', {
         helperPath: this.options.helperPath,
         message: error instanceof Error ? error.message : String(error)
       })
+      this.invalidateTeamsObservation()
       this.scheduleOneRestart()
       return
     }
@@ -176,11 +198,17 @@ export class AudioEndpointService {
       this.options.log.error('[audio-endpoints] observer process error', {
         message: error instanceof Error ? error.message : String(error)
       })
-      if (this.child === child) this.child = null
+      if (this.child === child) {
+        this.child = null
+        this.invalidateTeamsObservation()
+      }
       this.scheduleOneRestart()
     })
     child.once('exit', (code, signal) => {
-      if (this.child === child) this.child = null
+      if (this.child === child) {
+        this.child = null
+        this.invalidateTeamsObservation()
+      }
       if (this.stopRequested) return
       this.options.log.warn('[audio-endpoints] observer exited unexpectedly', { code, signal })
       this.scheduleOneRestart()
@@ -205,6 +233,7 @@ export class AudioEndpointService {
     if (Buffer.byteLength(this.stdoutBuffer, 'utf8') > MAX_PENDING_STDOUT_BYTES) {
       this.options.log.warn('[audio-endpoints] discarded oversized observer output')
       this.stdoutBuffer = ''
+      this.invalidateTeamsObservation()
       return
     }
 
@@ -216,7 +245,16 @@ export class AudioEndpointService {
       try {
         const snapshot = parseAudioEndpointLine(trimmed)
         if (!snapshot) {
+          const observation = parseTeamsCallLine(trimmed)
+          if (observation) {
+            if (observation.generation <= this.teamsHelperGeneration) continue
+            this.teamsHelperGeneration = observation.generation
+            this.teamsUnavailableNotified = false
+            this.options.onTeamsCall?.(observation)
+            continue
+          }
           this.options.log.warn('[audio-endpoints] ignored invalid observer output')
+          this.invalidateTeamsObservation()
           continue
         }
         if (snapshot.generation <= this.helperGeneration) continue
@@ -234,5 +272,11 @@ export class AudioEndpointService {
         })
       }
     }
+  }
+
+  private invalidateTeamsObservation(): void {
+    if (!this.observingTeams || this.teamsUnavailableNotified) return
+    this.teamsUnavailableNotified = true
+    this.options.onTeamsUnavailable?.()
   }
 }

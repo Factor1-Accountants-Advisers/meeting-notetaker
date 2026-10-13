@@ -12,6 +12,11 @@ files:
   - '!.env*'
   - '!backend/**'
   - '!scripts/**'
+  # Local FD97 launchers and compiled verification fixtures are not app code.
+  - '!fd97-*.cjs'
+  - '!dev-notetaker.cjs'
+  - '!out/verify-*'
+  - '!out/Start Dev.cmd'
   - '!recordings/**'
   - '!dist/**'
   - '!*.tsbuildinfo'

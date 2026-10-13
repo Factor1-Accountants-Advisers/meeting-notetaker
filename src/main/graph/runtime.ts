@@ -60,6 +60,7 @@ export interface GraphCalendarClient {
 
 export type GraphSyncStatus =
   | 'skipped_no_token'
+  | 'skipped_stale'
   | 'skipped_backoff'
   | 'success'
   | 'throttled'
@@ -74,10 +75,21 @@ export interface GraphSyncResult {
 }
 
 export interface GraphDetectionRuntime {
-  syncNow: () => Promise<GraphSyncResult>
+  syncNow: (options?: { forceFullSnapshot?: boolean }) => Promise<GraphSyncResult>
   startPolling: (intervalMs?: number) => void
   stopPolling: () => void
   scheduleResumeSync: () => void
+}
+
+/** A renderer-ready refresh can recover from a stale startup sync. A valid
+ * calendar snapshot must also arm recurring polls, or call prompts disappear
+ * as soon as their ten-minute freshness window expires. */
+export async function refreshGraphCalendarAndResumePolling(
+  runtime: GraphDetectionRuntime
+): Promise<GraphSyncResult> {
+  const result = await runtime.syncNow({ forceFullSnapshot: true })
+  if (result.status === 'success') runtime.startPolling()
+  return result
 }
 
 export function startGraphDetectionRuntime(options: GraphRuntimeOptions): GraphDetectionRuntime {
@@ -92,10 +104,38 @@ export function startGraphDetectionRuntime(options: GraphRuntimeOptions): GraphD
   // Keep the flag set through token/backoff/errors and clear it only after the
   // first successful full sync.
   let needsFullSnapshot = true
-  const syncNow = async (): Promise<GraphSyncResult> => {
-    const result = await syncGraphDetectionOnce(options, { forceFullSnapshot: needsFullSnapshot })
-    if (result.status === 'success') needsFullSnapshot = false
-    return result
+  let activeSync: Promise<GraphSyncResult> | null = null
+  let queuedForcedSync: Promise<GraphSyncResult> | null = null
+  let syncEpoch = 0
+  let lastAccount = options.getSignedInEmail?.()
+  const syncNow = (syncOptions: { forceFullSnapshot?: boolean } = {}): Promise<GraphSyncResult> => {
+    if (activeSync) {
+      if (!syncOptions.forceFullSnapshot) return activeSync
+      if (!queuedForcedSync) {
+        queuedForcedSync = activeSync.then(() => {
+          queuedForcedSync = null
+          return syncNow({ forceFullSnapshot: true })
+        }, (error) => {
+          // Release rejected queues as well; never retain a stale rejection.
+          queuedForcedSync = null
+          throw error
+        })
+      }
+      return queuedForcedSync
+    }
+    const account = options.getSignedInEmail?.()
+    const epoch = syncEpoch
+    const task = syncGraphDetectionOnce(options, {
+      forceFullSnapshot: needsFullSnapshot || account !== lastAccount || syncOptions.forceFullSnapshot === true,
+      isCurrent: () => epoch === syncEpoch
+    }).then((result) => {
+      if (result.status === 'success') { needsFullSnapshot = false; lastAccount = account }
+      else if (result.status === 'skipped_stale') needsFullSnapshot = true
+      return result
+    })
+    const guarded = task.finally(() => { if (activeSync === guarded) activeSync = null })
+    activeSync = guarded
+    return guarded
   }
 
   const startPolling = (intervalMs = DEFAULT_POLL_INTERVAL_MS): void => {
@@ -129,10 +169,17 @@ export function startGraphDetectionRuntime(options: GraphRuntimeOptions): GraphD
       }
     }
 
-    pollTimer = setInterval(poll, intervalMs)
+    pollTimer = setInterval(() => {
+      void poll().catch(() => {
+        options.logger.warn('[graph] polling sync rejected')
+        consecutiveFailures++
+        if (consecutiveFailures >= 5) stopPolling()
+      })
+    }, intervalMs)
   }
 
   const stopPolling = (): void => {
+    syncEpoch++
     stopped = true
     if (pollTimer) {
       clearInterval(pollTimer)
@@ -157,7 +204,7 @@ export function startGraphDetectionRuntime(options: GraphRuntimeOptions): GraphD
           status: result.status,
           decisions: result.decisions.length
         })
-      })
+      }).catch(() => options.logger.warn('[graph] resume sync rejected'))
     }, debounceMs)
   }
 
@@ -171,15 +218,17 @@ export function startGraphDetectionRuntime(options: GraphRuntimeOptions): GraphD
     // On skipped_no_token, skipped_backoff, or error, the caller must call
     // startPolling() explicitly (e.g., after sign-in).
     if (result.status === 'success') startPolling()
-  })
+  }).catch(() => options.logger.warn('[graph] startup sync rejected'))
 
   return { syncNow, startPolling, stopPolling, scheduleResumeSync }
 }
 
 export async function syncGraphDetectionOnce(
   options: GraphRuntimeOptions,
-  syncOptions: { forceFullSnapshot?: boolean } = {}
+  syncOptions: { forceFullSnapshot?: boolean; isCurrent?: () => boolean } = {}
 ): Promise<GraphSyncResult> {
+  const account = options.getSignedInEmail?.()
+  const isCurrent = (): boolean => options.getSignedInEmail?.() === account && (syncOptions.isCurrent?.() ?? true)
   const now = options.now?.() ?? new Date()
   const state = await readGraphSchedulerState(options.statePath)
 
@@ -207,6 +256,7 @@ export async function syncGraphDetectionOnce(
       ? await client.fetchCalendarView({ startUtc: windowStartUtc, endUtc: windowEndUtc })
       : await client.fetchDeltaLink(state.deltaLink as string)
 
+    if (!isCurrent()) return { status: 'skipped_stale', state, decisions: [] }
     const detection = detectGraphMeetings(response.value, {
       signedInEmail: options.getSignedInEmail?.(),
       filter: buildFilterOptions(now),
@@ -235,6 +285,7 @@ export async function syncGraphDetectionOnce(
       excluded: detection.excluded.length
     })
 
+    if (!isCurrent()) return { status: 'skipped_stale', state, decisions: [] }
     // Guarded so a throwing callback can never turn a completed sync into an
     // error status (the state above is already persisted at this point).
     if (options.onSyncCompleted) {
@@ -253,6 +304,7 @@ export async function syncGraphDetectionOnce(
       options.logger.info('[graph] host-gate evaluated', hostGateLogContext(gate))
     }
 
+    if (!isCurrent()) return { status: 'skipped_stale', state, decisions: [] }
     // Notify caller of auto-record-eligible candidates (IN-66)
     if (detection.autoRecordEligible.length > 0 && options.onAutoRecordEligible) {
       options.onAutoRecordEligible(detection.autoRecordEligible)

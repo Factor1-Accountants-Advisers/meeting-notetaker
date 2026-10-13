@@ -16,3 +16,12 @@ export interface AudioEndpointSnapshot {
   generation: number
   endpoints: AudioEndpointSet
 }
+
+export interface TeamsCallObservation {
+  schemaVersion: 1
+  kind: 'teams-call'
+  generation: number
+  active: boolean | null
+  preJoin: boolean
+  windowTitles: string[]
+}

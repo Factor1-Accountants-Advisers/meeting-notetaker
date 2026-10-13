@@ -32,7 +32,7 @@ export function isStorageRoute(req: Pick<ApiRequest, 'method' | 'path'>): boolea
   const path = loggablePath(req.path)
   const storageBackedMeetingRoute =
     req.method === 'POST' &&
-    /^\/api\/v1\/meetings\/[^/]+\/(?:audio|retry|finalize|blob\/retry)$/.test(path)
+    /^\/api\/v1\/meetings\/[^/]+\/(?:audio|retry|finalize|blob\/retry|call-observation|call-participants\/resolve)$/.test(path)
   return (
     storageBackedMeetingRoute ||
     /^\/api\/v1\/voiceprint-admin(?:\/|$)/.test(path) ||

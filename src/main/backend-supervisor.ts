@@ -195,6 +195,9 @@ export function forceKillBackendChild(): void {
 
 /** Stop the backend child process (called from before-quit). */
 export function stopBackendSupervisor(): void {
+  // Imports and unpackaged/dev startup do not confer ownership of 8787.
+  // In particular, the isolated call-test launcher owns a different relay.
+  if (!supervisorStarted) return
   stopRequested = true
   backendHealthy = false
   const proc = child
