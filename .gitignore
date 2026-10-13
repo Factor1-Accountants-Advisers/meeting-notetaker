@@ -12,9 +12,14 @@ recordings
 
 .claude/settings.local.json
 
+# Python-only QA helpers create local bytecode, never source artifacts.
+__pycache__/
+*.pyc
+
 # Credentials file — never commit real keys (injected at build time only).
 backend.env
 backend/backend.env
+backend/dev.env
 backend/third_party/ffmpeg/
 
 # Rust build output under native/ (e.g. audio-endpoint-monitor) — hundreds of

@@ -21,6 +21,8 @@ import {
 /** Lifted to App so recording survives navigation between screens. */
 export interface RecordingSession {
   meetingId: string | null
+  /** Exact main-process identity used to reject stale automatic-stop retries. */
+  recordingKey?: string
   title: string
   source: 'online' | 'in_person'
   startedAt: number

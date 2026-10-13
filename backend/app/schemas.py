@@ -23,6 +23,15 @@ class MeetingSource(str, Enum):
     upload = "upload"
 
 
+class CallLookupStatus(str, Enum):
+    not_applicable = "not_applicable"
+    pending = "pending"
+    unavailable = "unavailable"
+    ambiguous = "ambiguous"
+    resolved = "resolved"
+    expired = "expired"
+
+
 class PipelineStatus(str, Enum):
     pending_audio = "pending_audio"  # created, no recording uploaded yet
     queued = "queued"  # audio stored, waiting for transcription
@@ -107,6 +116,12 @@ class GraphMeetingAttendeeMetadata(BaseModel):
     response: str | None = None
 
 
+class PromptedCallMetadata(BaseModel):
+    nonce: str = Field(min_length=1, max_length=200)
+    observed_start_utc: str
+    observed_end_utc: str | None = None
+
+
 class GraphMeetingMetadata(BaseModel):
     """Calendar/Teams metadata carried from Graph detection to the backend."""
 
@@ -123,6 +138,7 @@ class GraphMeetingMetadata(BaseModel):
     scheduled_start_utc: str | None = None  # ISO 8601 UTC from Graph start
     description: str | None = None  # Graph bodyPreview
     ical_uid: str | None = None
+    prompted_call: PromptedCallMetadata | None = None
 
 
 class ManualMeetingAttendee(BaseModel):
@@ -249,6 +265,14 @@ class Meeting(BaseModel):
         default_factory=list,
         max_length=49,
     )
+    # FD-97 prompted-call participant resolution. Raw Graph call records do
+    # not enter the local store; only durable retry state is retained.
+    call_lookup_status: CallLookupStatus = CallLookupStatus.not_applicable
+    call_lookup_next_retry_at: datetime | None = None
+    call_lookup_deadline_at: datetime | None = None
+    call_lookup_last_attempt_at: datetime | None = None
+    call_lookup_attempts: int = 0
+    call_lookup_error_message: str | None = None
 
 
 class MeetingCreate(BaseModel):
@@ -384,6 +408,27 @@ class EmailResult(BaseModel):
     # Who THIS call emailed (IN-488). Equal to `recipients` on a first send,
     # the invitees only on a later send, and empty on an idempotent replay.
     sent_now: list[str] = Field(default_factory=list)
+
+
+class CallObservationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ended_at_utc: datetime
+
+
+class CallParticipantResolveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class CallRecordParticipant(BaseModel):
+    name: str | None = None
+    email: str = Field(min_length=1)
+
+
+class CallRecordResolveResponse(BaseModel):
+    status: Literal["pending", "ambiguous", "resolved", "expired"]
+    participants: list[CallRecordParticipant] = Field(default_factory=list)
+    retry_after_seconds: int = 60
 
 
 class InviteeCandidate(BaseModel):

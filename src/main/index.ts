@@ -5,7 +5,7 @@ import { registerApiProxyIpc } from './api-proxy'
 import { getCurrentUser, getCurrentUserEmail, getGraphAccessToken, onMsalSignedIn, registerAuthSessionIpc } from './auth-session'
 import { callSignalsManualResume, callSignalsToastAction, configureCallSignals } from './call-signals'
 import { createCallWatchRegistrar } from './call-watch-registrar'
-import { startGraphDetectionRuntime } from './graph/runtime'
+import { startGraphDetectionRuntime, refreshGraphCalendarAndResumePolling } from './graph/runtime'
 import { loadPublicEnv } from './env'
 import { evaluateHostGate, hostGateLogContext } from './graph/host-gate'
 import { initLogger, logger } from './logger'
@@ -19,11 +19,15 @@ import {
   extendAutoStop,
   getRecordingStateMachine,
   handleRendererRecordingError,
+  handleRendererStopFailed,
+  handleRendererRecordingNotReady,
   handleRendererRecordingReady,
   handleRendererRecordingStarted,
   handleRendererRecordingStopped,
   hasPendingAutoStart,
+  isRendererRecordingReady,
   isRecordingPaused,
+  playNotificationChime,
   registerManualRecording,
   sendAutoStartRequest,
   sendAutoStopRequest,
@@ -62,7 +66,22 @@ import {
 import { createWindow, registerWindowSizingIpc } from './window'
 import { AudioEndpointService, resolveAudioEndpointHelperPath } from './audio-endpoint-service'
 import { disposeInviteePrompt, inviteePromptToastAnswered, registerInviteePromptIpc } from './invitee-prompt'
-import type { GraphEventDecision } from './graph/types'
+import {
+  acceptTeamsCall,
+  answerTeamsCallUncertainty,
+  configureTeamsCallRuntime,
+  disposeTeamsCallRuntime,
+  invalidateTeamsCallTracking,
+  observeTeamsCall,
+  setTeamsCallCalendar,
+  teamsCallObserverUnavailable,
+  teamsCallRecordingPaused,
+  teamsCallRecordingResumed,
+  teamsCallRecordingStopped
+} from './teams-call'
+import { isPromptedTeamsCallRecording, readTeamsCallPromptEnabled, type PromptedTeamsCall, type TeamsCallObservation } from './teams-call-core'
+import type { GraphEventDecision, GraphMeetingMetadata } from './graph/types'
+import type { AudioEndpointSnapshot } from '../shared/audio-endpoints'
 
 loadPublicEnv()
 initLogger()
@@ -77,13 +96,19 @@ const audioEndpointService =
           resourcesPath: process.resourcesPath,
           appPath: app.getAppPath()
         }),
-        onSnapshot: (snapshot) => {
+        onSnapshot: (snapshot: AudioEndpointSnapshot) => {
           for (const window of BrowserWindow.getAllWindows()) {
             window.webContents.send('audio-endpoints:changed', snapshot)
           }
         },
+        // FD-97 is opt-in and the native worker owns the helper flag/protocol
+        // details. This callback is evaluated from the same env layers as the
+        // backend; no titles are logged or persisted here.
+        observeTeams: () => readTeamsCallPromptEnabled(getBackendEnvLayers(), process.env),
+        onTeamsCall: (observation: TeamsCallObservation) => observeTeamsCall(observation),
+        onTeamsUnavailable: () => teamsCallObserverUnavailable(),
         log: logger()
-      })
+      } as unknown as ConstructorParameters<typeof AudioEndpointService>[0])
     : null
 
 if (!gotSingleInstanceLock) {
@@ -99,13 +124,22 @@ registerWindowSizingIpc()
 registerInviteePromptIpc()
 ipcMain.handle('audio-endpoints:get', () => audioEndpointService?.getSnapshot() ?? null)
 
+let refreshTeamsCallCalendar: (() => void) | null = null
+
 function registerRecordingIpcHandlers(): void {
   ipcMain.on('renderer:debug-log', (_event, message: string, details?: unknown) => {
     logger().info('[renderer]', { message, details })
   })
 
   ipcMain.on('recording:ready', () => {
+    logger().info('[teams-call] renderer ready')
     handleRendererRecordingReady()
+    refreshTeamsCallCalendar?.()
+  })
+  ipcMain.on('recording:not-ready', () => {
+    logger().info('[teams-call] renderer not-ready; prompted-call tracking invalidated')
+    handleRendererRecordingNotReady()
+    invalidateTeamsCallTracking()
   })
   ipcMain.on('recording:started', () => {
     handleRendererRecordingStarted()
@@ -117,16 +151,23 @@ function registerRecordingIpcHandlers(): void {
   })
   ipcMain.on('recording:stopped', (_event, opts?: { discarded?: boolean }) => {
     handleRendererRecordingStopped(opts)
+    teamsCallRecordingStopped()
     updateTrayMenu()
+  })
+  ipcMain.on('recording:stop-failed', (_event, message: string) => {
+    handleRendererStopFailed(message)
   })
   ipcMain.on('recording:error', (_event, message: string) => {
     handleRendererRecordingError(message)
+    teamsCallRecordingStopped()
     updateTrayMenu()
   })
   ipcMain.handle('recording:extend', () => extendAutoStop())
   ipcMain.on('recording:paused-changed', (_event, paused: boolean) => {
     const isPaused = Boolean(paused)
     setRecordingPaused(isPaused)
+    if (isPaused) teamsCallRecordingPaused()
+    else teamsCallRecordingResumed()
     // meeting-call-events (D6): a manual resume must reach the call-signal
     // machine after isRecordingPaused() already reflects it — the machine's
     // contract requires that ordering.
@@ -136,6 +177,79 @@ function registerRecordingIpcHandlers(): void {
 }
 
 registerRecordingIpcHandlers()
+
+const PROMPTED_CALL_MAX_DURATION_MS = 3 * 60 * 60_000
+
+function promptedCallMetadata(call: PromptedTeamsCall): GraphMeetingMetadata {
+  return {
+    title: call.title,
+    attendees: [],
+    meetingId: call.nonce,
+    promptedTeamsCall: {
+      nonce: call.nonce,
+      observedStartUtc: call.observedStartUtc
+    }
+  }
+}
+
+function startPromptedTeamsCall(call: PromptedTeamsCall): boolean {
+  const startMs = Date.parse(call.observedStartUtc)
+  const endMs = (Number.isFinite(startMs) ? startMs : Date.now()) + PROMPTED_CALL_MAX_DURATION_MS
+  return sendAutoStartRequest({
+    eventId: `teams-prompt-${call.nonce}`,
+    idempotencyKey: `teams-prompt-${call.nonce}`,
+    startTimeUtc: call.observedStartUtc,
+    endTimeUtc: new Date(endMs).toISOString(),
+    source: 'auto',
+    trigger: 'prompt',
+    metadata: promptedCallMetadata(call)
+  })
+}
+
+function promptedTeamsCallEnded(call: PromptedTeamsCall, endedAtUtc: string): void {
+  // Observation belongs to the consented call, not whichever capture happens
+  // to be active now. Tray Stop may already have finished that recording.
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) {
+      window.webContents.send('recording:prompted-teams-call-ended', {
+        eventId: 'teams-prompt-' + call.nonce,
+        idempotencyKey: 'teams-prompt-' + call.nonce,
+        nonce: call.nonce,
+        endedAtUtc
+      })
+    }
+  }
+}
+
+function stopPromptedTeamsCall(call: PromptedTeamsCall): void {
+  if (!isPromptedTeamsCallRecording(call, getRecordingStateMachine().getActiveRecording())) return
+  sendAutoStopRequest({ reason: 'call_ended' })
+}
+
+function controlPromptedTeamsCall(call: PromptedTeamsCall, action: 'pause' | 'resume'): void {
+  if (!isPromptedTeamsCallRecording(call, getRecordingStateMachine().getActiveRecording())) return
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) {
+      window.webContents.send('recording:prompted-teams-control', { nonce: call.nonce, action })
+    }
+  }
+  logger().info('[teams-call] prompted recording control requested', { action })
+}
+
+configureTeamsCallRuntime({
+  enabled: false,
+  isRecordingActive: () => getRecordingStateMachine().getState() !== 'idle' || hasPendingAutoStart(),
+  isCurrentRecording: (call) => isPromptedTeamsCallRecording(call, getRecordingStateMachine().getActiveRecording()),
+  isRecordingPaused,
+  isReady: isRendererRecordingReady,
+  start: startPromptedTeamsCall,
+  observedEnd: promptedTeamsCallEnded,
+  pause: (call) => controlPromptedTeamsCall(call, 'pause'),
+  resume: (call) => controlPromptedTeamsCall(call, 'resume'),
+  stop: stopPromptedTeamsCall,
+  chime: playNotificationChime,
+  log: logger()
+})
 
 // meeting-call-events (Task 13): register the real control surfaces once at
 // startup, before any recording can arm the poller. Does not need a window —
@@ -230,6 +344,20 @@ app.on('second-instance', (_event, argv) => {
     joinWatchPromptAccepted()
     return
   }
+  if (toastAction === 'teams-call-accept') {
+    // FD-97: the nonce is part of the URI and is revalidated against the
+    // current active connection before any capture request is sent.
+    acceptTeamsCall(parsedToast?.callNonce)
+    return
+  }
+  if (toastAction === 'teams-call-continue' || toastAction === 'teams-call-stop') {
+    const accepted = answerTeamsCallUncertainty(
+      parsedToast?.callNonce, parsedToast?.decisionNonce,
+      toastAction === 'teams-call-continue' ? 'continue' : 'stop'
+    )
+    logger().info('[teams-call] uncertainty answer', { accepted, action: toastAction })
+    return
+  }
   if (toastAction === 'invitees-approve' || toastAction === 'invitees-decline') {
     // IN-488: answer the invitee prompt in place, without stealing focus (same
     // rationale as extend/upload-now above). The meeting id rides on the URI
@@ -264,8 +392,7 @@ app.whenReady().then(async () => {
   // doomed instance briefly built a full window, tray, and backend supervisor
   // (observed as a window flash when a toast protocol launch raced the lock).
   if (!gotSingleInstanceLock) return
-  electronApp.setAppUserModelId('com.factor1.notetaker')
-  audioEndpointService?.start()
+  electronApp.setAppUserModelId(process.env.MN_DEV_INSTANCE === '1' ? 'com.factor1.notetaker.dev' : 'com.factor1.notetaker')
   // IN-483: toast action buttons activate via the notetaker:// protocol.
   // The installer registers the scheme (electron-builder `protocols`); this
   // call self-heals the registration on packaged launches. Deliberately NOT
@@ -380,6 +507,21 @@ app.whenReady().then(async () => {
   createWindow({ showOnReady: !isBackgroundLaunch() })
   createTray(showMainWindow)
   await backendStartup
+  configureTeamsCallRuntime({
+    enabled: readTeamsCallPromptEnabled(getBackendEnvLayers(), process.env),
+    isRecordingActive: () => getRecordingStateMachine().getState() !== 'idle' || hasPendingAutoStart(),
+    isCurrentRecording: (call) => isPromptedTeamsCallRecording(call, getRecordingStateMachine().getActiveRecording()),
+    isRecordingPaused,
+    isReady: isRendererRecordingReady,
+    start: startPromptedTeamsCall,
+    observedEnd: promptedTeamsCallEnded,
+    pause: (call) => controlPromptedTeamsCall(call, 'pause'),
+    resume: (call) => controlPromptedTeamsCall(call, 'resume'),
+    stop: stopPromptedTeamsCall,
+    chime: playNotificationChime,
+    log: logger()
+  })
+  audioEndpointService?.start()
   // The two-layer backend.env is parsed by now (spawn and adoption paths both
   // populate it before backendStartup resolves) — PROGRAMDATA > bundled >
   // code default `join` (spec J6).
@@ -423,6 +565,22 @@ app.whenReady().then(async () => {
     // awaited by the Graph runtime so auto-record cannot inspect
     // hasActiveWatch while the discovery-time POST is still in flight.
     onSyncCompleted: async (decisions, meta) => {
+      // FD-97 consumes the complete, unfiltered calendar decision feed,
+      // including attendee/non-organizer decisions. The core fails closed
+      // when this successful snapshot becomes stale.
+      setTeamsCallCalendar(
+        decisions.map((decision) => ({
+          eventId: decision.eventId,
+          isTeamsMeeting: decision.logContext.isOnlineMeeting || Boolean(decision.metadata.joinWebUrl),
+          title: decision.metadata.title ?? '',
+          startUtc: decision.logContext.startUtc,
+          endUtc: decision.logContext.endUtc,
+          status: decision.status,
+          reason: decision.reason
+        })),
+        Date.now(),
+        meta.fullSnapshot
+      )
       try {
         await registrar.handleSyncDecisions(decisions, getCurrentUserEmail())
       } finally {
@@ -437,9 +595,19 @@ app.whenReady().then(async () => {
     }
   })
 
+  refreshTeamsCallCalendar = () => {
+    if (!readTeamsCallPromptEnabled(getBackendEnvLayers(), process.env)) return
+    void refreshGraphCalendarAndResumePolling(graphRuntime).catch((error) => {
+      logger().warn('[teams-call] calendar refresh failed', {
+        message: error instanceof Error ? error.message : String(error)
+      })
+    })
+  }
+
   onMsalSignedIn(() => {
+    invalidateTeamsCallTracking()
     logger().info('[graph] sign-in completed; triggering immediate sync')
-    void graphRuntime.syncNow().then((result) => {
+    void graphRuntime.syncNow({ forceFullSnapshot: true }).then((result) => {
       logger().info('[graph] post-sign-in sync finished', {
         status: result.status,
         decisions: result.decisions.length
@@ -484,6 +652,7 @@ app.on('before-quit', () => {
   cleanupRecordingIpc()
   // Join watcher: clear its timers and any visible prompt (no-op in calendar mode).
   disposeJoinWatch()
+  disposeTeamsCallRuntime()
   // Invitee prompts: clear timers and toasts. Quitting decides nothing; an
   // unanswered meeting resurfaces as a card on the next launch.
   disposeInviteePrompt()

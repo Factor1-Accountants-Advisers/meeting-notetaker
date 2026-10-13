@@ -186,6 +186,10 @@ let reminderNotifiedForEndMs: number | null = null
 let autoStopEndMs: number | null = null
 let autoStartAckTimer: ReturnType<typeof setTimeout> | null = null
 let autoStartAckTimeoutMs = 15_000
+const DEFAULT_AUTO_STOP_RETRY_MS = 3_000
+let autoStopRetryMs = DEFAULT_AUTO_STOP_RETRY_MS
+let autoStopRetryTimer: ReturnType<typeof setTimeout> | null = null
+let pendingAutoStop: { key: string; payload: { eventId: string; idempotencyKey: string; deliver: boolean } } | null = null
 let pendingAutoStart: ActiveRecording | null = null
 let rendererRecordingReady = false
 // Renderer-owned pause state mirrored for the active tray label (IN-120).
@@ -247,6 +251,50 @@ export function setAutoStartAckTimeoutMsForTest(timeoutMs: number): void {
   autoStartAckTimeoutMs = timeoutMs
 }
 
+export function setAutoStopRetryMsForTest(timeoutMs: number): void {
+  autoStopRetryMs = timeoutMs
+}
+
+function clearAutoStopRetry(): void {
+  if (autoStopRetryTimer) clearTimeout(autoStopRetryTimer)
+  autoStopRetryTimer = null
+  pendingAutoStop = null
+}
+
+function dispatchPendingAutoStop(): void {
+  const pending = pendingAutoStop
+  if (!pending || !mainWindow || mainWindow.isDestroyed() || !rendererRecordingReady) return
+  if (getRecordingStateMachine().getActiveRecording()?.idempotencyKey !== pending.key) return
+  try {
+    mainWindow.webContents.send('recording:auto-stop-request', pending.payload)
+  } catch (error) {
+    // Keep the original stop and delivery decision armed until a real ACK.
+    logger().warn('[recording] automatic stop could not reach renderer; retry remains armed', {
+      message: error instanceof Error ? error.message : String(error)
+    })
+  }
+}
+
+function retryAutoStop(): void {
+  const pending = pendingAutoStop
+  if (!pending) return
+  if (getRecordingStateMachine().getActiveRecording()?.idempotencyKey !== pending.key) {
+    clearAutoStopRetry()
+    return
+  }
+  logger().warn('[recording] automatic stop unacknowledged; retrying same recording', {
+    idempotencyKey: pending.key
+  })
+  dispatchPendingAutoStop()
+  autoStopRetryTimer = setTimeout(retryAutoStop, autoStopRetryMs)
+}
+
+function awaitAutoStop(key: string, payload: { eventId: string; idempotencyKey: string; deliver: boolean }): void {
+  clearAutoStopRetry()
+  pendingAutoStop = { key, payload }
+  autoStopRetryTimer = setTimeout(retryAutoStop, autoStopRetryMs)
+}
+
 /**
  * Hand an auto-start to the renderer. Returns `true` when the request was
  * accepted (queued for a not-yet-ready renderer, or sent), `false` on any
@@ -298,18 +346,12 @@ export function sendAutoStartRequest(recording: ActiveRecording): boolean {
  * meeting instead of blocking the key as completed.
  */
 export function sendAutoStopRequest(opts: { reason: AutoStopReason } = { reason: 'scheduled_end' }): void {
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    logger().warn('[recording] cannot send auto-stop: no main window')
-    return
-  }
-
   const sm = getRecordingStateMachine()
   const active = sm.getActiveRecording()
   if (!active) {
     logger().info('[recording] auto-stop skipped: no active recording')
     return
   }
-
   resetAutoStopState()
 
   const decision = decideFalseStart({
@@ -329,18 +371,33 @@ export function sendAutoStopRequest(opts: { reason: AutoStopReason } = { reason:
     deliver
   })
 
-  mainWindow.webContents.send('recording:auto-stop-request', {
-    eventId: active.eventId,
-    idempotencyKey: active.idempotencyKey,
-    deliver
-  })
+  const payload = { eventId: active.eventId, idempotencyKey: active.idempotencyKey, deliver }
+  awaitAutoStop(active.idempotencyKey, payload)
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    logger().warn('[recording] auto-stop pending: no main window')
+    return
+  }
+  dispatchPendingAutoStop()
 }
 
 export function handleRendererRecordingReady(): void {
   rendererRecordingReady = true
+  if (pendingAutoStop &&
+      getRecordingStateMachine().getActiveRecording()?.idempotencyKey === pendingAutoStop.key &&
+      mainWindow && !mainWindow.isDestroyed()) {
+    dispatchPendingAutoStop()
+  }
   if (!pendingAutoStart) return
   sendPendingAutoStart('sending pending auto-start to ready renderer')
   scheduleAutoStartAckTimeout()
+}
+
+export function handleRendererRecordingNotReady(): void {
+  rendererRecordingReady = false
+}
+
+export function isRendererRecordingReady(): boolean {
+  return rendererRecordingReady
 }
 
 export function handleRendererRecordingStarted(): void {
@@ -417,6 +474,7 @@ export function registerManualRecording(recording: ActiveRecording & { title?: s
  */
 export function handleRendererRecordingStopped(opts?: { discarded?: boolean }): void {
   closePausedToastAndDisarm()
+  clearAutoStopRetry()
 
   recordingPaused = false
   resetAutoStopState()
@@ -459,8 +517,15 @@ export function handleRendererRecordingStopped(opts?: { discarded?: boolean }): 
   }
 }
 
+export function handleRendererStopFailed(message: string): void {
+  // Capture may still be active. Do not transition to idle or mark the key
+  // complete; any outstanding automatic stop keeps retrying until ACK.
+  logger().warn('[recording] renderer failed to stop capture', { message })
+}
+
 export function handleRendererRecordingError(message: string): void {
   closePausedToastAndDisarm()
+  clearAutoStopRetry()
 
   recordingPaused = false
   resetAutoStopState()
@@ -805,6 +870,7 @@ function resetAutoStopState(): void {
 
 export function cleanupRecordingIpc(): void {
   closePausedToastAndDisarm()
+  clearAutoStopRetry()
   resetAutoStopState()
   unblockSleep()
   clearAutoStartAckTimer()
@@ -814,4 +880,5 @@ export function cleanupRecordingIpc(): void {
   mainWindow = null
   recordingSM = null
   autoStartAckTimeoutMs = 15_000
+  autoStopRetryMs = DEFAULT_AUTO_STOP_RETRY_MS
 }

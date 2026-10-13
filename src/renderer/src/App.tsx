@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { acknowledgeCallEnd, queueCallEnd, replayCallEndOutbox } from './lib/promptedCallEndOutbox'
+import { findPromptedCallMeetingId, promptedCallRecoveryAction, resumeApprovedPromptedSharing, withPromptedCallEnded } from './lib/promptedCallRecovery'
+import { shouldHandleAutoStop } from './lib/promptedCallStopGuard'
 import { AppShell } from './components/shell/AppShell'
 import { EnrollmentModal } from './components/EnrollmentModal'
 import { HomeScreen, type InviteeResurfacedCard } from './screens/HomeScreen'
@@ -18,9 +21,11 @@ import {
   fetchMeetings,
   fetchMeetingReview,
   postInviteeDecision,
+  recordPromptedCallEnded,
   retryBlobDelivery,
   retryPipeline,
   saveTranscriptToSharePoint,
+  resolveCallParticipants,
   uploadAudio,
   type EnrolmentStatus,
   type GraphMeetingMetadata,
@@ -335,6 +340,7 @@ function App(): JSX.Element {
   // IN-488: "Send to N invitees" passes already running. A second click while
   // the first is in flight would race the backend's own state machine.
   const inviteeSendsRef = useRef(new Set<string>())
+  const callLookupInFlightRef = useRef(new Set<string>())
   // IN-488: questions and send-later actions that survived a restart.
   const [inviteeCards, setInviteeCards] = useState<InviteeResurfacedCard[]>([])
   const { theme, setTheme } = useTheme()
@@ -727,15 +733,18 @@ function App(): JSX.Element {
         })
         setCaptureStatus(status)
         void logDryRun('recording-start')
-        setRecording({
+        const session: RecordingSession = {
           meetingId: created?.id ?? null,
+          recordingKey: data.idempotencyKey,
           title,
           source: 'online',
           startedAt: Date.now(),
           pausedAccum: 0,
           pausedAt: null,
           scheduledEndUtc: data.endTimeUtc || null
-        })
+        }
+        recordingRef.current = session
+        setRecording(session)
         setView('recording')
         setAutoRecordingState('recording')
         window.api.notifyRecordingStarted()
@@ -888,7 +897,7 @@ function App(): JSX.Element {
         // (manual or auto) stop to pick up.
         stopOptsRef.current = { deliver: true }
         setAutoRecordingState(recordingRef.current ? 'recording' : 'idle')
-        window.api.notifyRecordingError(err instanceof Error ? err.message : String(err))
+        window.api.notifyRecordingStopFailed(err instanceof Error ? err.message : String(err))
       }
     }
     const stopFlight = createSingleFlight(finishActiveRecording, () => {
@@ -901,7 +910,10 @@ function App(): JSX.Element {
       const session = recordingRef.current
       if (stopFlight.isRunning() || !session || session.pausedAt !== null) return
       const pausedAt = Date.now()
-      capture.pause()
+      if (!capture.pause()) {
+        window.api.debugLog('recording pause could not be confirmed; auto-stop watchdog remains armed')
+        return
+      }
       const next = { ...session, pausedAt }
       recordingRef.current = next
       setRecording(next)
@@ -928,11 +940,25 @@ function App(): JSX.Element {
       stop: () => void stopFlight.invoke()
     }
     controlHandlersRef.current = controls
+    const unsubPromptedControl = window.api.onPromptedTeamsControl((data) => {
+      const marker = autoGraphMetadataRef.current?.promptedTeamsCall
+      if (!recordingRef.current || !marker || marker.nonce !== data.nonce) return
+      if (data.action === 'pause') pauseActiveRecording()
+      else resumeActiveRecording()
+    })
 
     // Auto-stop carries `deliver` (spec J4). Set the option only when no stop
     // is in flight: if one is already running it delivers, and main will see
     // no `discarded` ack and keep the key completed (the safe direction).
     const unsubStop = window.api.onAutoStopRequest((data) => {
+      if (!shouldHandleAutoStop(
+        data.idempotencyKey,
+        recordingRef.current?.recordingKey,
+        autoGraphMetadataRef.current?.promptedTeamsCall?.nonce
+      )) {
+        window.api.debugLog('stale automatic stop ignored')
+        return
+      }
       if (stopFlight.isRunning()) {
         window.api.debugLog('auto-stop received while a stop is in flight; the running stop delivers', {
           deliver: data.deliver
@@ -945,6 +971,36 @@ function App(): JSX.Element {
     const unsubTrayControl = window.api.onTrayRecordingControl((action) => {
       controls[action]()
     })
+    let callEndListenerDisposed = false
+    const unsubPromptedCallEnded =
+      typeof window.api.onPromptedTeamsCallEnded === 'function'
+        ? window.api.onPromptedTeamsCallEnded((data) => {
+            if (callEndListenerDisposed || !user?.email) return
+            // Persist first: a failed POST after tray Stop otherwise loses the
+            // call interval forever, including across app restarts.
+            queueCallEnd(localStorage, user.email, data)
+            const persistEnd = async (meetingId: string): Promise<void> => {
+              const stored = await recordPromptedCallEnded(meetingId, data.endedAtUtc)
+              if (!callEndListenerDisposed) acknowledgeCallEnd(localStorage, user.email, data, stored)
+            }
+            const session = recordingRef.current
+            const metadata = autoGraphMetadataRef.current
+            if (session?.meetingId && metadata?.promptedTeamsCall?.nonce === data.nonce) {
+              autoGraphMetadataRef.current = withPromptedCallEnded(metadata, data.nonce, data.endedAtUtc)
+              void persistEnd(session.meetingId).catch(() => undefined)
+              return
+            }
+            // Capture may already be stopped, or a different recording may
+            // be active. Find only the durable original nonce; owner ACL is
+            // rechecked by the observation route. Never stop this new capture.
+            void (async () => {
+              const meetings = await fetchMeetingDtos()
+              if (callEndListenerDisposed || !meetings) return
+              const originalId = findPromptedCallMeetingId(meetings, data.nonce)
+              if (originalId) await persistEnd(originalId)
+            })().catch(() => undefined)
+          })
+        : () => undefined
 
     if (typeof window.api.notifyRecordingReady === 'function') {
       window.api.notifyRecordingReady()
@@ -953,7 +1009,11 @@ function App(): JSX.Element {
     return () => {
       unsubStart()
       unsubStop()
+      unsubPromptedControl()
       unsubTrayControl()
+      callEndListenerDisposed = true
+      unsubPromptedCallEnded()
+      window.api.notifyRecordingNotReady?.()
       if (controlHandlersRef.current === controls) {
         controlHandlersRef.current = { pause: () => {}, resume: () => {}, stop: () => {} }
       }
@@ -1019,6 +1079,91 @@ function App(): JSX.Element {
     }
   }, [user?.email])
 
+  // FD-97 delayed participant recovery. Persisted Meeting lookup fields are
+  // authoritative; this timer is only a wake-up mechanism, so restart cannot
+  // lose the retry window and duplicate calls are guarded locally and server-side.
+  useEffect(() => {
+    if (!signedInEmail) return
+    let cancelled = false
+    let running = false
+    const recover = async (): Promise<void> => {
+      await replayCallEndOutbox({
+        storage: localStorage,
+        account: signedInEmail,
+        isCurrent: () => !cancelled,
+        fetchMeetings: fetchMeetingDtos,
+        recordEnded: recordPromptedCallEnded
+      })
+      if (cancelled) return
+      const meetings = await fetchMeetingDtos()
+      if (cancelled || !meetings) return
+      const now = Date.now()
+      for (const meeting of meetings) {
+        const action = promptedCallRecoveryAction(meeting, now)
+        if (!action || callLookupInFlightRef.current.has(meeting.id)) continue
+        callLookupInFlightRef.current.add(meeting.id)
+        try {
+          const resolved = action === 'share' ? meeting : await resolveCallParticipants(meeting.id)
+          if (cancelled || !resolved || resolved.call_lookup_status !== 'resolved') continue
+          if (
+            resolved.delivery_status !== 'emailed' ||
+            resolved.invitee_delivery_status === 'sent'
+          ) continue
+          const invitees = await fetchInvitees(resolved.id, signedInEmail)
+          if (cancelled || !invitees || !invitees.prompt_enabled || invitees.candidates.length === 0) continue
+          if (invitees.decision === 'pending') {
+            if (!inviteeHoldsRef.current.has(resolved.id)) {
+              void deliverWithInviteeHold(
+                resolved.id,
+                resolved.title,
+                signedInEmail,
+                `Notes are ready. Email the transcript to ${invitees.candidates.length} invitees?`
+              )
+            }
+          } else if (await resumeApprovedPromptedSharing(
+            invitees,
+            resolved.id,
+            inviteeSendsRef.current,
+            () => runDeliveryPass(resolved.id, resolved.title, signedInEmail, 'retry')
+          )) {
+            // Existing backend state routes this to invitees only, never recorder resend.
+          } else if (canSendLater(invitees) && !loadDismissedInviteeCards().includes(resolved.id)) {
+            setInviteeCards((cards) =>
+              cards.some((card) => card.meetingId === resolved.id)
+                ? cards
+                : [
+                    ...cards,
+                    {
+                      meetingId: resolved.id,
+                      title: resolved.title,
+                      kind: 'send_later',
+                      candidates: invitees.candidates,
+                      emailedAt: resolved.delivery_emailed_at ?? null,
+                      inviteeDeliveryStatus: resolved.invitee_delivery_status ?? 'not_started'
+                    }
+                  ]
+            )
+          }
+        } finally {
+          callLookupInFlightRef.current.delete(meeting.id)
+        }
+      }
+    }
+    const tick = async (): Promise<void> => {
+      if (cancelled || running) return
+      running = true
+      try { await recover() }
+      catch { /* Best-effort recovery; durable state is retried next tick. */ }
+      finally { running = false }
+    }
+    void tick()
+    const timer = window.setInterval(() => void tick(), 60_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [signedInEmail])
+
   if (!authChecked) {
     return <div className="flex h-full items-center justify-center bg-page"><span className="h-5 w-5 animate-spin rounded-full border-2 border-edge-tertiary border-t-brand-blue" /></div>
   }
@@ -1070,15 +1215,18 @@ function App(): JSX.Element {
       title
     })
     autoGraphMetadataRef.current = null
-    setRecording({
+    const session: RecordingSession = {
       meetingId,
+      recordingKey: manualKey,
       title,
       source,
       startedAt,
       pausedAccum: 0,
       pausedAt: null,
       scheduledEndUtc: plannedEndUtc
-    })
+    }
+    recordingRef.current = session
+    setRecording(session)
     setAutoRecordingState('recording')
     setView('recording')
   }

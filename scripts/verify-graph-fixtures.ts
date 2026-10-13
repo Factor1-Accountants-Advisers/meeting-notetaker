@@ -7,7 +7,7 @@ import { getRetryAfterMs } from '../src/main/graph/client.ts'
 import { decideGraphEvent } from '../src/main/graph/filter.ts'
 import { normaliseGraphEvent } from '../src/main/graph/normalise.ts'
 import { detectGraphMeetings } from '../src/main/graph/poller.ts'
-import { syncGraphDetectionOnce, startGraphDetectionRuntime } from '../src/main/graph/runtime.ts'
+import { syncGraphDetectionOnce, startGraphDetectionRuntime, refreshGraphCalendarAndResumePolling } from '../src/main/graph/runtime.ts'
 import {
   EMPTY_GRAPH_SCHEDULER_STATE,
   readGraphSchedulerState,
@@ -23,6 +23,7 @@ import {
   getEndReminderPlan,
   getRecordingStateMachine,
   handleRendererRecordingError,
+  handleRendererStopFailed,
   handleRendererRecordingReady,
   handleRendererRecordingStarted,
   handleRendererRecordingStopped,
@@ -32,6 +33,7 @@ import {
   sendAutoStopRequest,
   sendTrayRecordingControl,
   setAutoStartAckTimeoutMsForTest,
+  setAutoStopRetryMsForTest,
   setMainWindow
 } from '../src/main/recording-ipc.ts'
 import { parseGraphDateTime } from '../src/main/graph/time.ts'
@@ -436,6 +438,65 @@ async function main(): Promise<void> {
   handleRendererRecordingStopped()
   assert.equal(hasExtendableRecording(), false, 'IN-479: stop disarms the manual auto-stop')
 
+  // Every automatic stop must survive failure without losing its identity or
+  // delivery decision, including scheduled/calendar stops.
+  for (const trigger of ['prompt', 'calendar', 'join'] as const) {
+    cleanupRecordingIpc()
+    const promptWindow = fakeWindow()
+    setMainWindow(promptWindow.window)
+    setAutoStopRetryMsForTest(25)
+    handleRendererRecordingReady()
+    const request = {
+      eventId: trigger + '-review-event', idempotencyKey: trigger === 'prompt' ? 'teams-prompt-review' : trigger + '-review-key',
+      startTimeUtc: new Date().toISOString(),
+      endTimeUtc: new Date(Date.now() + 3_600_000).toISOString(),
+      source: 'auto' as const, trigger,
+      metadata: trigger === 'prompt' ? { promptedTeamsCall: { nonce: 'review', observedStartUtc: new Date().toISOString() } } : undefined
+    }
+    assert.equal(sendAutoStartRequest(request), true)
+    handleRendererRecordingStarted()
+    sendAutoStopRequest({ reason: trigger === 'join' ? 'grace_expired' : 'call_ended' })
+    const stopCount = () => promptWindow.sent.filter((entry) => entry.channel === 'recording:auto-stop-request').length
+    assert.equal(stopCount(), 1)
+    assert.equal((promptWindow.sent.find(entry => entry.channel === 'recording:auto-stop-request')!.data as { deliver: boolean }).deliver, trigger !== 'join')
+    handleRendererStopFailed('synthetic stop failure')
+    assert.equal(getRecordingStateMachine().getActiveRecording()?.idempotencyKey, request.idempotencyKey)
+    await waitUntil(trigger + ' stop retry after failure', () => stopCount() > 1)
+    const repeated = promptWindow.sent.filter((entry) => entry.channel === 'recording:auto-stop-request')
+    assert.deepEqual(repeated[1].data, repeated[0].data, 'retry preserves the exact original stop payload')
+    handleRendererRecordingStopped()
+    const afterAck = stopCount()
+    await wait(55)
+    assert.equal(stopCount(), afterAck, 'stop ACK cancels the retry')
+    cleanupRecordingIpc()
+  }
+
+  // A synchronous send failure must remain retryable, not escape a timer/IPC callback.
+  {
+    cleanupRecordingIpc()
+    const fixture = fakeWindow()
+    setMainWindow(fixture.window)
+    setAutoStopRetryMsForTest(25)
+    handleRendererRecordingReady()
+    const request = {
+      eventId: 'scheduled-send-failure', idempotencyKey: 'scheduled-send-failure-key',
+      startTimeUtc: new Date().toISOString(),
+      endTimeUtc: new Date(Date.now() + 3_600_000).toISOString(),
+      source: 'auto' as const, trigger: 'calendar' as const
+    }
+    sendAutoStartRequest(request)
+    handleRendererRecordingStarted()
+    const send = fixture.window.webContents.send
+    fixture.window.webContents.send = () => { throw new Error('fixture renderer temporarily unavailable') }
+    try {
+      assert.doesNotThrow(() => sendAutoStopRequest(), 'failed IPC send must not lose the pending stop')
+      assert.equal(getRecordingStateMachine().getState(), 'recording')
+      fixture.window.webContents.send = send
+      await waitUntil('automatic stop retries after IPC send failure', () => fixture.sent.some(entry => entry.channel === 'recording:auto-stop-request'))
+      handleRendererRecordingStopped()
+    } finally { fixture.window.webContents.send = send; cleanupRecordingIpc() }
+  }
+
   // Join-triggered recording, spec J4 (Task 7): the auto-stop carries a
   // reason; a `grace_expired` stop shortly after a join-triggered start is a
   // false start -> `deliver: false`, the key is forgotten (re-armed) and the
@@ -780,6 +841,11 @@ async function main(): Promise<void> {
       'onSyncCompleted meta.fullSnapshot must be true for the forced full snapshot and false for the delta sync'
     )
 
+    await bootstrapRuntime.syncNow({ forceFullSnapshot: true })
+    assert.equal(fullFetches, 2, 'readiness/account invalidation must be able to rebuild a complete calendar')
+    assert.equal(deltaFetches, 1)
+    assert.deepEqual(snapshotFlags, [true, false, true])
+
     // Discovery reconciliation owns watcher registration and must finish
     // before an eligible meeting can start recording. Otherwise the recorder
     // checks hasActiveWatch while registration is still in flight and falls
@@ -811,6 +877,26 @@ async function main(): Promise<void> {
       ['watch-start', 'watch-ready', 'auto-record'],
       'auto-record eligibility must wait for discovery-watch reconciliation'
     )
+
+    // Startup can finish `skipped_stale` if account identity appears while
+    // Graph is fetching. Renderer readiness then supplies a valid full refresh;
+    // that success must also start recurring polls before prompt data ages out.
+    let refreshStatus: 'skipped_stale' | 'success' = 'skipped_stale'
+    let resumedPolls = 0
+    const readinessRuntime = {
+      syncNow: async (opts?: { forceFullSnapshot?: boolean }) => {
+        assert.equal(opts?.forceFullSnapshot, true)
+        return { status: refreshStatus, state: EMPTY_GRAPH_SCHEDULER_STATE, decisions: [] }
+      },
+      startPolling: () => { resumedPolls++ },
+      stopPolling: () => undefined,
+      scheduleResumeSync: () => undefined
+    }
+    await refreshGraphCalendarAndResumePolling(readinessRuntime)
+    assert.equal(resumedPolls, 0, 'stale refresh must not start polling')
+    refreshStatus = 'success'
+    await refreshGraphCalendarAndResumePolling(readinessRuntime)
+    assert.equal(resumedPolls, 1, 'successful readiness refresh resumes polling')
 
     // Polling lifecycle: start/stop/resume API surface
     const pollRuntime = startGraphDetectionRuntime({

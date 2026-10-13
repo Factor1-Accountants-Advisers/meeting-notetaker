@@ -89,6 +89,11 @@ export interface GraphMeetingMetadata {
   scheduledStartUtc?: string
   description?: string
   icalUid?: string
+  promptedTeamsCall?: {
+    nonce: string
+    observedStartUtc: string
+    observedEndUtc?: string
+  }
 }
 
 export type GraphEventInvalidReason = 'missing_id' | 'invalid_start' | 'invalid_end' | 'invalid_time_range'

@@ -4,6 +4,16 @@
 architecture, commands, layout, current state). This file only adds notes
 specific to working in Claude Code on this machine.
 
+## Full-function feature-branch trials
+
+For a week-long teammate trial without a release, read
+`docs/agent-handoffs/full-function-dev-trial.md` first. Use the fixed full-dev
+launcher and setup script there. Do not substitute the capture-only relay,
+ordinary hot-reload dev loop, `scripts/restart-dev.ps1`, port 8787, or the old
+state-reset recipe below. Keep installed data/startup untouched and never print
+provider configuration. Run `out/Start Dev.cmd` from Explorer/native PowerShell
+outside the MSIX shell after setup.
+
 ## Claude-specific notes
 
 ### MSIX path virtualization (important)

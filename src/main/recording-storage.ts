@@ -11,6 +11,9 @@ function isDev(): boolean {
 }
 
 function recordingDir(): string {
+  // Side-by-side call testing must isolate finished captures and crash spills,
+  // not just backend state, even though Electron is deliberately unpackaged.
+  if (process.env.MN_FD97_ISOLATED_TEST === '1' || process.env.MN_DEV_INSTANCE === '1') return join(app.getPath('userData'), 'recordings')
   // Dev: save inside the repo — when the app is launched from a sandboxed
   // shell (e.g. Claude's MSIX package), AppData writes get virtualized into
   // the package's LocalCache and become invisible in Explorer. Repo paths

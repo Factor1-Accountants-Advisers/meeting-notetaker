@@ -30,6 +30,11 @@ export interface GraphMeetingMetadata {
   scheduledStartUtc?: string
   description?: string
   icalUid?: string
+  promptedTeamsCall?: {
+    nonce: string
+    observedStartUtc: string
+    observedEndUtc?: string
+  }
 }
 
 export interface AutoStopRequest {
@@ -38,6 +43,13 @@ export interface AutoStopRequest {
   /** false = discard (join-trigger false start, spec J4): stop capture,
    *  drop the spill, delete the empty backend meeting, no upload. */
   deliver: boolean
+}
+
+export interface PromptedTeamsCallEnded {
+  eventId: string
+  idempotencyKey: string
+  nonce: string
+  endedAtUtc: string
 }
 
 // IN-488 invitee prompt. Mirrors src/main/invitee-prompt-core.ts; declared
@@ -212,6 +224,9 @@ const api = {
   /** Notify main process that the auto-recording listeners are mounted and eligible. */
   notifyRecordingReady: (): void => ipcRenderer.send('recording:ready'),
 
+  /** Clear the main-process recording/readiness gate on logout or account switch. */
+  notifyRecordingNotReady: (): void => ipcRenderer.send('recording:not-ready'),
+
   /** Notify main process that the renderer started recording successfully. */
   notifyRecordingStarted: (): void => ipcRenderer.send('recording:started'),
 
@@ -228,6 +243,24 @@ const api = {
 
   /** Notify main process of a recording error. */
   notifyRecordingError: (message: string): void => ipcRenderer.send('recording:error', message),
+  notifyRecordingStopFailed: (message: string): void => ipcRenderer.send('recording:stop-failed', message),
+
+  /** Observe the end of a consented prompted Teams call. */
+  onPromptedTeamsCallEnded: (
+    callback: (data: PromptedTeamsCallEnded) => void
+  ): (() => void) => {
+    const handler = (_event: IpcRendererEvent, data: PromptedTeamsCallEnded): void => callback(data)
+    ipcRenderer.on('recording:prompted-teams-call-ended', handler)
+    return () => ipcRenderer.removeListener('recording:prompted-teams-call-ended', handler)
+  },
+  /** Pause or resume only the prompted recording with this exact call nonce. */
+  onPromptedTeamsControl: (
+    callback: (data: { nonce: string; action: 'pause' | 'resume' }) => void
+  ): (() => void) => {
+    const handler = (_event: IpcRendererEvent, data: { nonce: string; action: 'pause' | 'resume' }): void => callback(data)
+    ipcRenderer.on('recording:prompted-teams-control', handler)
+    return () => ipcRenderer.removeListener('recording:prompted-teams-control', handler)
+  },
 
   /** Extend the auto-stop by one 10-minute increment (IN-117). Returns the new
    * scheduled end time, or null if there is no active auto-recording. */
