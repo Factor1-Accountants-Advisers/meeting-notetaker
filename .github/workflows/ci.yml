@@ -33,11 +33,24 @@ jobs:
           npm run verify:call-signals
           npm run verify:call-watch-registrar
           npm run verify:graph
+          npm run verify:fd97-review-fixes
+          npm run verify:full-dev
           npm run verify:toast-xml
           npm run verify:invitee-prompt
           npm run verify:invitee-cards
           npm run verify:email-notice
           npm run verify:backend-supervisor
+          npm run verify:backend-supervisor-ownership
+          npm run verify:teams-call-prompt
+          npm run verify:prompted-call-recovery
+          npm run verify:fd97-package-policy
+
+      - name: Built desktop FD97 handoff contract (synthetic, no providers)
+        shell: bash
+        run: |
+          set -e
+          npm run build
+          npm run verify:fd97-renderer-handoff
 
   rust-helper:
     runs-on: windows-latest
@@ -63,6 +76,8 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r backend/requirements.txt pytest
+      - name: Full-dev Windows process ownership (synthetic, no providers)
+        run: python scripts/verify-full-dev-job.py
       - name: Backend tests
         working-directory: backend
         # One known-flaky concurrency test is deselected (pre-existing, tracked

@@ -220,9 +220,9 @@ async function verifyDeviceChangeStop(): Promise<void> {
   mediaDevices.dispatchDeviceChangeBurst()
   await new Promise((resolve) => setTimeout(resolve, 1_600))
 
-  assert.doesNotThrow(
-    () => controller.pause(),
-    'Pause advances even when the stale loopback recorder rejects the transition'
+  assert.equal(
+    controller.pause(), false,
+    'A still-recording loopback track must not be acknowledged as fully paused'
   )
   assert.doesNotThrow(() => controller.resume(), 'Resume remains available after the partial pause')
 

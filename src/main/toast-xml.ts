@@ -15,11 +15,16 @@
  * argv carries the URI.
  */
 
-export const TOAST_PROTOCOL_SCHEME = 'notetaker'
+// Only the dedicated development launcher sets this flag. Production keeps
+// its existing protocol; private toast clicks cannot activate the installed app.
+export const TOAST_PROTOCOL_SCHEME = process.env.MN_FD97_ISOLATED_TEST === '1'
+  ? (process.env.MN_FD97_LIVE_PROCESSING === '1' ? 'notetaker-fd97-processing-test' : 'notetaker-fd97-test')
+  : (process.env.MN_DEV_INSTANCE === '1' ? 'notetaker-dev' : 'notetaker')
 
 /** IN-488 invitee prompt buttons. Unlike the other actions these carry a
  *  `?meeting=<id>` query, because more than one prompt can be up at once. */
 export type InviteeToastVerb = 'invitees-approve' | 'invitees-decline'
+export type TeamsCallToastVerb = 'teams-call-accept' | 'teams-call-continue' | 'teams-call-stop'
 
 export type ToastAction =
   | 'open'
@@ -29,6 +34,7 @@ export type ToastAction =
   | 'upload-now'
   | 'resume-recording'
   | 'record-now'
+  | TeamsCallToastVerb
   | InviteeToastVerb
 
 export function toastUri(action: ToastAction): string {
@@ -41,10 +47,26 @@ export function inviteeToastUri(verb: InviteeToastVerb, meetingId: string): stri
   return `${toastUri(verb)}?meeting=${encodeURIComponent(meetingId)}`
 }
 
+export function teamsCallToastUri(verb: 'accept', callNonce: string): string {
+  void verb
+  return `${toastUri('teams-call-accept')}?call=${encodeURIComponent(callNonce)}`
+}
+
+export function teamsCallDecisionToastUri(
+  verb: 'continue' | 'stop', callNonce: string, decisionNonce: string
+): string {
+  return `${toastUri(verb === 'continue' ? 'teams-call-continue' : 'teams-call-stop')}` +
+    `?call=${encodeURIComponent(callNonce)}&decision=${encodeURIComponent(decisionNonce)}`
+}
+
 export interface ParsedToastAction {
   action: ToastAction
   /** Set only for the invitee prompt's buttons; null for every bare action. */
   meetingId: string | null
+  /** Set only for the prompted Teams-call accept and uncertainty buttons. */
+  callNonce?: string | null
+  /** Set only for a single paused-uncertainty episode. */
+  decisionNonce?: string | null
 }
 
 function bareToastAction(arg: string): ToastAction | null {
@@ -55,6 +77,9 @@ function bareToastAction(arg: string): ToastAction | null {
   if (arg === toastUri('upload-now')) return 'upload-now'
   if (arg === toastUri('resume-recording')) return 'resume-recording'
   if (arg === toastUri('record-now')) return 'record-now'
+  if (arg === toastUri('teams-call-accept')) return 'teams-call-accept'
+  if (arg === toastUri('teams-call-continue')) return 'teams-call-continue'
+  if (arg === toastUri('teams-call-stop')) return 'teams-call-stop'
   return null
 }
 
@@ -71,13 +96,64 @@ export function parseToastArgv(argv: readonly string[]): ParsedToastAction | nul
     const queryAt = raw.indexOf('?')
     const head = (queryAt === -1 ? raw : raw.slice(0, queryAt)).replace(/\/$/, '')
     const bare = bareToastAction(head)
-    if (bare) return { action: bare, meetingId: null }
+    if (bare) {
+      if (bare === 'teams-call-accept' || bare === 'teams-call-continue' || bare === 'teams-call-stop') {
+        if (queryAt === -1) continue
+        const params = new URLSearchParams(raw.slice(queryAt + 1))
+        const callNonce = (params.get('call') ?? '').trim()
+        if (!callNonce) continue
+        if (bare === 'teams-call-accept') return { action: bare, meetingId: null, callNonce }
+        const decisionNonce = (params.get('decision') ?? '').trim()
+        if (decisionNonce) return { action: bare, meetingId: null, callNonce, decisionNonce }
+        continue
+      }
+      return { action: bare, meetingId: null }
+    }
     const verb = INVITEE_TOAST_VERBS.find((candidate) => head === toastUri(candidate))
     if (!verb || queryAt === -1) continue
     const meetingId = (new URLSearchParams(raw.slice(queryAt + 1)).get('meeting') ?? '').replace(/\/$/, '')
     if (meetingId) return { action: verb, meetingId }
   }
   return null
+}
+
+/** FD-97: the prompt is bound to a nonce so an Action Center click from an old
+ * connection cannot accept a newer call. */
+export function buildTeamsCallPromptToastXml(title: string, callNonce: string): string {
+  const subject = title ? `Call with ${xmlEscape(title)}` : 'Teams call detected'
+  const accept = xmlEscape(teamsCallToastUri('accept', callNonce))
+  return (
+    `<toast scenario="reminder" activationType="protocol" launch="${toastUri('open')}">` +
+    '<visual><binding template="ToastGeneric">' +
+    `<text>${subject}</text>` +
+    '<text>Record this call?</text>' +
+    '</binding></visual>' +
+    '<audio silent="true"/>' +
+    '<actions>' +
+    `<action content="Record this call" activationType="protocol" arguments="${accept}"/>` +
+    '<action content="Not now" activationType="system" arguments="dismiss"/>' +
+    '</actions>' +
+    '</toast>'
+  )
+}
+
+export function buildTeamsCallUncertaintyToastXml(callNonce: string, decisionNonce: string): string {
+  const resume = xmlEscape(teamsCallDecisionToastUri('continue', callNonce, decisionNonce))
+  const stop = xmlEscape(teamsCallDecisionToastUri('stop', callNonce, decisionNonce))
+  return (
+    `<toast scenario="reminder" activationType="protocol" launch="${toastUri('open')}">` +
+    '<visual><binding template="ToastGeneric">' +
+    '<text>Meeting Notetaker</text>' +
+    '<text>Recording paused. Is the call still live?</text>' +
+    '<text>No answer in one minute? We will stop and process.</text>' +
+    '</binding></visual>' +
+    '<audio silent="true"/>' +
+    '<actions>' +
+    `<action content="Continue recording" activationType="protocol" arguments="${resume}"/>` +
+    `<action content="Stop and process" activationType="protocol" arguments="${stop}"/>` +
+    '</actions>' +
+    '</toast>'
+  )
 }
 
 /** The action alone, for callers that do not need a meeting id. */

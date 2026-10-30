@@ -6,7 +6,8 @@ import logging
 import re
 import shutil
 import subprocess
-from datetime import datetime, timezone
+import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -24,10 +25,16 @@ from app.schemas import (
     AccessRole,
     AuditEntry,
     BlobStatus,
+    CallLookupStatus,
+    CallObservationRequest,
+    CallParticipantResolveRequest,
+    CallRecordResolveResponse,
     DeliveryStatus,
     EditSegmentRequest,
     EmailRequest,
     EmailResult,
+    GraphMeetingAttendeeMetadata,
+    GraphMeetingMetadata,
     GrantAccessRequest,
     InviteeCandidate,
     InviteeDecision,
@@ -38,6 +45,7 @@ from app.schemas import (
     MeetingAccessEntry,
     MeetingCreate,
     MeetingReview,
+    MeetingSource,
     MeetingStatus,
     NameSpeakerRequest,
     PipelineStage,
@@ -81,8 +89,25 @@ from app.services.sharepoint import (
     safe_summary_filename,
     safe_transcript_filename,
 )
+from app.services.storage_api import (
+    StorageApiContractError,
+    StorageApiError,
+    StorageApiRejected,
+    StorageApiUnavailable,
+    get_storage_api_client,
+)
 
 Actor = Header("Unknown user", alias="X-MN-User")
+
+CALL_LOOKUP_WINDOW = timedelta(minutes=180)
+CALL_LOOKUP_RETRY = timedelta(minutes=1)
+_CALL_LOOKUP_LOCKS: dict[UUID, threading.Lock] = {}
+_CALL_LOOKUP_LOCKS_GUARD = threading.Lock()
+
+
+def _call_lookup_lock(meeting_id: UUID) -> threading.Lock:
+    with _CALL_LOOKUP_LOCKS_GUARD:
+        return _CALL_LOOKUP_LOCKS.setdefault(meeting_id, threading.Lock())
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 
@@ -123,6 +148,11 @@ async def get_meeting(meeting_id: UUID, actor: str = Actor) -> Meeting:
 
 @router.post("", response_model=Meeting, status_code=status.HTTP_201_CREATED)
 async def create_meeting(body: MeetingCreate, actor: str = Actor) -> Meeting:
+    graph_metadata = body.graph_metadata
+    if graph_metadata and graph_metadata.prompted_call:
+        # The client may identify the consented call, never its recipients.
+        # Only the authenticated owner resolver can append real participants.
+        graph_metadata = graph_metadata.model_copy(update={"attendees": []}, deep=True)
     meeting = Meeting(
         id=uuid4(),
         title=body.title,
@@ -130,8 +160,13 @@ async def create_meeting(body: MeetingCreate, actor: str = Actor) -> Meeting:
         source=body.source,
         owner_id=_normalise_actor_id(actor),
         created_at=datetime.now(timezone.utc),
-        graph_metadata=body.graph_metadata,
-        manual_attendees=body.manual_attendees,
+        graph_metadata=graph_metadata,
+        manual_attendees=[] if graph_metadata and graph_metadata.prompted_call else body.manual_attendees,
+        call_lookup_status=(
+            CallLookupStatus.pending
+            if body.graph_metadata and body.graph_metadata.prompted_call
+            else CallLookupStatus.not_applicable
+        ),
     )
     store.MEETINGS[meeting.id] = meeting
     # Creator owns the meeting (decision #7).
@@ -519,6 +554,30 @@ async def _prepare_uploaded_audio(
     return path
 
 
+async def _preserve_prompted_upload(
+    meeting_id: UUID, incoming: GraphMeetingMetadata | None, actor: str
+) -> Meeting:
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    stored = meeting.graph_metadata.prompted_call if meeting.graph_metadata else None
+    supplied = incoming.prompted_call if incoming else None
+    if supplied and not stored:
+        raise HTTPException(status.HTTP_409_CONFLICT, "The call marker must belong to the original recording")
+    if stored:
+        _require_explicit_owner(meeting_id, actor)
+        _prompted_call_or_409(meeting)
+        if supplied and (supplied.nonce != stored.nonce or supplied.observed_start_utc != stored.observed_start_utc):
+            raise HTTPException(status.HTTP_409_CONFLICT, "The prompted call marker cannot be replaced")
+        if supplied and supplied.observed_end_utc:
+            meeting = await observe_prompted_call(
+                meeting_id,
+                CallObservationRequest(ended_at_utc=_parse_aware_utc(supplied.observed_end_utc)),
+                actor=actor,
+            )
+    return meeting
+
+
 @router.post("/{meeting_id}/audio", response_model=Meeting)
 async def upload_audio(
     meeting_id: UUID,
@@ -547,6 +606,7 @@ async def upload_audio(
             "This meeting already has a processed recording",
         )
 
+    meeting = await _preserve_prompted_upload(meeting_id, body.graph_metadata, actor)
     system_segments = _decode_system_segments(body)
     audio: bytes | None = _decode_audio_b64(body.audio_b64, "Audio", min_bytes=0)
     if len(audio) < MIN_AUDIO_BYTES:
@@ -580,6 +640,8 @@ async def upload_audio(
             status.HTTP_409_CONFLICT, "Meeting was deleted while the upload was in flight"
         )
 
+    meeting = await _preserve_prompted_upload(meeting_id, body.graph_metadata, actor)
+
     # Fresh audio invalidates any earlier silence verdict; the pipeline
     # re-measures in the background (full-file decode is too slow for this
     # request path). A dropped mic is flagged immediately — with no mic track
@@ -587,7 +649,9 @@ async def upload_audio(
     updates: dict[str, object] = {"recorder_audio_missing": audio is None}
     if body.duration_seconds:
         updates["duration_seconds"] = body.duration_seconds
-    if body.graph_metadata:
+    # Prompted-call attendees and hang-up are server-owned durable state. A
+    # stale upload must not erase them or inject arbitrary participants.
+    if body.graph_metadata and not (meeting.graph_metadata and meeting.graph_metadata.prompted_call):
         updates["graph_metadata"] = body.graph_metadata
     if updates:
         store.MEETINGS[meeting_id] = meeting.model_copy(update=updates)
@@ -1165,6 +1229,348 @@ async def save_transcript_to_sharepoint(
     )
     store.save_snapshot()
     return updated
+
+
+def _prompted_call_or_409(meeting: Meeting):
+    if (
+        meeting.source is not MeetingSource.online
+        or meeting.graph_metadata is None
+        or meeting.graph_metadata.prompted_call is None
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Participant lookup is available only for prompted Teams calls",
+        )
+    return meeting.graph_metadata.prompted_call
+
+
+def _require_explicit_owner(meeting_id: UUID, actor: str) -> None:
+    """Require a real owner ACL for prompted-call mutations.
+
+    ``require`` intentionally allows legacy meetings with no ACL. Participant
+    lookup and call observation are too sensitive for that compatibility
+    fallback, so these routes fail closed instead.
+    """
+    if not store.ACCESS.get(meeting_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "An explicit owner ACL is required")
+    require(meeting_id, actor, AccessRole.owner)
+
+
+def _authoritative_prompted_call(
+    meeting_id: UUID,
+    actor: str,
+    expected_meeting: Meeting,
+    expected_prompted: object,
+) -> Meeting:
+    """Re-read and validate the exact call whose provider request was made."""
+    current = store.MEETINGS.get(meeting_id)
+    if current is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    _require_explicit_owner(meeting_id, actor)
+    if current.status is MeetingStatus.finalized:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Finalized meetings cannot be modified")
+    prompted = _prompted_call_or_409(current)
+    if (
+        current is not expected_meeting
+        or current.owner_id != expected_meeting.owner_id
+        or prompted != expected_prompted
+    ):
+        raise HTTPException(status.HTTP_409_CONFLICT, "The prompted call changed during participant lookup")
+    return current
+
+
+def _parse_aware_utc(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Prompted call start time is invalid") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Prompted call timestamps must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def _lookup_retry_at(now: datetime, deadline: datetime) -> datetime | None:
+    next_retry = now + CALL_LOOKUP_RETRY
+    return min(next_retry, deadline)
+
+
+@router.post("/{meeting_id}/call-observation", response_model=Meeting)
+async def observe_prompted_call(
+    meeting_id: UUID,
+    body: CallObservationRequest,
+    actor: str = Actor,
+) -> Meeting:
+    """Persist the observed end of a consented prompted Teams call.
+
+    The renderer supplies only the observation timestamp. The server derives
+    the call start and source from the stored prompted-call marker and never
+    accepts a recipient list or caller principal from the renderer.
+    """
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    _require_explicit_owner(meeting_id, actor)
+    if meeting.status is MeetingStatus.finalized:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Finalized meetings cannot be modified")
+    prompted = _prompted_call_or_409(meeting)
+    started = _parse_aware_utc(prompted.observed_start_utc)
+    ended = body.ended_at_utc
+    if ended.tzinfo is None or ended.utcoffset() is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Prompted call timestamps must include a timezone")
+    ended = ended.astimezone(timezone.utc)
+    if ended <= started:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Prompted call end must be after its start")
+    ended_text = ended.isoformat()
+    if prompted.observed_end_utc:
+        if _parse_aware_utc(prompted.observed_end_utc) != ended:
+            raise HTTPException(status.HTTP_409_CONFLICT, "Prompted call end is already recorded")
+        return meeting
+
+    deadline = ended + CALL_LOOKUP_WINDOW
+    updated_metadata = meeting.graph_metadata.model_copy(
+        update={"prompted_call": prompted.model_copy(update={"observed_end_utc": ended_text})}
+    )
+    updated = meeting.model_copy(
+        update={
+            "graph_metadata": updated_metadata,
+            "call_lookup_status": CallLookupStatus.pending,
+            "call_lookup_next_retry_at": datetime.now(timezone.utc),
+            "call_lookup_deadline_at": deadline,
+            "call_lookup_error_message": None,
+        }
+    )
+    store.MEETINGS[meeting_id] = updated
+    store.add_audit(
+        actor,
+        "meeting.prompted_call_observed_end",
+        meeting.title,
+        before="active",
+        after=ended_text,
+        meeting_id=meeting_id,
+    )
+    store.save_snapshot()
+    return updated
+
+
+@router.post("/{meeting_id}/call-participants/resolve", response_model=Meeting)
+async def resolve_call_participants(
+    meeting_id: UUID,
+    body: CallParticipantResolveRequest | None = None,
+    actor: str = Actor,
+    storage_token: str | None = Header(None, alias="X-MN-Storage-Token"),
+) -> Meeting:
+    """Resolve trusted Teams participants after hang-up.
+
+    The local API is owner-only. The Storage API derives the caller OID from
+    the bearer token; the desktop cannot choose a principal or overwrite
+    attendees with arbitrary renderer data.
+    """
+    meeting = store.MEETINGS.get(meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+    _require_explicit_owner(meeting_id, actor)
+    if meeting.status is MeetingStatus.finalized:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Finalized meetings cannot be modified")
+    prompted = _prompted_call_or_409(meeting)
+    if not prompted.observed_end_utc or meeting.call_lookup_deadline_at is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "The prompted call has not ended yet")
+
+    if meeting.call_lookup_status is CallLookupStatus.resolved:
+        return meeting
+    now = datetime.now(timezone.utc)
+    if now >= meeting.call_lookup_deadline_at:
+        expired = meeting.model_copy(
+            update={
+                "call_lookup_status": CallLookupStatus.expired,
+                "call_lookup_next_retry_at": None,
+                "call_lookup_error_message": None,
+            }
+        )
+        store.MEETINGS[meeting_id] = expired
+        store.add_audit(
+            actor,
+            "meeting.prompted_call_resolve_expired",
+            meeting.title,
+            before=meeting.call_lookup_status.value,
+            after=CallLookupStatus.expired.value,
+            meeting_id=meeting_id,
+        )
+        store.save_snapshot()
+        return expired
+    if (
+        meeting.call_lookup_next_retry_at is not None
+        and meeting.call_lookup_next_retry_at > now
+    ):
+        return meeting
+
+    lock = _call_lookup_lock(meeting_id)
+    if not lock.acquire(blocking=False):
+        current = store.MEETINGS.get(meeting_id)
+        if current is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Meeting not found")
+        return current
+    try:
+        meeting = store.MEETINGS[meeting_id]
+        _require_explicit_owner(meeting_id, actor)
+        if meeting.status is MeetingStatus.finalized:
+            raise HTTPException(status.HTTP_409_CONFLICT, "Finalized meetings cannot be modified")
+        prompted = _prompted_call_or_409(meeting)
+        if not prompted.observed_end_utc or meeting.call_lookup_deadline_at is None:
+            raise HTTPException(status.HTTP_409_CONFLICT, "The prompted call has not ended yet")
+        if meeting.call_lookup_status is CallLookupStatus.resolved:
+            return meeting
+        now = datetime.now(timezone.utc)
+        if now >= meeting.call_lookup_deadline_at:
+            expired = meeting.model_copy(
+                update={
+                    "call_lookup_status": CallLookupStatus.expired,
+                    "call_lookup_next_retry_at": None,
+                    "call_lookup_error_message": None,
+                }
+            )
+            store.MEETINGS[meeting_id] = expired
+            store.add_audit(
+                actor,
+                "meeting.prompted_call_resolve_expired",
+                meeting.title,
+                before=meeting.call_lookup_status.value,
+                after=CallLookupStatus.expired.value,
+                meeting_id=meeting_id,
+            )
+            store.save_snapshot()
+            return expired
+        if meeting.call_lookup_next_retry_at is not None and meeting.call_lookup_next_retry_at > now:
+            return meeting
+        pending = meeting.model_copy(
+            update={
+                "call_lookup_status": CallLookupStatus.pending,
+                "call_lookup_next_retry_at": _lookup_retry_at(now, meeting.call_lookup_deadline_at),
+                "call_lookup_last_attempt_at": now,
+                "call_lookup_attempts": meeting.call_lookup_attempts + 1,
+                "call_lookup_error_message": None,
+            }
+        )
+        store.MEETINGS[meeting_id] = pending
+        store.add_audit(
+            actor,
+            "meeting.prompted_call_resolve_attempt",
+            meeting.title,
+            before=f"{meeting.call_lookup_status.value}:{meeting.call_lookup_attempts}",
+            after=f"{pending.call_lookup_status.value}:{pending.call_lookup_attempts}",
+            meeting_id=meeting_id,
+        )
+        store.save_snapshot()
+        expected_meeting = pending
+        expected_prompted = prompted.model_copy(deep=True)
+        started = _parse_aware_utc(prompted.observed_start_utc)
+        ended = _parse_aware_utc(prompted.observed_end_utc)
+        try:
+            response: CallRecordResolveResponse = await asyncio.to_thread(
+                get_storage_api_client().resolve_call_records,
+                meeting_id,
+                started,
+                ended,
+                storage_token,
+            )
+        except (StorageApiUnavailable, StorageApiRejected, StorageApiContractError, StorageApiError):
+            current = _authoritative_prompted_call(
+                meeting_id, actor, expected_meeting, expected_prompted
+            )
+            updated = current.model_copy(
+                update={
+                    "call_lookup_status": CallLookupStatus.unavailable,
+                    "call_lookup_next_retry_at": _lookup_retry_at(datetime.now(timezone.utc), current.call_lookup_deadline_at),
+                    "call_lookup_error_message": "Participant lookup is temporarily unavailable",
+                }
+            )
+            store.MEETINGS[meeting_id] = updated
+            store.add_audit(
+                actor,
+                "meeting.prompted_call_resolve",
+                current.title,
+                before=current.call_lookup_status.value,
+                after=CallLookupStatus.unavailable.value,
+                meeting_id=meeting_id,
+            )
+            store.save_snapshot()
+            return updated
+
+        current = _authoritative_prompted_call(
+            meeting_id, actor, expected_meeting, expected_prompted
+        )
+        if datetime.now(timezone.utc) >= current.call_lookup_deadline_at:
+            expired = current.model_copy(
+                update={
+                    "call_lookup_status": CallLookupStatus.expired,
+                    "call_lookup_next_retry_at": None,
+                    "call_lookup_error_message": None,
+                }
+            )
+            store.MEETINGS[meeting_id] = expired
+            store.add_audit(
+                actor,
+                "meeting.prompted_call_resolve_expired",
+                current.title,
+                before=current.call_lookup_status.value,
+                after=CallLookupStatus.expired.value,
+                meeting_id=meeting_id,
+            )
+            store.save_snapshot()
+            return expired
+
+        status_map = {
+            "pending": CallLookupStatus.pending,
+            "ambiguous": CallLookupStatus.ambiguous,
+            "resolved": CallLookupStatus.resolved,
+            "expired": CallLookupStatus.expired,
+        }
+        lookup_status = status_map[response.status]
+        update: dict[str, object] = {
+            "call_lookup_status": lookup_status,
+            "call_lookup_error_message": None,
+            "call_lookup_next_retry_at": (
+                _lookup_retry_at(datetime.now(timezone.utc), current.call_lookup_deadline_at)
+                if lookup_status in (CallLookupStatus.pending, CallLookupStatus.ambiguous)
+                else None
+            ),
+        }
+        if lookup_status is CallLookupStatus.resolved:
+            metadata = current.graph_metadata
+            if metadata is None or metadata.prompted_call is None:
+                raise HTTPException(status.HTTP_409_CONFLICT, "Prompted call metadata is no longer available")
+            attendees = list(metadata.attendees)
+            by_email = {
+                (attendee.email or "").strip().casefold(): index
+                for index, attendee in enumerate(attendees)
+                if attendee.email
+            }
+            for participant in response.participants:
+                email = participant.email.strip().casefold()
+                if "@" not in email:
+                    continue
+                existing_index = by_email.get(email)
+                attendee = GraphMeetingAttendeeMetadata(name=participant.name, email=email)
+                if existing_index is None:
+                    by_email[email] = len(attendees)
+                    attendees.append(attendee)
+                elif not attendees[existing_index].name and attendee.name:
+                    attendees[existing_index] = attendee
+            update["graph_metadata"] = metadata.model_copy(update={"attendees": attendees})
+
+        updated = current.model_copy(update=update)
+        store.MEETINGS[meeting_id] = updated
+        store.add_audit(
+            actor,
+            "meeting.prompted_call_resolve",
+            current.title,
+            before=current.call_lookup_status.value,
+            after=lookup_status.value,
+            meeting_id=meeting_id,
+        )
+        store.save_snapshot()
+        return updated
+    finally:
+        lock.release()
 
 
 @router.get("/{meeting_id}/invitees", response_model=InviteeState)

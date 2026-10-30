@@ -31,7 +31,12 @@ from pydantic import BaseModel, Field
 
 from app.config import get_settings
 from app.paths import central_meetings_dir, central_voiceprint_path
-from app.schemas import CallSignalsResponse, CallWatchReceipt, CallWatchRegistration
+from app.schemas import (
+    CallRecordResolveResponse,
+    CallSignalsResponse,
+    CallWatchReceipt,
+    CallWatchRegistration,
+)
 
 
 class StorageApiError(RuntimeError):
@@ -225,6 +230,13 @@ class StorageApiClient(Protocol):
     ) -> CallWatchReceipt: ...
     def get_call_signals(self, join_url_hash: str, access_token: str | None) -> CallSignalsResponse: ...
     def delete_call_watch(self, join_url_hash: str, access_token: str | None) -> None: ...
+    def resolve_call_records(
+        self,
+        meeting_id: UUID,
+        started_at_utc: datetime,
+        ended_at_utc: datetime,
+        access_token: str | None,
+    ) -> CallRecordResolveResponse: ...
 
 
 def central_enrolment_required() -> bool:
@@ -567,6 +579,16 @@ class StubStorageApiClient:
     def delete_call_watch(self, join_url_hash: str, access_token: str | None) -> None:
         self._fail_if_injected(self)
         return None
+
+    def resolve_call_records(
+        self,
+        meeting_id: UUID,
+        started_at_utc: datetime,
+        ended_at_utc: datetime,
+        access_token: str | None,
+    ) -> CallRecordResolveResponse:
+        self._fail_if_injected(self)
+        return CallRecordResolveResponse(status="pending", participants=[], retry_after_seconds=60)
 
 
 class RestStorageApiClient:
@@ -929,6 +951,33 @@ class RestStorageApiClient:
             allow_not_found=True,
         )
         return None
+
+    def resolve_call_records(
+        self,
+        meeting_id: UUID,
+        started_at_utc: datetime,
+        ended_at_utc: datetime,
+        access_token: str | None,
+    ) -> CallRecordResolveResponse:
+        raw = self._request(
+            "POST",
+            "/api/v1/call-records/resolve",
+            access_token,
+            {
+                "meeting_id": str(meeting_id),
+                "started_at_utc": started_at_utc.isoformat(),
+                "ended_at_utc": ended_at_utc.isoformat(),
+            },
+            allow_not_found=True,
+        )
+        if raw is None:
+            return CallRecordResolveResponse(status="pending", participants=[], retry_after_seconds=60)
+        try:
+            return CallRecordResolveResponse.model_validate(raw)
+        except pydantic.ValidationError as exc:
+            raise StorageApiContractError(
+                "storage API returned malformed call-record resolution"
+            ) from exc
 
 
 _STUB = StubStorageApiClient()

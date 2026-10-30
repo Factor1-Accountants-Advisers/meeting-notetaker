@@ -168,6 +168,11 @@ jobs:
           # trigger fleet-wide in the next release. Read by the DESKTOP from the
           # bundled backend.env; the %PROGRAMDATA% copy overrides per machine.
           MN_AUTO_START_TRIGGER: ${{ vars.MN_AUTO_START_TRIGGER }}
+          # FD-97 unscheduled Teams call prompt: blank/unset = the code default,
+          # off. Set the repo variable to "true" to prompt fleet-wide in the next
+          # release. Read by the DESKTOP from the bundled backend.env; the
+          # %PROGRAMDATA% copy overrides per machine (immediate kill switch).
+          MN_TEAMS_CALL_PROMPT_ENABLED: ${{ vars.MN_TEAMS_CALL_PROMPT_ENABLED }}
         run: |
           $lines = @()
           if (-not $env:MN_OPENAI_API_KEY -or -not $env:MN_PYANNOTE_API_KEY) {
@@ -201,6 +206,12 @@ jobs:
             Write-Host "Auto-start trigger: $env:MN_AUTO_START_TRIGGER"
           } else {
             Write-Host "Auto-start trigger: join (code default)"
+          }
+          if ($env:MN_TEAMS_CALL_PROMPT_ENABLED) {
+            $lines += "MN_TEAMS_CALL_PROMPT_ENABLED=$env:MN_TEAMS_CALL_PROMPT_ENABLED"
+            Write-Host "Teams call prompt (FD-97): $env:MN_TEAMS_CALL_PROMPT_ENABLED"
+          } else {
+            Write-Host "Teams call prompt (FD-97): off (code default). Set the MN_TEAMS_CALL_PROMPT_ENABLED repo variable to true to enable."
           }
           # Central Storage API wiring (IN-379 ops gap, hit live on the first
           # clean 2.0.8 install: without the URL the packaged backend runs in

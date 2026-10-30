@@ -280,7 +280,7 @@ export class CaptureController {
     return status
   }
 
-  pause(): void {
+  pause(): boolean {
     for (const [stream, recorder] of [
       ['mic', this.micRecorder],
       ['sys', this.systemRecorder]
@@ -295,6 +295,12 @@ export class CaptureController {
       }
     }
     this.systemTimeline.pause()
+    // MediaRecorder can reject pause on one track while another succeeds.
+    // Only ACK an uncertainty pause once no recorder is still recording.
+    return Boolean(this.micRecorder || this.systemRecorder) &&
+      [this.micRecorder, this.systemRecorder].every((recorder) =>
+        !recorder || recorder.state !== 'recording'
+      )
   }
 
   resume(): void {
