@@ -347,6 +347,18 @@ function startAuthRedirectServer(): Promise<string> {
 
 let activeAuthServer: { server: ReturnType<typeof createServer>; redirectUri: string } | null = null
 
+/** Stop waiting for a browser sign-in that is still pending (FD-2265 review
+ *  R-3): closing the loopback listener makes openBrowserAndWaitForCode resolve
+ *  null at once instead of after its 2-minute timeout. Best effort — a code
+ *  already received is handled by auth-session undoing the late sign-in. */
+export function cancelInteractiveSignIn(): void {
+  const pending = activeAuthServer
+  if (!pending) return
+  activeAuthServer = null
+  pending.server.closeAllConnections?.()
+  pending.server.close()
+}
+
 function openBrowserAndWaitForCode(
   authUrl: string,
   redirectUri: string,

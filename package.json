@@ -48,6 +48,8 @@
     "verify:token-cache": "esbuild scripts/verify-token-cache.ts --bundle --platform=node --format=cjs --outfile=out/verify-token-cache.cjs --log-level=error && node out/verify-token-cache.cjs",
     "verify:tray-icon": "esbuild scripts/verify-tray-icon.ts --bundle --platform=node --format=cjs --outfile=out/verify-tray-icon.cjs --log-level=error --external:electron && node out/verify-tray-icon.cjs",
     "verify:storage-cutover": "esbuild scripts/verify-storage-cutover.ts --bundle --platform=node --format=cjs --outfile=out/verify-storage-cutover.cjs --log-level=error && node out/verify-storage-cutover.cjs",
+    "verify:sign-in-gate": "esbuild scripts/verify-sign-in-gate.tsx --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-sign-in-gate.cjs --log-level=error && node out/verify-sign-in-gate.cjs",
+    "verify:fd2265-auth-ipc": "esbuild scripts/verify-fd2265-auth-ipc.ts --bundle --platform=node --format=cjs --outfile=out/verify-fd2265-auth-ipc.cjs --log-level=error --external:electron && electron out/verify-fd2265-auth-ipc.cjs",
     "verify:voiceprint-admin": "esbuild scripts/verify-voiceprint-admin.tsx --bundle --platform=node --format=cjs --tsconfig=tsconfig.web.json --outfile=out/verify-voiceprint-admin.cjs --log-level=error --external:electron && node out/verify-voiceprint-admin.cjs",
     "build:audio-helper": "cargo build --release --manifest-path native/audio-endpoint-monitor/Cargo.toml && node scripts/stage-audio-helper.cjs",
     "package": "npm run build:audio-helper && electron-vite build && electron-builder",
