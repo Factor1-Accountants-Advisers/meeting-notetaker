@@ -15,6 +15,7 @@ import http.client
 import json
 import os
 import shutil
+import socket
 import tempfile
 import threading
 import uuid
@@ -591,17 +592,86 @@ class StubStorageApiClient:
         return CallRecordResolveResponse(status="pending", participants=[], retry_after_seconds=60)
 
 
+# FD-2265 (dev-build field repro, 16 Nov 2026): the Storage API host resolved
+# IPv6 first, and on that network IPv6 connects stalled for the full Windows
+# TCP timeout (21 s) before falling back to IPv4 (0.3 s). socket's
+# create_connection gives every address the whole timeout, so each lookup
+# took ~22 s. Non-final addresses now get a short connect budget instead.
+_CONNECT_FALLBACK_S = 3.0
+# The desktop proxy aborts GETs at 15 s. The enrolment lookup must answer
+# "could not check" before then, even after one connect fallback.
+_ENROLMENT_LOOKUP_TIMEOUT_S = 10
+
+
+def connect_with_fallback(
+    address,
+    timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
+    source_address=None,
+    *,
+    getaddrinfo=socket.getaddrinfo,
+    socket_factory=socket.socket,
+):
+    """``socket.create_connection`` with a short connect budget for every
+    address except the last, so an unreachable address family costs seconds,
+    not the OS connect timeout. Reads keep the caller's full timeout."""
+    host, port = address
+    full = socket.getdefaulttimeout() if timeout is socket._GLOBAL_DEFAULT_TIMEOUT else timeout
+    infos = getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+    if not infos:
+        raise OSError(f"no addresses for {host}")
+    last_error: OSError | None = None
+    for index, (family, type_, proto, _canonname, sockaddr) in enumerate(infos):
+        is_last = index == len(infos) - 1
+        attempt = full if is_last else (
+            _CONNECT_FALLBACK_S if full is None else min(full, _CONNECT_FALLBACK_S)
+        )
+        sock = None
+        try:
+            sock = socket_factory(family, type_, proto)
+            sock.settimeout(attempt)
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(sockaddr)
+            sock.settimeout(full)
+            return sock
+        except OSError as exc:
+            last_error = exc
+            if sock is not None:
+                sock.close()
+    raise last_error
+
+
+class FallbackHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection that connects via ``connect_with_fallback``."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        # Resolved at call time so tests can patch the module function.
+        self._create_connection = (
+            lambda address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None:
+            connect_with_fallback(address, timeout, source_address)
+        )
+
+
+class _FallbackHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(FallbackHTTPSConnection, req, context=self._context)
+
+
+_FALLBACK_OPENER = urllib.request.build_opener(_FallbackHTTPSHandler())
+
+
 class RestStorageApiClient:
     """REST binding for the ratified Storage API v1 contract."""
 
     def __init__(
         self,
         base_url: str,
-        opener=urllib.request.urlopen,
-        connection_factory=http.client.HTTPSConnection,
+        opener=None,
+        connection_factory=FallbackHTTPSConnection,
     ) -> None:
         self._base = base_url.rstrip("/")
-        self._opener = opener
+        self._opener = opener or _FALLBACK_OPENER.open
         self._connection_factory = connection_factory
 
     def _request(
@@ -667,6 +737,7 @@ class RestStorageApiClient:
             f"/api/v1/voiceprints/{urllib.parse.quote(person_id)}",
             access_token,
             allow_not_found=True,
+            timeout_s=_ENROLMENT_LOOKUP_TIMEOUT_S,
         )
         if raw is None:
             return None

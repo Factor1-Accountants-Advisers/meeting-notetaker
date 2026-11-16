@@ -227,6 +227,8 @@ let signInResult: { ok: boolean; name?: string; email?: string; error?: string }
 let personEnrolled = true
 let status = { enrolled_locally: true, centrally_enrolled: true, central_required: true, centrally_unknown: false }
 let onStatusCall: (() => void) | null = null
+// R8: the real proxy answers a timed-out backend call with 408 and no body.
+let statusTimesOut = false
 
 const UNKNOWN = { enrolled_locally: false, centrally_enrolled: false, central_required: true, centrally_unknown: true }
 const ENROLLED = { enrolled_locally: true, centrally_enrolled: true, central_required: true, centrally_unknown: false }
@@ -258,6 +260,7 @@ function registerFixtureIpc(): void {
   ipcMain.handle('api:request', (_e, req: { method: string; path: string }) => {
     events.push({ ch: 'api', arg: `${req.method} ${req.path}` })
     if (req.path === '/api/v1/people/me/enrolment-status') {
+      if (statusTimesOut) return { ok: false, status: 408, body: null }
       const snapshot = { ...status }
       onStatusCall?.()
       return envelope(snapshot)
@@ -472,6 +475,22 @@ async function rendererChecks(checks: string[]): Promise<void> {
   assert.ok(statusCalls >= 2, 'R5 outage retried before failing')
   win.destroy()
   checks.push(`renderer: signed-in central outage → retries (${statusCalls} attempts) → "Couldn’t check your voiceprint" + Try again`)
+
+  // R8 — dev-build field repro (16 Nov): every status call times out at the
+  // proxy while /people/me answers, for a person not enrolled on this PC.
+  // Review R-4: the Slice 1 fallback opened the wizard; it must not.
+  authSignedIn = true
+  status = ENROLLED
+  statusTimesOut = true
+  personEnrolled = false
+  win = await openWithStoredUser(STORED)
+  await until(async () => (await text(win)).includes('Couldn’t check your voiceprint'), 'R8 timeout screen', 70_000)
+  const r8 = await text(win)
+  assert.doesNotMatch(r8, /Voiceprint required|Sign in again/, 'R8 an unanswered status never opens the wizard')
+  assert.deepEqual(apiCalls('/enroll'), [], 'R8 nothing enrolled')
+  statusTimesOut = false
+  win.destroy()
+  checks.push('renderer: status call times out every attempt, not enrolled locally → "Couldn’t check your voiceprint", never the wizard')
 }
 
 app
@@ -488,6 +507,6 @@ app
     app.exit(1)
   })
 setTimeout(() => {
-  out('FD-2265 auth harness exceeded 150 s')
+  out('FD-2265 auth harness exceeded 240 s')
   app.exit(1)
-}, 150_000)
+}, 240_000)

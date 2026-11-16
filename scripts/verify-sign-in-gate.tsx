@@ -198,6 +198,31 @@ async function main(): Promise<void> {
     })
     assert.equal(outcome, null, 'cancelled runs resolve to nothing')
   }
+  // Review R-4, reproduced in the dev build on 16 Nov: every status call timed
+  // out (Storage API IPv6 stall), /people/me answered, and the null-status
+  // fallback opened the wizard for a person with a central voiceprint.
+  {
+    const notEnrolledLocally: StaffMember = { ...person, enrollment: 'not_enrolled' }
+    const log: string[] = []
+    const outcome = await resolveEnrolmentGate({
+      ...deps([null], { signedIn: true }, log),
+      fetchPerson: async () => notEnrolledLocally
+    })
+    assert.deepEqual(
+      outcome,
+      { kind: 'central-unavailable' },
+      'a status that never answers is "could not check", never "Voiceprint required"'
+    )
+    assert.equal(log.filter((e) => e === 'status').length, 4, 'an unanswered status still retries first')
+  }
+  {
+    const outcome = await resolveEnrolmentGate(deps([null], { signedIn: true }, []))
+    assert.deepEqual(
+      outcome,
+      { kind: 'ready', person, status: null },
+      'a locally enrolled person keeps the Slice 1 fallback when status never answers'
+    )
+  }
 
   // ---------------------------------------------------------------------------
   // "Sign in again" result (review R-1, option b): a sign-in that succeeds but

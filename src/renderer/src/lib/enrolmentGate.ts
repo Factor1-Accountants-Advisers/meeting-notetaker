@@ -80,8 +80,8 @@ export function signInAgainOutcome(result: SignInAgainResult): {
 export async function resolveEnrolmentGate(deps: GateDeps): Promise<GateOutcome | null> {
   let lastErrorMessage: string | null = null
   // A person that resolves alongside a null status means the backend
-  // answered one call but not the other — retry, then fall back to the
-  // person (Slice 1 behaviour) rather than surface an error it never sent.
+  // answered one call but not the other (e.g. the status call timed out) —
+  // retry, then fall back to the person only if it is enrolled locally.
   let lastPersonWithNullStatus: StaffMember | null = null
   let lastStatusWasUnknown = false
   for (let attempt = 0; ; attempt++) {
@@ -115,7 +115,12 @@ export async function resolveEnrolmentGate(deps: GateDeps): Promise<GateOutcome 
     await deps.sleep(delay)
     if (deps.isCancelled()) return null
   }
-  if (lastPersonWithNullStatus) return { kind: 'ready', person: lastPersonWithNullStatus, status: null }
-  if (lastStatusWasUnknown) return { kind: 'central-unavailable' }
+  // The Slice 1 fallback may only PASS a locally enrolled person. An
+  // unanswered status is never evidence of absence, so it must not open the
+  // wizard (FD-2265 / review R-4: every status call timed out in the field).
+  if (lastPersonWithNullStatus?.enrollment === 'enrolled') {
+    return { kind: 'ready', person: lastPersonWithNullStatus, status: null }
+  }
+  if (lastPersonWithNullStatus || lastStatusWasUnknown) return { kind: 'central-unavailable' }
   return { kind: 'load-failed', message: lastErrorMessage }
 }
