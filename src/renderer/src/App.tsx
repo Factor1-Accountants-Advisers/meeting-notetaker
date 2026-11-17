@@ -8,6 +8,9 @@ import { HomeScreen, type InviteeResurfacedCard } from './screens/HomeScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
 import { VoiceprintAdminScreen } from './screens/VoiceprintAdminScreen'
 import { LoginScreen, type User } from './screens/LoginScreen'
+import { EnrolmentGateScreen, type GateView } from './components/EnrolmentGateScreen'
+import { resolveEnrolmentGate, signInAgainOutcome, type GateOutcome } from './lib/enrolmentGate'
+import { reconcileStartupUser } from './lib/startupUser'
 import { RecordingScreen, type RecordingSession } from './screens/RecordingScreen'
 import {
   createMeeting,
@@ -209,9 +212,14 @@ function blobDeliveryNotice(
 }
 
 function App(): JSX.Element {
-  const [user, setUser] = useState<User | null>(loadUser)
+  // FD-2265: with an IPC bridge, mn.user is only trusted after main confirms a
+  // usable Microsoft sign-in (cold-start effect below). Starting from the
+  // cached user skipped that check and let a stale identity outlive a cleared
+  // token cache. Browser preview (no bridge) keeps the cached user.
+  const hasAuthBridge = typeof window.api?.getAuthStatus === 'function'
+  const [user, setUser] = useState<User | null>(() => (hasAuthBridge ? null : loadUser()))
   const [storageAdmin, setStorageAdmin] = useState(false)
-  const [authChecked, setAuthChecked] = useState(Boolean(loadUser()))
+  const [authChecked, setAuthChecked] = useState(!hasAuthBridge)
   const [currentPerson, setCurrentPerson] = useState<StaffMember | null>(null)
   const [enrolmentStatus, setEnrolmentStatus] = useState<EnrolmentStatus | null>(null)
   // IN-379/Slice 2 vocabulary spells this single-l "enrolment"; the file's
@@ -222,7 +230,11 @@ function App(): JSX.Element {
   const [enrollmentLoading, setEnrollmentLoading] = useState(false)
   // Bumping this re-runs the enrollment gate fetch (Try again after failure).
   const [enrollmentAttempt, setEnrollmentAttempt] = useState(0)
-  const [enrollmentError, setEnrollmentError] = useState<string | null>(null)
+  // Why the gate could not resolve (FD-2265): sign-in, central store, or a
+  // local load failure — each gets its own copy and recovery action.
+  const [gateFailure, setGateFailure] = useState<Exclude<GateOutcome, { kind: 'ready' }> | null>(null)
+  const [signingIn, setSigningIn] = useState(false)
+  const [signInError, setSignInError] = useState<string | null>(null)
 
   // IN-379 gate. Post-cutover (central_required) ONLY central enrolment passes —
   // local records are structurally invisible (spec §Cutover semantics).
@@ -355,41 +367,34 @@ function App(): JSX.Element {
     }
   }, [])
 
-  // On cold start, check whether a persisted MSAL cache exists. If the user was
-  // signed in last session, skip the login screen and restore the session from
-  // the cached account email so auto-record + delivery work without re-prompting.
+  // On cold start, reconcile the cached mn.user with main's real Microsoft
+  // sign-in. Signed in last session → skip the login screen and restore the
+  // session so auto-record + delivery work without re-prompting. No usable
+  // account (e.g. an undecryptable cache was cleared) → drop the stale user so
+  // the login screen shows instead of a misleading gate failure (FD-2265).
   useEffect(() => {
     if (authChecked) return
     if (typeof window.api?.getAuthStatus !== 'function') {
       setAuthChecked(true)
       return
     }
-    window.api.getAuthStatus().then((status) => {
-      if (!status.signedIn) {
-        localStorage.removeItem(USER_KEY)
-        setAuthChecked(true)
-        return
-      }
-      // Restore from localStorage if available, otherwise create a session entry
-      // from the cached account info so the voiceprint gate and auto-record fire.
-      const stored = loadUser()
-      if (stored) {
-        setUser(stored)
-        setAuthChecked(true)
-        return
-      }
-      if (status.email) {
-        const restored: User = {
-          name: status.name ?? status.email.split('@')[0],
-          email: status.email
+    let cancelled = false
+    window.api
+      .getAuthStatus()
+      .catch(() => null)
+      .then((status) => {
+        if (cancelled) return
+        const decision = reconcileStartupUser(status, loadUser())
+        if (decision.stored === 'clear') localStorage.removeItem(USER_KEY)
+        if (decision.stored === 'write' && decision.user) {
+          localStorage.setItem(USER_KEY, JSON.stringify(decision.user))
         }
-        localStorage.setItem(USER_KEY, JSON.stringify(restored))
-        setUser(restored)
-      }
-      setAuthChecked(true)
-    }).catch(() => {
-      setAuthChecked(true)
-    })
+        setUser(decision.user)
+        setAuthChecked(true)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [authChecked])
 
   useEffect(() => {
@@ -428,9 +433,12 @@ function App(): JSX.Element {
   }, [])
 
   // Keep the main process informed so backend calls carry the audit actor.
+  // Not before the cold-start auth check: user is null until then, and that
+  // placeholder is not a real "no actor" (FD-2265).
   useEffect(() => {
+    if (!authChecked) return
     if (typeof window.api?.setUser === 'function') window.api.setUser(user?.name ?? '')
-  }, [user])
+  }, [user, authChecked])
 
   // IN-129: surface recordings interrupted by sleep/crash for recovery.
   useEffect(() => {
@@ -598,13 +606,13 @@ function App(): JSX.Element {
     if (!user) {
       setCurrentPerson(null)
       setEnrolmentStatus(null)
-      setEnrollmentError(null)
+      setGateFailure(null)
       setEnrollmentLoading(false)
       return
     }
 
     setEnrollmentLoading(true)
-    setEnrollmentError(null)
+    setGateFailure(null)
 
     if (DEV_SKIP_ENROLMENT) {
       setCurrentPerson({
@@ -626,72 +634,31 @@ function App(): JSX.Element {
     }
 
     // At Windows-boot launch (IN-71) the packaged backend takes up to ~20s to
-    // spawn and pass health checks, so a single fetch races it and strands the
-    // user on the "Voiceprint required" error. Retry with backoff (~50s total)
-    // before surfacing the failure; skip retries when there is no IPC bridge
-    // at all (browser preview) since waiting cannot help there.
+    // spawn and pass health checks, so a single fetch races it. Retry with
+    // backoff (~50s total) before surfacing the failure; skip retries when
+    // there is no IPC bridge at all (browser preview) since waiting cannot
+    // help there. A lost Microsoft sign-in stops early (FD-2265).
     const retryDelaysMs =
       typeof window.api?.request === 'function' ? [1000, 2000, 3000, 5000, 5000, 5000, 10000, 10000, 10000] : []
     const run = async (): Promise<void> => {
-      let lastErrorMessage: string | null = null
-      // A person that resolves alongside a null status means the backend
-      // answered one of the two calls but not the other — anomalous, and
-      // worth retrying rather than accepting on the first try. If retries
-      // exhaust while still in that state, fall back to the person with a
-      // null status (existing Slice 1 fallback) instead of surfacing a hard
-      // error the backend never actually reported.
-      let lastPersonWithNullStatus: StaffMember | null = null
-      let lastStatusWasUnknown = false
-      for (let attempt = 0; ; attempt++) {
-        try {
-          // Fetched alongside the person so the gate has fresh status the
-          // moment the person record resolves (IN-379).
-          const [person, status] = await Promise.all([
-            ensureCurrentPerson(user.name, user.email),
-            fetchEnrolmentStatus()
-          ])
-          if (cancelled) return
-          // "Could not check the central store" (signed-out, offline, storage
-          // error) must never funnel an already-enrolled person into the
-          // wizard — retry, and if it persists surface the error screen with
-          // Try again instead of demanding re-enrolment (3 Aug incident).
-          const statusUnknown = Boolean(
-            status && status.central_required && !status.centrally_enrolled && status.centrally_unknown
-          )
-          if (person && status && !statusUnknown) {
-            setCurrentPerson(person)
-            setEnrolmentStatus(status)
-            setEnrollmentLoading(false)
-            return
-          }
-          lastStatusWasUnknown = statusUnknown
-          lastPersonWithNullStatus = person && !status ? person : null
-          lastErrorMessage = null
-        } catch (err) {
-          if (cancelled) return
-          lastErrorMessage = err instanceof Error ? err.message : null
-          lastPersonWithNullStatus = null
-          lastStatusWasUnknown = false
-        }
-        const delay = retryDelaysMs[attempt]
-        if (delay === undefined) break
-        await new Promise((resolve) => setTimeout(resolve, delay))
-        if (cancelled) return
-      }
-      if (lastPersonWithNullStatus) {
-        setCurrentPerson(lastPersonWithNullStatus)
+      const outcome = await resolveEnrolmentGate({
+        fetchPerson: () => ensureCurrentPerson(user.name, user.email),
+        fetchStatus: fetchEnrolmentStatus,
+        getAuthStatus:
+          typeof window.api?.getAuthStatus === 'function' ? () => window.api.getAuthStatus() : undefined,
+        delaysMs: retryDelaysMs,
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        isCancelled: () => cancelled
+      })
+      if (!outcome || cancelled) return
+      if (outcome.kind === 'ready') {
+        setCurrentPerson(outcome.person)
+        setEnrolmentStatus(outcome.status)
+      } else {
+        setCurrentPerson(null)
         setEnrolmentStatus(null)
-        setEnrollmentLoading(false)
-        return
+        setGateFailure(outcome)
       }
-      setCurrentPerson(null)
-      setEnrolmentStatus(null)
-      setEnrollmentError(
-        lastStatusWasUnknown
-          ? 'Could not verify your voiceprint enrolment with the central store. You may be offline or signed out — check your connection and Microsoft sign-in, then try again. (If you already recorded a voiceprint, it is safe; do not re-enrol.)'
-          : lastErrorMessage ??
-              'Could not load your staff enrollment record. Check that the backend is running, then try again.'
-      )
       setEnrollmentLoading(false)
     }
     void run()
@@ -1909,7 +1876,8 @@ function App(): JSX.Element {
     setRecording(null)
     setCurrentPerson(null)
     setEnrolmentStatus(null)
-    setEnrollmentError(null)
+    setGateFailure(null)
+    setSignInError(null)
     setEnrollmentLoading(false)
     setBlobDeliveryNotices({})
     setStorageAdmin(false)
@@ -1920,45 +1888,49 @@ function App(): JSX.Element {
     }
   }
 
-  if (enrollmentLoading || enrollmentError || !currentPerson || !enrolmentSatisfied) {
+  // FD-2265 recovery: a real interactive Microsoft sign-in, then a fresh gate
+  // evaluation — never a re-enrolment. Main resets its token-failure record on
+  // success, so the re-run reads the new session.
+  const signInAgain = async (): Promise<void> => {
+    if (signingIn || typeof window.api?.signIn !== 'function') return
+    setSigningIn(true)
+    setSignInError(null)
+    // signOut() bumps this epoch: a sign-in result that lands after the user
+    // signed out is discarded, so Sign out always wins (FD-2265 review R-3).
+    const epoch = enrolmentEpochRef.current
+    try {
+      // A sign-in that worked but still can't reach the voiceprint store keeps
+      // the session and explains itself rather than re-showing the button.
+      const result = await window.api.signIn()
+      if (enrolmentEpochRef.current !== epoch) return
+      const outcome = signInAgainOutcome(result)
+      if (outcome.user) {
+        localStorage.setItem(USER_KEY, JSON.stringify(outcome.user))
+        setUser(outcome.user)
+        setEnrollmentAttempt((n) => n + 1)
+      }
+      setSignInError(outcome.error)
+    } catch (err) {
+      setSignInError(err instanceof Error ? err.message : 'Microsoft sign-in failed. Try again.')
+    } finally {
+      setSigningIn(false)
+    }
+  }
+
+  if (enrollmentLoading || gateFailure || !currentPerson || !enrolmentSatisfied) {
+    const gateView: GateView = enrollmentLoading
+      ? { kind: 'checking' }
+      : gateFailure ?? (currentPerson ? { kind: 'not-enrolled' } : { kind: 'checking' })
     return (
       <div className="relative flex h-full flex-col items-center justify-center bg-page px-6">
-        <div className="w-full max-w-[520px] rounded-lg border-[0.5px] border-edge-secondary bg-bg-primary p-5 text-center">
-          <h1 className="m-0 text-[18px] font-medium text-content-primary">Voiceprint required</h1>
-          <p className="mx-auto mb-0 mt-2 max-w-[420px] text-[12px] leading-relaxed text-content-tertiary">
-            Factor1 staff must enroll a voiceprint after Microsoft sign-in before using
-            Notetaker. This helps identify speakers accurately in meeting transcripts.
-          </p>
-          {enrollmentLoading && (
-            <p className="mb-0 mt-4 flex items-center justify-center gap-2 text-[13px] text-content-secondary">
-              <span className="h-4 w-4 animate-spin rounded-full border-2 border-edge-tertiary border-t-brand-blue" />
-              Loading your enrollment status…
-            </p>
-          )}
-          {enrollmentError && (
-            <p className="mb-0 mt-4 rounded-md border-[0.5px] border-edge-danger bg-bg-danger px-3 py-2 text-[12px] leading-relaxed text-content-danger">
-              {enrollmentError}
-            </p>
-          )}
-          <div className="mt-4 flex items-center justify-center gap-2">
-            {enrollmentError && (
-              <button
-                type="button"
-                onClick={() => setEnrollmentAttempt((n) => n + 1)}
-                className="rounded-md border-[0.5px] border-edge-info bg-bg-info px-3 py-2 text-[13px] text-content-info hover:opacity-90"
-              >
-                Try again
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={signOut}
-              className="rounded-md border-[0.5px] border-edge-secondary px-3 py-2 text-[13px] text-content-primary hover:bg-bg-secondary"
-            >
-              Sign out
-            </button>
-          </div>
-        </div>
+        <EnrolmentGateScreen
+          view={gateView}
+          onSignIn={() => void signInAgain()}
+          onRetry={() => setEnrollmentAttempt((n) => n + 1)}
+          onSignOut={signOut}
+          signingIn={signingIn}
+          signInError={signInError}
+        />
         {currentPerson && !enrolmentSatisfied && (
           <EnrollmentModal
             person={currentPerson}
@@ -1966,7 +1938,7 @@ function App(): JSX.Element {
             onClose={() => undefined}
             onEnrolled={(updated) => {
               setCurrentPerson(updated)
-              setEnrollmentError(null)
+              setGateFailure(null)
               setView('home')
               // Optimistic: the enroll call itself 502s when central
               // registration fails, so a successful response here implies

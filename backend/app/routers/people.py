@@ -212,7 +212,11 @@ async def enrolment_status(
     if required:
         if oid and token:
             try:
-                record = get_storage_api_client().get_enrolment(oid, access_token=token)
+                # Blocking HTTP: run it off the event loop so a slow central
+                # store cannot stall /people/me and every other request (FD-2265).
+                record = await asyncio.to_thread(
+                    get_storage_api_client().get_enrolment, oid, access_token=token
+                )
                 centrally = record is not None and record.status == "active"
             except StorageApiError:
                 centrally_unknown = True  # unreachable store fails closed; client offers retry

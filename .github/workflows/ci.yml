@@ -44,13 +44,15 @@ jobs:
           npm run verify:teams-call-prompt
           npm run verify:prompted-call-recovery
           npm run verify:fd97-package-policy
+          npm run verify:sign-in-gate
 
-      - name: Built desktop FD97 handoff contract (synthetic, no providers)
+      - name: Built desktop contracts — FD97 handoff, FD-2265 auth (synthetic, no providers)
         shell: bash
         run: |
           set -e
           npm run build
           npm run verify:fd97-renderer-handoff
+          npm run verify:fd2265-auth-ipc
 
   rust-helper:
     runs-on: windows-latest

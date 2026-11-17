@@ -175,8 +175,14 @@ const api = {
     ipcRenderer.send('window:set-titlebar-theme', theme),
 
   /** Interactive Microsoft sign-in via MSAL. Returns user info or null if failed/not configured. */
-  signIn: (): Promise<{ ok: boolean; name?: string; email?: string; error?: string }> =>
-    ipcRenderer.invoke('auth:sign-in'),
+  signIn: (): Promise<{
+    ok: boolean
+    name?: string
+    email?: string
+    error?: string
+    /** Post-sign-in voiceprint-store check (FD-2265); absent when sign-in failed. */
+    storageAccess?: 'ok' | 'failed' | 'not-configured'
+  }> => ipcRenderer.invoke('auth:sign-in'),
 
   /** Sign out and clear persisted MSAL token cache. */
   signOut: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('auth:sign-out'),
