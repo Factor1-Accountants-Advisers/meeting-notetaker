@@ -32,3 +32,14 @@ native/audio-endpoint-monitor/dist/
 # (.env already ignored above), a private key, and events.jsonl with real join
 # URLs + participant names (PII). Evidence stays local only - never commit.
 spikes/
+
+# Local scratch. Holds real artefacts that must never be committed: recovery
+# recordings (audio + meta.json with attendee names/emails and join URLs) and
+# app-unpacked debug builds. Keep this ignored so `git add -A` cannot sweep it in.
+tmp/
+
+# PyInstaller output for the packaged backend (~56 MB of .pkg/.toc/.pyz).
+build/meeting-notetaker-backend/
+
+# pytest run caches (can be created by another sandbox user, so also unreadable).
+**/.pytest_cache/
